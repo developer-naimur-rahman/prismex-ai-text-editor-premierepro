@@ -14,8 +14,12 @@ import {
   VolumeX,
   Download,
   Bot,
-  Key
+  Key,
+  Subtitles,
+  Sliders,
+  CheckCircle2
 } from 'lucide-react';
+import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
 interface WordToken {
   id: string;
@@ -80,6 +84,18 @@ export const TranscriptView: React.FC = () => {
   const [showAiPanel, setShowAiPanel] = useState(false);
   const [playheadSec, setPlayheadSec] = useState(0);
 
+  // Smart Flexible SRT State
+  const [showSmartSrt, setShowSmartSrt] = useState(false);
+  const [targetWords, setTargetWords] = useState(3);
+  const [flexibleWords, setFlexibleWords] = useState(true);
+  const [targetChars, setTargetChars] = useState(20);
+  const [maxChars, setMaxChars] = useState(28);
+  const [smartCues, setSmartCues] = useState<any[]>([]);
+  const [smartSrtText, setSmartSrtText] = useState<string>('');
+  const [smartSrtEngine, setSmartSrtEngine] = useState<string>('');
+  const [isGeneratingSrt, setIsGeneratingSrt] = useState(false);
+
+  const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
@@ -169,7 +185,39 @@ export const TranscriptView: React.FC = () => {
   const baseFilename = (sequenceManifest?.sequenceName || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_');
   const [exportStatus, setExportStatus] = useState<string | null>(null);
 
+  const handleGenerateSmartSrt = async () => {
+    if (words.length === 0) return;
+    setIsGeneratingSrt(true);
+    try {
+      const res = await client.generateSmartSrt({
+        words: transcriptWords,
+        fps,
+        targetWords,
+        minWords: flexibleWords ? Math.max(1, targetWords - 1) : targetWords,
+        maxWords: flexibleWords ? targetWords + 2 : targetWords,
+        targetChars,
+        maxChars,
+        flexible: flexibleWords,
+        useAi: true
+      });
+      if (res && res.cues) {
+        setSmartCues(res.cues);
+        setSmartSrtText(res.srt);
+        setSmartSrtEngine(res.engine);
+        setExportStatus(language === 'bn' ? `${res.totalCues} টি কিউ তৈরি হয়েছে!` : `${res.totalCues} cues generated!`);
+        setTimeout(() => setExportStatus(null), 3000);
+      }
+    } catch (err) {
+      console.error('generateSmartSrt failed:', err);
+    } finally {
+      setIsGeneratingSrt(false);
+    }
+  };
+
   const buildSrtContent = () => {
+    if (smartSrtText && smartSrtText.length > 0) {
+      return smartSrtText;
+    }
     const cues: string[] = [];
     let cueIdx = 1;
     for (let i = 0; i < words.length; i += 8) {
@@ -463,6 +511,24 @@ export const TranscriptView: React.FC = () => {
             .JSON ({fps}fps)
           </button>
           <button
+            onClick={() => setShowSmartSrt(!showSmartSrt)}
+            className="btn-secondary"
+            title="Configure AI Smart Flexible SRT with 0-Frame Drift"
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              color: showSmartSrt ? '#bfdbfe' : '#60a5fa',
+              backgroundColor: showSmartSrt ? 'rgba(59, 130, 246, 0.25)' : 'transparent',
+              borderColor: 'rgba(59, 130, 246, 0.5)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+          >
+            <Subtitles size={10} />
+            <span>{language === 'bn' ? 'AI স্মার্ট SRT' : 'Smart SRT'}</span>
+          </button>
+          <button
             onClick={handleSendToPremiereCaptions}
             className="btn-secondary"
             title="Create Caption Track in Premiere Pro & populate Text Panel Captions"
@@ -558,6 +624,236 @@ export const TranscriptView: React.FC = () => {
           {aiSummary && (
             <div style={{ fontSize: '10.5px', color: 'var(--text-primary)', lineHeight: 1.5, maxHeight: '90px', overflowY: 'auto' }}>
               {aiSummary.summary}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* AI Smart Flexible SRT Panel */}
+      {showSmartSrt && (
+        <div
+          className="card"
+          style={{
+            backgroundColor: 'rgba(59, 130, 246, 0.08)',
+            borderColor: 'rgba(59, 130, 246, 0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            padding: '10px 12px'
+          }}
+        >
+          {/* Header */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Subtitles size={13} color="#60a5fa" />
+              <span style={{ fontSize: '11px', fontWeight: 600, color: '#93c5fd' }}>
+                {language === 'bn' ? 'AI স্মার্ট ফ্লেক্সিবল SRT ও ক্যাপশন (০-ফ্রেম ড্রিফট)' : 'AI Smart Flexible SRT (100% 0-Frame Drift)'}
+              </span>
+              {smartSrtEngine && (
+                <span
+                  style={{
+                    fontSize: '9px',
+                    padding: '1px 5px',
+                    borderRadius: '3px',
+                    backgroundColor: 'rgba(59, 130, 246, 0.25)',
+                    color: '#bfdbfe'
+                  }}
+                >
+                  {smartSrtEngine}
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowSmartSrt(false)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Controls: Target Words, Flexibility, Target Chars, Max Chars */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '8px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <label style={{ fontSize: '9.5px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? 'টার্গেট ওয়ার্ড (যেমন: ৩)' : 'Target Words / Cue:'}
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={10}
+                value={targetWords}
+                onChange={(e) => setTargetWords(Math.max(1, parseInt(e.target.value) || 1))}
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '4px',
+                  color: 'var(--text-primary)',
+                  fontSize: '11px',
+                  padding: '3px 6px'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <label style={{ fontSize: '9.5px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? 'টার্গেট ক্যারেক্টার (যেমন: ২০)' : 'Target Chars / Cue:'}
+              </label>
+              <input
+                type="number"
+                min={8}
+                max={60}
+                value={targetChars}
+                onChange={(e) => setTargetChars(Math.max(8, parseInt(e.target.value) || 8))}
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '4px',
+                  color: 'var(--text-primary)',
+                  fontSize: '11px',
+                  padding: '3px 6px'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+              <label style={{ fontSize: '9.5px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? 'সর্বোচ্চ ক্যারেক্টার (ফ্রেম ফিট):' : 'Max Chars (Frame Fit):'}
+              </label>
+              <input
+                type="number"
+                min={12}
+                max={80}
+                value={maxChars}
+                onChange={(e) => setMaxChars(Math.max(12, parseInt(e.target.value) || 12))}
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '4px',
+                  color: 'var(--text-primary)',
+                  fontSize: '11px',
+                  padding: '3px 6px'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', paddingTop: '10px' }}>
+              <input
+                type="checkbox"
+                id="flexibleWordsCheck"
+                checked={flexibleWords}
+                onChange={(e) => setFlexibleWords(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              <label htmlFor="flexibleWordsCheck" style={{ fontSize: '10px', color: 'var(--text-primary)', cursor: 'pointer', lineHeight: 1.2 }}>
+                {language === 'bn' ? 'ফ্লেক্সিবল ফ্রেজ (২-৪+ ওয়ার্ড)' : 'Flexible (2-4+ words)'}
+              </label>
+            </div>
+          </div>
+
+          {/* Action Row */}
+          <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '2px' }}>
+            <button
+              onClick={handleGenerateSmartSrt}
+              disabled={isGeneratingSrt || words.length === 0}
+              className="btn-primary"
+              style={{ padding: '5px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}
+            >
+              <Sparkles size={12} />
+              <span>
+                {isGeneratingSrt
+                  ? (language === 'bn' ? 'AI বাক্য বিশ্লেষণ ও ফ্রেম স্ন্যাপ হচ্ছে...' : 'AI Analyzing & Snapping...')
+                  : (language === 'bn' ? 'AI স্মার্ট SRT তৈরি করুন' : 'Generate AI Smart SRT')}
+              </span>
+            </button>
+            {smartCues.length > 0 && (
+              <>
+                <button
+                  onClick={handleSendToPremiereCaptions}
+                  className="btn-secondary"
+                  style={{ padding: '5px 10px', fontSize: '11px', color: '#34d399', borderColor: 'rgba(16, 185, 129, 0.4)' }}
+                >
+                  {language === 'bn' ? 'Premiere Captions-এ পাঠান' : 'Send to Premiere Captions'}
+                </button>
+                <button
+                  onClick={handleExportSrt}
+                  className="btn-secondary"
+                  style={{ padding: '5px 10px', fontSize: '11px' }}
+                >
+                  <Download size={11} />
+                  <span>.SRT</span>
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Cues Preview Inspector */}
+          {smartCues.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                <span>
+                  {language === 'bn'
+                    ? `মোট ${smartCues.length} টি কিউ • সিকোয়েন্স ফ্রেমরেট: ${fps} fps • জিরো ফ্রেম ড্রিফট`
+                    : `${smartCues.length} Cues • Sequence: ${fps} fps • 100% 0-Frame Drift`}
+                </span>
+                <span style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                  <CheckCircle2 size={10} /> {language === 'bn' ? 'ফ্রেম সিঙ্ক সক্রিয়' : 'Frame Synced'}
+                </span>
+              </div>
+              <div
+                style={{
+                  maxHeight: '130px',
+                  overflowY: 'auto',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '3px',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderRadius: '4px',
+                  padding: '4px',
+                  border: '1px solid var(--border-subtle)'
+                }}
+              >
+                {smartCues.map((cue: any) => (
+                  <div
+                    key={`cue_${cue.index}`}
+                    onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '3px 6px',
+                      borderRadius: '3px',
+                      backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                      cursor: 'pointer',
+                      fontSize: '10px'
+                    }}
+                    title={`Click to seek playhead to ${cue.startSrt} (Frame ${cue.startFrame})`}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ color: '#60a5fa', fontWeight: 600, width: '22px' }}>#{cue.index}</span>
+                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>"{cue.text}"</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>
+                        ({cue.wordCount}w, {cue.charCount}c)
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ color: '#a78bfa', fontSize: '9px', fontFamily: 'monospace' }}>
+                        F:{cue.startFrame}-{cue.endFrame}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: '8.5px',
+                          padding: '1px 4px',
+                          borderRadius: '2px',
+                          backgroundColor: 'rgba(52, 211, 153, 0.15)',
+                          color: '#34d399'
+                        }}
+                      >
+                        {cue.reason}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>

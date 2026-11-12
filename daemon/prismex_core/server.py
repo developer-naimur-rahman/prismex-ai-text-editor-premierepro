@@ -25,6 +25,7 @@ from .audio.dsp import AudioDSP
 from .stt.transcription_service import TranscriptionService
 from .intelligence.take_detector import TakeDetector
 from .intelligence.filler_detector import FillerDetector
+from .intelligence.smart_srt import SmartSRTSegmenter
 from .timeline.cut_harmonizer import CutHarmonizer
 
 app = FastAPI(title="Prismex Core Companion Daemon", version="1.0.0")
@@ -90,6 +91,17 @@ class MagicRoughCutRequest(BaseModel):
 class TranscriptAIAnalyzeRequest(BaseModel):
     words: List[Dict[str, Any]] = []
     prompt: str = "Summarize key points and highlight fluff or repeated sections to cut."
+
+class SmartSrtRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    fps: float = 24.0
+    targetWords: int = 3
+    minWords: Optional[int] = None
+    maxWords: Optional[int] = None
+    targetChars: int = 20
+    maxChars: int = 28
+    flexible: bool = True
+    useAi: bool = True
 
 class ApplyReviewRequest(BaseModel):
     approvedSuggestionIds: List[str]
@@ -429,6 +441,21 @@ def ai_analyze_transcript(req: TranscriptAIAnalyzeRequest):
         "totalWords": total_words,
         "fillerCount": filler_count
     }
+
+@app.post("/api/v1/srt/smart-segment")
+def generate_smart_srt(req: SmartSrtRequest):
+    """Generates AI-segmented, flexible word/char SRT cues snapped to exact sequence framerate."""
+    return SmartSRTSegmenter.segment(
+        words=req.words,
+        fps=req.fps,
+        target_words=req.targetWords,
+        min_words=req.minWords,
+        max_words=req.maxWords,
+        target_chars=req.targetChars,
+        max_chars=req.maxChars,
+        flexible=req.flexible,
+        use_ai=req.useAi,
+    )
 
 # ----------------- WebSocket Endpoint -----------------
 

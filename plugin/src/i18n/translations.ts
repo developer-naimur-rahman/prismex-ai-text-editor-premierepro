@@ -78,7 +78,22 @@ export const translations = {
     nonDestructive: 'Non-Destructive Cloning',
     nonDestructiveDesc: 'Always clone sequence before executing timeline cuts.',
     hardwareAccel: 'Apple Silicon Hardware Acceleration',
-    hardwareAccelDesc: 'Use MLX Metal GPU & Neural Engine with dynamic unloading.'
+    hardwareAccelDesc: 'Use MLX Metal GPU & Neural Engine with dynamic unloading.',
+
+    // Smart SRT
+    smartSrtTitle: 'AI Smart SRT & Caption Generator',
+    targetWords: 'Target Words / Cue',
+    flexibleWords: 'Flexible Phrase Fit (2-4+ words based on meaning)',
+    targetChars: 'Target Characters / Cue',
+    maxChars: 'Max Characters (Frame Width Fit)',
+    generateSmartSrt: 'Generate AI Smart SRT',
+    generatingSmartSrt: 'AI Analyzing Cues & Framing...',
+    sendToPremiereCaptions: 'Send to Premiere Captions',
+    addedToCaptions: 'Added to Premiere Caption Track!',
+    smartSrtCues: 'Smart SRT Cues',
+    cueIndex: 'Cue',
+    frameRange: 'Frames',
+    zeroFrameSync: '100% 0-Frame Drift'
   },
   bn: {
     // Tabs
@@ -157,6 +172,21 @@ export const translations = {
     nonDestructive: 'নন-ডেস্ট্রাক্টিভ ক্লোনিং',
     nonDestructiveDesc: 'কাট করার আগে মূল সিকোয়েন্সের একটি কপি তৈরি করে নেবে।',
     hardwareAccel: 'Apple Silicon হার্ডওয়্যার অ্যাক্সেলারেশন',
-    hardwareAccelDesc: 'MLX Metal GPU ও Neural Engine ব্যবহার করে দ্রুত প্রসেস করবে।'
+    hardwareAccelDesc: 'MLX Metal GPU ও Neural Engine ব্যবহার করে দ্রুত প্রসেস করবে।',
+
+    // Smart SRT
+    smartSrtTitle: 'AI স্মার্ট SRT ও সাবটাইটেল জেনারেটর',
+    targetWords: 'টার্গেট ওয়ার্ড / কিউ',
+    flexibleWords: 'ফ্লেক্সিবল ফ্রেজ ফিট (অর্থ অনুযায়ী ২-৪+ ওয়ার্ড)',
+    targetChars: 'টার্গেট ক্যারেক্টার / কিউ',
+    maxChars: 'সর্বোচ্চ ক্যারেক্টার (ফ্রেম ফিট)',
+    generateSmartSrt: 'AI স্মার্ট SRT তৈরি করুন',
+    generatingSmartSrt: 'AI বাক্য ও ফ্রেম বিশ্লেষণ করছে...',
+    sendToPremiereCaptions: 'Premiere Captions-এ পাঠান',
+    addedToCaptions: 'Premiere Text Panel (Captions)-এ যোগ হয়েছে!',
+    smartSrtCues: 'স্মার্ট SRT কিউসমূহ',
+    cueIndex: 'কিউ',
+    frameRange: 'ফ্রেম',
+    zeroFrameSync: '১০০% জিরো-ফ্রেম সিঙ্ক'
   }
 } as const;

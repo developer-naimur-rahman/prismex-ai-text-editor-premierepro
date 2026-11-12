@@ -154,6 +154,33 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async generateSmartSrt(params: {
+    words: any[];
+    fps: number;
+    targetWords: number;
+    minWords?: number;
+    maxWords?: number;
+    targetChars: number;
+    maxChars: number;
+    flexible: boolean;
+    useAi: boolean;
+  }): Promise<{ cues: any[]; srt: string; engine: string; fps: number; totalCues: number } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/srt/smart-segment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] generateSmartSrt failed:', err);
+      return null;
+    }
+  }
+
   public async getReviewQueue(jobId: string): Promise<ReviewQueueItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/review-queue/${jobId}`);
