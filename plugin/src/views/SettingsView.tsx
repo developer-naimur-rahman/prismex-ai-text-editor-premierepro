@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { translations } from '../i18n/translations';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
-import { Globe, Key, Trash2, Cpu, CheckCircle } from 'lucide-react';
+import { Globe, Key, Trash2, Cpu, CheckCircle, ExternalLink } from 'lucide-react';
+import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
 export const SettingsView: React.FC = () => {
   const { language, setLanguage, setActiveTab } = usePrismexStore();
@@ -69,7 +70,26 @@ export const SettingsView: React.FC = () => {
             {t.openAiProviders}
           </button>
         </div>
-        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{t.aiApiKeysDesc}</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{t.aiApiKeysDesc}</div>
+          <button
+            onClick={() => PremiereHostBridge.getInstance().openExternalUrl('https://aistudio.google.com/apikey')}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              color: '#60a5fa',
+              fontSize: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <ExternalLink size={10} />
+            <span>Get Free Gemini Key</span>
+          </button>
+        </div>
         <div style={{ display: 'flex', gap: '6px' }}>
           <input
             type="password"

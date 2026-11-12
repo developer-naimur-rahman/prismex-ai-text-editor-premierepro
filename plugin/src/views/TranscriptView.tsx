@@ -167,35 +167,102 @@ export const TranscriptView: React.FC = () => {
   };
 
   const baseFilename = (sequenceManifest?.sequenceName || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
 
-  const handleExportTxt = () => {
-    const txt = paragraphs.map((p) => p.tokens.map((t) => t.word).join(' ')).join('\n\n');
-    triggerFileDownload(`${baseFilename}.txt`, txt, 'text/plain;charset=utf-8');
-  };
-
-  const handleExportSrt = () => {
-    // Group into ~8-word subtitle cues for clean SRT captions
+  const buildSrtContent = () => {
     const cues: string[] = [];
     let cueIdx = 1;
     for (let i = 0; i < words.length; i += 8) {
       const chunk = words.slice(i, i + 8);
       if (chunk.length === 0) continue;
-      const start = formatSrtTimestamp(chunk[0].start);
-      const end = formatSrtTimestamp(chunk[chunk.length - 1].end);
+      // Snap start/end to exact sequence framerate grid
+      const startFrame = Math.round(chunk[0].start * fps);
+      const endFrame = Math.max(startFrame + 1, Math.round(chunk[chunk.length - 1].end * fps));
+      const start = formatSrtTimestamp(startFrame / fps);
+      const end = formatSrtTimestamp(endFrame / fps);
       const text = chunk.map((w) => w.word).join(' ');
       cues.push(`${cueIdx}\n${start} --> ${end}\n${text}\n`);
       cueIdx++;
     }
-    triggerFileDownload(`${baseFilename}.srt`, cues.join('\n'), 'application/x-subrip;charset=utf-8');
+    return cues.join('\n');
   };
 
-  const handleExportJson = () => {
+  const handleExportTxt = async () => {
+    const txt = paragraphs
+      .map((p) => `[${TimecodeConverter.formatTimecode(p.startTime, fps)}] ` + p.tokens.map((tok) => tok.word).join(' '))
+      .join('\n\n');
+    const res = await hostBridge.saveFileWithDialog(`${baseFilename}.txt`, txt, ['txt']);
+    if (res.saved) {
+      setExportStatus(`Saved TXT!`);
+      setTimeout(() => setExportStatus(null), 2500);
+    }
+  };
+
+  const handleExportSrt = async () => {
+    const srt = buildSrtContent();
+    const res = await hostBridge.saveFileWithDialog(`${baseFilename}.srt`, srt, ['srt']);
+    if (res.saved) {
+      setExportStatus(`Saved SRT (${fps} fps)!`);
+      setTimeout(() => setExportStatus(null), 2500);
+    }
+  };
+
+  const handleExportJson = async () => {
+    const alignedSegments = paragraphs.map((p, idx) => {
+      const pEnd = p.tokens[p.tokens.length - 1]?.end || p.startTime;
+      const startFrame = Math.round(p.startTime * fps);
+      const endFrame = Math.round(pEnd * fps);
+      return {
+        segmentIndex: idx,
+        startSeconds: Number((startFrame / fps).toFixed(4)),
+        endSeconds: Number((endFrame / fps).toFixed(4)),
+        startFrame,
+        endFrame,
+        startTimecode: TimecodeConverter.formatTimecode(p.startTime, fps),
+        endTimecode: TimecodeConverter.formatTimecode(pEnd, fps),
+        text: p.tokens.map((tok) => tok.word).join(' ')
+      };
+    });
+
+    const alignedWords = words.map((w) => {
+      const startFrame = Math.round(w.start * fps);
+      const endFrame = Math.round(w.end * fps);
+      return {
+        id: w.id,
+        word: w.word,
+        startSeconds: Number((startFrame / fps).toFixed(4)),
+        endSeconds: Number((endFrame / fps).toFixed(4)),
+        startFrame,
+        endFrame,
+        startTimecode: TimecodeConverter.formatTimecode(w.start, fps),
+        endTimecode: TimecodeConverter.formatTimecode(w.end, fps),
+        isFiller: w.isFiller
+      };
+    });
+
     const payload = {
       sequenceName: sequenceManifest?.sequenceName || 'Unknown',
       fps,
-      words: transcriptWords
+      totalWords: alignedWords.length,
+      segments: alignedSegments,
+      words: alignedWords
     };
-    triggerFileDownload(`${baseFilename}_transcript.json`, JSON.stringify(payload, null, 2), 'application/json');
+    const res = await hostBridge.saveFileWithDialog(`${baseFilename}_transcript.json`, JSON.stringify(payload, null, 2), ['json']);
+    if (res.saved) {
+      setExportStatus(`Saved JSON (${fps} fps)!`);
+      setTimeout(() => setExportStatus(null), 2500);
+    }
+  };
+
+  const handleSendToPremiereCaptions = async () => {
+    const srt = buildSrtContent();
+    const res = await hostBridge.sendSrtToPremiereCaptionTrack(`${baseFilename}.srt`, srt);
+    if (res.success) {
+      setExportStatus(language === 'bn' ? 'Premiere Text Panel (Captions)-এ যোগ হয়েছে!' : 'Added to Premiere Caption Track!');
+    } else {
+      setExportStatus(res.error || 'Failed to add caption track');
+    }
+    setTimeout(() => setExportStatus(null), 3500);
   };
 
   const handleRunAi = async () => {
@@ -393,20 +460,33 @@ export const TranscriptView: React.FC = () => {
             .SRT
           </button>
           <button onClick={handleExportJson} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
-            .JSON
+            .JSON ({fps}fps)
+          </button>
+          <button
+            onClick={handleSendToPremiereCaptions}
+            className="btn-secondary"
+            title="Create Caption Track in Premiere Pro & populate Text Panel Captions"
+            style={{ padding: '3px 7px', fontSize: '10px', color: '#34d399', borderColor: 'rgba(16, 185, 129, 0.4)' }}
+          >
+            {language === 'bn' ? 'Premiere Captions-এ পাঠান' : 'Send to Premiere Captions'}
           </button>
         </div>
 
-        {detectedSilences.length > 0 && (
-          <button
-            onClick={cutAllSilencesNow}
-            className="btn-secondary"
-            style={{ padding: '3px 8px', fontSize: '10px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
-          >
-            <Scissors size={10} />
-            <span>Cut {detectedSilences.length} Silence(s)</span>
-          </button>
-        )}
+        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+          {exportStatus && (
+            <span style={{ fontSize: '10px', color: '#34d399', fontWeight: 600 }}>{exportStatus}</span>
+          )}
+          {detectedSilences.length > 0 && (
+            <button
+              onClick={cutAllSilencesNow}
+              className="btn-secondary"
+              style={{ padding: '3px 8px', fontSize: '10px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+            >
+              <Scissors size={10} />
+              <span>Cut {detectedSilences.length} Silence(s)</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* AI Assistant Panel */}

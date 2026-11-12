@@ -411,3 +411,46 @@ $._prismex.executeCuts = function(cutsJsonString) {
         return JSON.stringify({ success: false, error: String(err) });
     }
 };
+
+$._prismex.importSrtAndCreateCaptionTrack = function(srtFilePath) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var seq = app.project.activeSequence;
+        var rootBin = app.project.rootItem;
+        var beforeCount = rootBin.children.numItems;
+
+        var ok = app.project.importFiles([srtFilePath], 1, rootBin, 0);
+        if (!ok) {
+            return JSON.stringify({ success: false, error: "Failed to import SRT file" });
+        }
+
+        var srtItem = null;
+        for (var i = rootBin.children.numItems - 1; i >= 0; i--) {
+            var child = rootBin.children[i];
+            if (child && child.name && child.name.toLowerCase().indexOf(".srt") !== -1) {
+                srtItem = child;
+                break;
+            }
+        }
+        if (!srtItem && rootBin.children.numItems > beforeCount) {
+            srtItem = rootBin.children[rootBin.children.numItems - 1];
+        }
+
+        if (!srtItem) {
+            return JSON.stringify({ success: false, error: "Imported SRT item not found in project bin" });
+        }
+
+        var zeroTime = new Time();
+        zeroTime.ticks = String(seq.zeroPoint || "0");
+        var trackCreated = seq.createCaptionTrack(srtItem, zeroTime);
+
+        return JSON.stringify({
+            success: !!trackCreated,
+            srtName: srtItem.name
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};

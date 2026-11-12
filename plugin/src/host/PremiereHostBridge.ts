@@ -239,6 +239,100 @@ export class PremiereHostBridge {
     }
   }
 
+  /**
+   * Opens a URL in the user's default system browser (Chrome/Safari).
+   */
+  public openExternalUrl(url: string): void {
+    if (this.isCEP && this.csInterface?.openURLInDefaultBrowser) {
+      this.csInterface.openURLInDefaultBrowser(url);
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }
+
+  /**
+   * Saves a text/JSON/SRT file reliably inside Adobe CEP (native macOS Save dialog) or browser.
+   */
+  public async saveFileWithDialog(
+    defaultFilename: string,
+    content: string,
+    extensions: string[] = ['txt']
+  ): Promise<{ saved: boolean; path?: string; error?: string }> {
+    const cepFs = (window as any)?.cep?.fs;
+    if (this.isCEP && cepFs?.showSaveDialogEx && cepFs?.writeFile) {
+      try {
+        const dialogRes = cepFs.showSaveDialogEx('Export File', '', extensions, defaultFilename);
+        if (dialogRes && dialogRes.err === 0 && dialogRes.data) {
+          const writeRes = cepFs.writeFile(dialogRes.data, content);
+          if (writeRes && writeRes.err === 0) {
+            return { saved: true, path: dialogRes.data };
+          }
+          return { saved: false, error: `Write error: ${writeRes?.err}` };
+        }
+        return { saved: false };
+      } catch (e: any) {
+        return { saved: false, error: String(e) };
+      }
+    }
+
+    // Browser / Fallback
+    try {
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = defaultFilename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      return { saved: true, path: defaultFilename };
+    } catch (e: any) {
+      return { saved: false, error: String(e) };
+    }
+  }
+
+  /**
+   * Imports an SRT file and creates a native Premiere Pro Caption Track on the active sequence,
+   * populating Premiere Pro's built-in Text Panel (Captions tab) immediately.
+   */
+  public async sendSrtToPremiereCaptionTrack(
+    filename: string,
+    srtContent: string
+  ): Promise<{ success: boolean; srtName?: string; error?: string }> {
+    if (!this.isCEP) {
+      return { success: false, error: 'Only available inside Adobe Premiere Pro' };
+    }
+
+    try {
+      await this.ensureCEPScriptLoaded();
+      const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const tmpPath = `/tmp/${safeName}`;
+
+      const cepFs = (window as any)?.cep?.fs;
+      if (cepFs?.writeFile) {
+        const writeRes = cepFs.writeFile(tmpPath, srtContent);
+        if (!writeRes || writeRes.err !== 0) {
+          return { success: false, error: `Failed to write temp SRT: ${writeRes?.err}` };
+        }
+      } else if ((window as any).require) {
+        const fs = (window as any).require('fs');
+        fs.writeFileSync(tmpPath, srtContent, 'utf8');
+      } else {
+        return { success: false, error: 'Filesystem bridge unavailable' };
+      }
+
+      const res = await this.evalScript(
+        `$._prismex.importSrtAndCreateCaptionTrack("${tmpPath.replace(/"/g, '\\"')}")`
+      );
+      return JSON.parse(res || '{"success":false}');
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
   private getMockSequenceManifest(): SequenceManifest {
     return {
       premiereProjectId: "mock_project_001",

@@ -1,7 +1,17 @@
 import React, { useState } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
-import { Cpu, ShieldCheck, Key, Trash2, CheckCircle } from 'lucide-react';
+import { PremiereHostBridge } from '../host/PremiereHostBridge';
+import { Cpu, ShieldCheck, Key, Trash2, CheckCircle, ExternalLink } from 'lucide-react';
+
+const PROVIDER_KEY_URLS: Record<string, string> = {
+  'google-gemini': 'https://aistudio.google.com/apikey',
+  'groq': 'https://console.groq.com/keys',
+  'openrouter': 'https://openrouter.ai/keys',
+  'huggingface': 'https://huggingface.co/settings/tokens',
+  'cerebras': 'https://cloud.cerebras.ai/',
+  'elevenlabs': 'https://elevenlabs.io/app/settings/api-keys'
+};
 
 export const ProvidersView: React.FC = () => {
   const { providers, initApp } = usePrismexStore();
@@ -82,6 +92,18 @@ export const ProvidersView: React.FC = () => {
                 </span>
 
                 <div style={{ display: 'flex', gap: '6px' }}>
+                  {PROVIDER_KEY_URLS[p.providerId] && (
+                    <button
+                      className="btn-secondary"
+                      style={{ padding: '2px 7px', fontSize: '10px', color: '#60a5fa', borderColor: 'rgba(59, 130, 246, 0.35)' }}
+                      onClick={() => PremiereHostBridge.getInstance().openExternalUrl(PROVIDER_KEY_URLS[p.providerId])}
+                      title={`Open ${p.name} API key page in browser`}
+                    >
+                      <ExternalLink size={10} />
+                      <span>Get Key</span>
+                    </button>
+                  )}
+
                   <button 
                     className="btn-secondary"
                     style={{ padding: '2px 8px', fontSize: '10px' }}
