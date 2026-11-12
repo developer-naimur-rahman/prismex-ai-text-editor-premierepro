@@ -53,6 +53,35 @@ export class TimelineEditingEngine {
       0
     );
 
+    // If running under CEP in Premiere Pro
+    if (this.hostBridge.isRunningInCEP()) {
+      try {
+        const res = await this.hostBridge.evalScript(
+          `$._prismex.executeCuts('${JSON.stringify(sortedCuts)}')`
+        );
+        const data = JSON.parse(res);
+        return {
+          success: !!data.success,
+          cutsExecuted: data.cutsExecuted || sortedCuts.length,
+          initialDurationSeconds: data.initialDurationSeconds || 0,
+          finalDurationSeconds: data.finalDurationSeconds || 0,
+          timeSavedSeconds: data.timeSavedSeconds || totalExpectedCutDuration,
+          syncVerified: data.syncVerified !== false,
+          error: data.error
+        };
+      } catch (err: any) {
+        return {
+          success: false,
+          cutsExecuted: 0,
+          initialDurationSeconds: 0,
+          finalDurationSeconds: 0,
+          timeSavedSeconds: 0,
+          syncVerified: false,
+          error: err?.message || String(err)
+        };
+      }
+    }
+
     // If running outside Premiere Pro (mock mode)
     if (!this.hostBridge.isRunningInPremiere()) {
       const mockInitial = 742.5;

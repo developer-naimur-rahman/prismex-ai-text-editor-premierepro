@@ -1,5 +1,5 @@
 /**
- * PremiereHostBridge - UXP Host Communication & Sequence Inspection
+ * PremiereHostBridge - Universal Host Bridge (Supports both CEP & UXP in Adobe Premiere Pro)
  * Specification: docs/04-PREMIERE-PRO-INTEGRATION.md
  */
 
@@ -9,7 +9,9 @@ import { TimecodeConverter } from './TimecodeConverter';
 export class PremiereHostBridge {
   private static instance: PremiereHostBridge;
   private ppro: any = null;
-  private isHostAvailable: boolean = false;
+  private csInterface: any = null;
+  private isUXP: boolean = false;
+  private isCEP: boolean = false;
 
   private constructor() {
     this.detectHost();
@@ -23,145 +25,187 @@ export class PremiereHostBridge {
   }
 
   private detectHost(): void {
+    if (typeof window === 'undefined') return;
+
+    // 1. Detect CEP Environment (Window -> Extensions)
+    if ((window as any).__adobe_cep__) {
+      this.isCEP = true;
+      if ((window as any).CSInterface) {
+        this.csInterface = new (window as any).CSInterface();
+      }
+      return;
+    }
+
+    // 2. Detect UXP Environment (Plugins menu)
     try {
-      // In Adobe Premiere Pro UXP, premierepro is exposed via require
-      if (typeof window !== 'undefined' && (window as any).require) {
+      if ((window as any).require) {
         this.ppro = (window as any).require('premierepro');
-        this.isHostAvailable = !!this.ppro;
+        this.isUXP = !!this.ppro;
       }
     } catch {
-      this.isHostAvailable = false;
-      this.ppro = null;
+      this.isUXP = false;
     }
   }
 
   public isRunningInPremiere(): boolean {
-    return this.isHostAvailable;
+    return this.isCEP || this.isUXP;
+  }
+
+  public isRunningInCEP(): boolean {
+    return this.isCEP;
+  }
+
+  public evalScript(script: string): Promise<string> {
+    return new Promise((resolve) => {
+      if (!this.csInterface) {
+        resolve('');
+        return;
+      }
+      this.csInterface.evalScript(script, (result: string) => {
+        resolve(result || '');
+      });
+    });
   }
 
   /**
    * Retrieves active sequence metadata, audio tracks, and clip media paths.
    */
   public async getActiveSequenceManifest(): Promise<SequenceManifest | null> {
-    if (!this.isHostAvailable) {
+    // A. CEP Path
+    if (this.isCEP) {
+      const res = await this.evalScript("$._prismex.getActiveSequenceManifest()");
+      try {
+        const data = JSON.parse(res);
+        if (data && !data.error) {
+          return data;
+        }
+      } catch (e) {}
       return this.getMockSequenceManifest();
     }
 
-    try {
-      const project = await this.ppro.Project.getActiveProject();
-      if (!project) return null;
+    // B. UXP Path
+    if (this.isUXP) {
+      try {
+        const project = await this.ppro.Project.getActiveProject();
+        if (!project) return null;
 
-      const sequence = await project.getActiveSequence();
-      if (!sequence) return null;
+        const sequence = await project.getActiveSequence();
+        if (!sequence) return null;
 
-      const sequenceName = await sequence.getName();
-      const sequenceGuid = (await sequence.getGuid?.()) || `seq_${Date.now()}`;
-      
-      // Determine framerate and duration
-      const fps = (await sequence.getFrameRate?.()) || 23.976;
-      const durationTicksObj = await sequence.getDuration();
-      const durationTicks = durationTicksObj ? durationTicksObj.getTicks() : "0";
-      const durationSeconds = TimecodeConverter.ticksToSeconds(durationTicks);
+        const sequenceName = await sequence.getName();
+        const sequenceGuid = (await sequence.getGuid?.()) || `seq_${Date.now()}`;
+        const fps = (await sequence.getFrameRate?.()) || 23.976;
+        const durationTicksObj = await sequence.getDuration();
+        const durationTicks = durationTicksObj ? durationTicksObj.getTicks() : "0";
+        const durationSeconds = TimecodeConverter.ticksToSeconds(durationTicks);
 
-      // Inspect audio tracks and source media paths
-      const audioTracks = await sequence.getAudioTracks();
-      const sourceClips: SourceClipManifest[] = [];
+        const audioTracks = await sequence.getAudioTracks();
+        const sourceClips: SourceClipManifest[] = [];
 
-      for (let tIdx = 0; tIdx < audioTracks.length; tIdx++) {
-        const track = audioTracks[tIdx];
-        const trackItems = await track.getTrackItems();
-        
-        for (const item of trackItems) {
-          const projectItem = await item.getProjectItem?.();
-          const mediaPath = (await projectItem?.getMediaPath?.()) || (projectItem?.mediaPath) || '';
+        for (let tIdx = 0; tIdx < audioTracks.length; tIdx++) {
+          const track = audioTracks[tIdx];
+          const trackItems = await track.getTrackItems();
           
-          const inTicks = await item.getInPoint();
-          const outTicks = await item.getOutPoint();
-          
-          sourceClips.push({
-            mediaPath,
-            trackIndex: tIdx + 1,
-            inSeconds: TimecodeConverter.ticksToSeconds(inTicks?.getTicks?.() || "0"),
-            outSeconds: TimecodeConverter.ticksToSeconds(outTicks?.getTicks?.() || "0")
-          });
+          for (const item of trackItems) {
+            const projectItem = await item.getProjectItem?.();
+            const mediaPath = (await projectItem?.getMediaPath?.()) || (projectItem?.mediaPath) || '';
+            const inTicks = await item.getInPoint();
+            const outTicks = await item.getOutPoint();
+            
+            sourceClips.push({
+              mediaPath,
+              trackIndex: tIdx + 1,
+              inSeconds: TimecodeConverter.ticksToSeconds(inTicks?.getTicks?.() || "0"),
+              outSeconds: TimecodeConverter.ticksToSeconds(outTicks?.getTicks?.() || "0")
+            });
+          }
         }
-      }
 
-      return {
-        premiereProjectId: (await project.getGuid?.()) || 'local_project',
-        sequenceGuid,
-        sequenceName,
-        fps,
-        sampleRate: 48000,
-        durationSeconds,
-        durationTicks,
-        sourceClips
-      };
-    } catch (err) {
-      console.error('[PremiereHostBridge] Failed to read active sequence:', err);
-      return null;
+        return {
+          premiereProjectId: (await project.getGuid?.()) || 'local_project',
+          sequenceGuid,
+          sequenceName,
+          fps,
+          sampleRate: 48000,
+          durationSeconds,
+          durationTicks,
+          sourceClips
+        };
+      } catch (err) {
+        console.error('[PremiereHostBridge] UXP read error:', err);
+      }
     }
+
+    // C. Standalone Browser / Mock Fallback
+    return this.getMockSequenceManifest();
   }
 
   /**
    * Clones the active sequence non-destructively.
    */
   public async cloneActiveSequence(suffix: string = "_PrismexRoughCut"): Promise<{ clonedSequenceName: string } | null> {
-    if (!this.isHostAvailable) {
+    if (this.isCEP) {
+      const res = await this.evalScript(`$._prismex.cloneActiveSequence("${suffix}")`);
+      try {
+        const data = JSON.parse(res);
+        if (data && !data.error) {
+          return data;
+        }
+      } catch (e) {}
       return { clonedSequenceName: `Demo_Interview${suffix}` };
     }
 
-    try {
-      const project = await this.ppro.Project.getActiveProject();
-      const sequence = await project.getActiveSequence();
-      if (!sequence) throw new Error("No active sequence to clone");
+    if (this.isUXP) {
+      try {
+        const project = await this.ppro.Project.getActiveProject();
+        const sequence = await project.getActiveSequence();
+        if (!sequence) throw new Error("No active sequence");
 
-      const origName = await sequence.getName();
-      const targetName = `${origName}${suffix}`;
+        const origName = await sequence.getName();
+        const targetName = `${origName}${suffix}`;
+        const cloneAction = await sequence.createCloneAction();
+        await project.executeActions([cloneAction]);
 
-      const cloneAction = await sequence.createCloneAction();
-      await project.executeActions([cloneAction]);
-
-      // Focus the cloned sequence
-      const sequences = await project.getSequences();
-      const cloned = sequences.find((s: any) => s.name === `${origName} Copy` || s.name === targetName);
-      if (cloned) {
-        await cloned.setName(targetName);
-        await project.openSequence(cloned);
+        const sequences = await project.getSequences();
+        const cloned = sequences.find((s: any) => s.name === `${origName} Copy` || s.name === targetName);
+        if (cloned) {
+          await cloned.setName(targetName);
+          await project.openSequence(cloned);
+          return { clonedSequenceName: targetName };
+        }
         return { clonedSequenceName: targetName };
+      } catch (err) {
+        console.error('[PremiereHostBridge] UXP clone error:', err);
       }
-
-      return { clonedSequenceName: targetName };
-    } catch (err) {
-      console.error('[PremiereHostBridge] Failed to clone sequence:', err);
-      return null;
     }
+
+    return { clonedSequenceName: `Demo_Interview${suffix}` };
   }
 
   /**
    * Sets the timeline CTI playhead position to a given second timestamp.
    */
   public async setPlayheadPosition(seconds: number): Promise<void> {
-    if (!this.isHostAvailable) {
+    if (this.isCEP) {
+      await this.evalScript(`$._prismex.setPlayheadPosition(${seconds})`);
       return;
     }
 
-    try {
-      const project = await this.ppro.Project.getActiveProject();
-      const sequence = await project?.getActiveSequence();
-      if (!sequence) return;
+    if (this.isUXP) {
+      try {
+        const project = await this.ppro.Project.getActiveProject();
+        const sequence = await project?.getActiveSequence();
+        if (!sequence) return;
 
-      const ticksString = TimecodeConverter.secondsToTicks(seconds);
-      const tickTimeObj = await this.ppro.TickTime.createWithTicks(ticksString);
-      await sequence.setPlayerPosition(tickTimeObj);
-    } catch (err) {
-      console.error('[PremiereHostBridge] Failed to position playhead:', err);
+        const ticksString = TimecodeConverter.secondsToTicks(seconds);
+        const tickTimeObj = await this.ppro.TickTime.createWithTicks(ticksString);
+        await sequence.setPlayerPosition(tickTimeObj);
+      } catch (err) {
+        console.error('[PremiereHostBridge] UXP playhead seek error:', err);
+      }
     }
   }
 
-  /**
-   * Fallback mock sequence for testing outside Premiere Pro.
-   */
   private getMockSequenceManifest(): SequenceManifest {
     return {
       premiereProjectId: "mock_project_001",
