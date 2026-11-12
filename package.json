@@ -4,6 +4,7 @@
   "description": "Production-grade AI-powered Adobe Premiere Pro rough-cutting and editing plugin",
   "author": "Prismex Architecture Team",
   "license": "UNLICENSED",
+  "type": "module",
   "private": true,
   "workspaces": [
     "plugin"
