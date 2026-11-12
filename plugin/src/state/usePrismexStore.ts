@@ -11,7 +11,8 @@ import {
   EditingProfile, 
   ProviderStatusInfo, 
   RoughCutSummaryReport,
-  JobStatus
+  JobStatus,
+  CutInterval
 } from '../types';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
@@ -389,26 +390,62 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   },
 
   applyApprovedReviewQueue: async () => {
+    const acceptedItems = get().reviewItems.filter((i) => i.status === 'ACCEPTED');
+    if (acceptedItems.length === 0) return;
+
     const jobId = get().currentJobId;
-    if (!jobId) return;
+    const approvedIds = acceptedItems.map((i) => i.id);
 
-    const approvedIds = get().reviewItems
-      .filter((i) => i.status === 'ACCEPTED')
-      .map((i) => i.id);
+    let cutIntervals: CutInterval[] = [];
+    if (jobId) {
+      try {
+        const cutPlan = await client.applyReviewQueue(jobId, approvedIds);
+        if (cutPlan && cutPlan.cuts && cutPlan.cuts.length > 0) {
+          cutIntervals = cutPlan.cuts.map((c: any) => ({
+            cutId: c.cutId || `cut_${Date.now()}_${Math.random()}`,
+            startSeconds: c.startSeconds ?? c.start_seconds,
+            endSeconds: c.endSeconds ?? c.end_seconds,
+            durationSeconds: c.durationSeconds ?? c.duration_seconds ?? (c.end_seconds - c.start_seconds),
+            startTick: c.startTick ?? c.start_tick ?? String(Math.round((c.startSeconds ?? c.start_seconds) * 254016000000)),
+            endTick: c.endTick ?? c.end_tick ?? String(Math.round((c.endSeconds ?? c.end_seconds) * 254016000000)),
+            startFrame: c.startFrame ?? 0,
+            endFrame: c.endFrame ?? 0,
+            category: (c.category as any) || 'REVIEW_CUT',
+            sourceSuggestionId: c.sourceSuggestionId || ''
+          }));
+        }
+      } catch (err) {
+        console.warn('[applyApprovedReviewQueue] Daemon call failed, falling back to local cuts:', err);
+      }
+    }
 
-    const cutPlan = await client.applyReviewQueue(jobId, approvedIds);
-    if (!cutPlan) return;
+    // Direct fallback: build cuts directly from acceptedItems if daemon cutPlan was empty
+    if (cutIntervals.length === 0) {
+      const fps = get().sequenceManifest?.fps || 24;
+      cutIntervals = acceptedItems.map((item, idx) => ({
+        cutId: item.id || `cut_appr_${idx}_${Date.now()}`,
+        startSeconds: item.startSeconds,
+        endSeconds: item.endSeconds,
+        durationSeconds: item.durationSeconds,
+        startTick: String(Math.round(item.startSeconds * 254016000000)),
+        endTick: String(Math.round(item.endSeconds * 254016000000)),
+        startFrame: Math.round(item.startSeconds * fps),
+        endFrame: Math.round(item.endSeconds * fps),
+        category: (item.category as any) || 'REVIEW_CUT',
+        sourceSuggestionId: item.id
+      }));
+    }
 
     // Clone sequence
     const seq = get().sequenceManifest;
-    const cloneRes = await hostBridge.cloneActiveSequence();
-    const clonedName = cloneRes?.clonedSequenceName || `${seq?.sequenceName}_PrismexRoughCut`;
+    const cloneRes = await hostBridge.cloneActiveSequence('_ApprovedCuts');
+    const clonedName = cloneRes?.clonedSequenceName || `${seq?.sequenceName}_ApprovedCuts`;
 
     // Apply cuts
-    const execResult = await timelineEngine.executeCuts(cutPlan.cuts);
+    const execResult = await timelineEngine.executeCuts(cutIntervals);
 
     const report: RoughCutSummaryReport = {
-      jobId,
+      jobId: jobId || `local_${Date.now()}`,
       originalSequenceName: seq?.sequenceName || 'Original',
       clonedSequenceName: clonedName,
       originalDurationSeconds: seq?.durationSeconds || 0,
@@ -416,10 +453,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       timeSavedSeconds: execResult.timeSavedSeconds,
       percentSaved: Math.round((execResult.timeSavedSeconds / Math.max(1, seq?.durationSeconds || 1)) * 100),
       totalCutsApplied: execResult.cutsExecuted,
-      silencesRemovedCount: Math.round(execResult.cutsExecuted * 0.6),
-      takesPrunedCount: Math.round(execResult.cutsExecuted * 0.2),
-      fillersRemovedCount: Math.round(execResult.cutsExecuted * 0.2),
-      engineUsed: 'MLX-Whisper & Review Queue',
+      silencesRemovedCount: acceptedItems.filter((i) => i.category === 'SILENCE').length,
+      takesPrunedCount: acceptedItems.filter((i) => i.category === 'REPEATED_TAKE').length,
+      fillersRemovedCount: acceptedItems.filter((i) => i.category === 'FILLER_WORD').length,
+      engineUsed: 'Prismex Review Queue Cut',
       syncVerified: execResult.syncVerified,
       timestamp: new Date().toLocaleTimeString()
     };
