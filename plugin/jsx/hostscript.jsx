@@ -317,9 +317,16 @@ $._prismex.executeCuts = function(cutsJsonString) {
                         var tlTargetTicks = zeroTicks + Math.round(seg.newTimelineStart * TICKS);
 
                         try {
-                            info.projectItem.setInPoint(segSrcInTicks.toFixed(0), 4);
-                            info.projectItem.setOutPoint(segSrcOutTicks.toFixed(0), 4);
-                            snap.track.overwriteClip(info.projectItem, tlTargetTicks.toFixed(0));
+                            var inTimeObj = new Time();
+                            inTimeObj.ticks = segSrcInTicks.toFixed(0);
+                            var outTimeObj = new Time();
+                            outTimeObj.ticks = segSrcOutTicks.toFixed(0);
+                            var tlTimeObj = new Time();
+                            tlTimeObj.ticks = tlTargetTicks.toFixed(0);
+
+                            info.projectItem.setInPoint(inTimeObj, 4);
+                            info.projectItem.setOutPoint(outTimeObj, 4);
+                            snap.track.overwriteClip(info.projectItem, tlTimeObj);
                             totalClipsProcessed++;
                         } catch (owErr) {}
                     }
@@ -367,9 +374,16 @@ $._prismex.executeCuts = function(cutsJsonString) {
                         var aOutTicks = Math.round((aInfo.srcIn + aOffset + aDur) * TICKS);
                         var aTargetTicks = zeroTicks + Math.round(aSeg.newTimelineStart * TICKS);
                         try {
-                            aInfo.projectItem.setInPoint(aInTicks.toFixed(0), 2);
-                            aInfo.projectItem.setOutPoint(aOutTicks.toFixed(0), 2);
-                            aSnap.track.overwriteClip(aInfo.projectItem, aTargetTicks.toFixed(0));
+                            var aInTimeObj = new Time();
+                            aInTimeObj.ticks = aInTicks.toFixed(0);
+                            var aOutTimeObj = new Time();
+                            aOutTimeObj.ticks = aOutTicks.toFixed(0);
+                            var aTlTimeObj = new Time();
+                            aTlTimeObj.ticks = aTargetTicks.toFixed(0);
+
+                            aInfo.projectItem.setInPoint(aInTimeObj, 2);
+                            aInfo.projectItem.setOutPoint(aOutTimeObj, 2);
+                            aSnap.track.overwriteClip(aInfo.projectItem, aTlTimeObj);
                             totalClipsProcessed++;
                         } catch (aOwErr) {}
                     }

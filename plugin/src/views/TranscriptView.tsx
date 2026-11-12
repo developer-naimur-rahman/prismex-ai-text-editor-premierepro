@@ -72,7 +72,7 @@ export const TranscriptView: React.FC = () => {
 
   const t = translations[language];
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterMode, setFilterMode] = useState<'ALL' | 'FILLERS' | 'PAUSES'>('ALL');
+  const [filterMode, setFilterMode] = useState<'ALL' | 'FILLERS' | 'PAUSES' | 'TAKES'>('ALL');
   const [selStartIdx, setSelStartIdx] = useState<number | null>(null);
   const [selEndIdx, setSelEndIdx] = useState<number | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -104,6 +104,7 @@ export const TranscriptView: React.FC = () => {
   }, [transcriptWords]);
 
   const fillerCount = useMemo(() => words.filter((w) => w.isFiller).length, [words]);
+  const repeatedTakes = useMemo(() => reviewItems.filter((i) => i.category === 'REPEATED_TAKE'), [reviewItems]);
 
   // Group words into paragraph chunks (~15 words or > 0.75s pause) for Premiere Pro Text Panel layout
   const paragraphs = useMemo(() => {
@@ -516,8 +517,8 @@ export const TranscriptView: React.FC = () => {
         <button
           onClick={() => setFilterMode(filterMode === 'FILLERS' ? 'ALL' : 'FILLERS')}
           style={{
-            padding: '5px 8px',
-            fontSize: '10.5px',
+            padding: '5px 7px',
+            fontSize: '10px',
             borderRadius: 'var(--radius-sm)',
             border: '1px solid var(--border-subtle)',
             backgroundColor: filterMode === 'FILLERS' ? 'rgba(250, 204, 21, 0.2)' : 'var(--bg-tertiary)',
@@ -525,14 +526,14 @@ export const TranscriptView: React.FC = () => {
             cursor: 'pointer'
           }}
         >
-          Fillers ({fillerCount})
+          {t.fillers} ({fillerCount})
         </button>
 
         <button
           onClick={() => setFilterMode(filterMode === 'PAUSES' ? 'ALL' : 'PAUSES')}
           style={{
-            padding: '5px 8px',
-            fontSize: '10.5px',
+            padding: '5px 7px',
+            fontSize: '10px',
             borderRadius: 'var(--radius-sm)',
             border: '1px solid var(--border-subtle)',
             backgroundColor: filterMode === 'PAUSES' ? 'rgba(239, 68, 68, 0.2)' : 'var(--bg-tertiary)',
@@ -540,7 +541,22 @@ export const TranscriptView: React.FC = () => {
             cursor: 'pointer'
           }}
         >
-          Pauses ({detectedSilences.length})
+          {t.pauses} ({detectedSilences.length})
+        </button>
+
+        <button
+          onClick={() => setFilterMode(filterMode === 'TAKES' ? 'ALL' : 'TAKES')}
+          style={{
+            padding: '5px 7px',
+            fontSize: '10px',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid var(--border-subtle)',
+            backgroundColor: filterMode === 'TAKES' ? 'rgba(139, 92, 246, 0.25)' : 'var(--bg-tertiary)',
+            color: filterMode === 'TAKES' ? '#c4b5fd' : 'var(--text-secondary)',
+            cursor: 'pointer'
+          }}
+        >
+          {t.doubleLines} ({repeatedTakes.length})
         </button>
       </div>
 
@@ -638,25 +654,109 @@ export const TranscriptView: React.FC = () => {
             ))
           )}
         </div>
+      ) : filterMode === 'TAKES' ? (
+        /* Double Lines / Repeated Takes Filter View */
+        <div className="card" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {repeatedTakes.length === 0 ? (
+            <div style={{ color: 'var(--text-muted)', fontSize: '11px', textAlign: 'center', padding: '20px' }}>
+              {language === 'bn' ? 'কোনো ডাবল লাইন পাওয়া যায়নি।' : 'No repeated takes / double lines detected.'}
+            </div>
+          ) : (
+            repeatedTakes.map((rt, idx) => (
+              <div
+                key={rt.id}
+                onClick={() => hostBridge.setPlayheadPosition(rt.startSeconds)}
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '5px',
+                  padding: '8px 10px',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderLeft: '3px solid #a78bfa',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: '11px',
+                  cursor: 'pointer'
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontFamily: 'monospace', color: '#c4b5fd', fontWeight: 600 }}>
+                    #{idx + 1} • {TimecodeConverter.formatTimecode(rt.startSeconds, fps)} ({rt.durationSeconds.toFixed(2)}s)
+                  </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteTranscriptRange(rt.startSeconds, rt.endSeconds);
+                    }}
+                    className="btn-secondary"
+                    style={{ padding: '3px 8px', fontSize: '10px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                  >
+                    <Scissors size={10} />
+                    <span>{t.cutDoubleLine}</span>
+                  </button>
+                </div>
+                <div style={{ color: 'var(--text-primary)' }}>"{rt.transcriptSnippet}"</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{rt.reason}</div>
+              </div>
+            ))
+          )}
+        </div>
       ) : (
         /* Paragraph Transcript Body (Premiere Pro Text Panel Style) */
         <div className="card" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {paragraphs.map((para) => (
-            <div key={para.startIdx} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start' }}>
-              <div
-                onClick={() => hostBridge.setPlayheadPosition(para.startTime)}
-                title="Click to jump to paragraph start"
-                style={{
-                  fontFamily: 'monospace',
-                  fontSize: '10px',
-                  color: 'var(--accent-color)',
-                  minWidth: '64px',
-                  paddingTop: '4px',
-                  cursor: 'pointer',
-                  userSelect: 'none'
-                }}
-              >
-                {TimecodeConverter.formatTimecode(para.startTime, fps)}
+          {paragraphs.map((para) => {
+            const paraEnd = para.tokens[para.tokens.length - 1]?.end || para.startTime;
+            const matchingTake = repeatedTakes.find(
+              (rt) => rt.startSeconds <= paraEnd && rt.endSeconds >= para.startTime
+            );
+            return (
+            <div
+              key={para.startIdx}
+              style={{
+                display: 'flex',
+                gap: '10px',
+                alignItems: 'flex-start',
+                padding: matchingTake ? '6px' : '0',
+                borderRadius: matchingTake ? '4px' : '0',
+                backgroundColor: matchingTake ? 'rgba(139, 92, 246, 0.08)' : 'transparent',
+                borderLeft: matchingTake ? '2px solid #a78bfa' : 'none'
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '68px' }}>
+                <div
+                  onClick={() => hostBridge.setPlayheadPosition(para.startTime)}
+                  title="Click to jump to paragraph start"
+                  style={{
+                    fontFamily: 'monospace',
+                    fontSize: '10px',
+                    color: 'var(--accent-color)',
+                    paddingTop: '4px',
+                    cursor: 'pointer',
+                    userSelect: 'none'
+                  }}
+                >
+                  {TimecodeConverter.formatTimecode(para.startTime, fps)}
+                </div>
+                {matchingTake && (
+                  <button
+                    onClick={() => deleteTranscriptRange(matchingTake.startSeconds, matchingTake.endSeconds)}
+                    title={matchingTake.reason}
+                    style={{
+                      backgroundColor: 'rgba(139, 92, 246, 0.2)',
+                      border: '1px solid rgba(139, 92, 246, 0.45)',
+                      borderRadius: '3px',
+                      color: '#ddd6fe',
+                      fontSize: '9px',
+                      padding: '2px 4px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '2px'
+                    }}
+                  >
+                    <Scissors size={9} />
+                    <span>{t.doubleLines}</span>
+                  </button>
+                )}
               </div>
 
               <div style={{ flex: 1, lineHeight: 1.85 }}>
@@ -704,7 +804,8 @@ export const TranscriptView: React.FC = () => {
                 })}
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
