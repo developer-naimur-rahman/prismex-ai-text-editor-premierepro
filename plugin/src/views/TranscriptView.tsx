@@ -5,9 +5,9 @@ import { Search, Play, Scissors } from 'lucide-react';
 
 export const TranscriptView: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
+  const { transcriptWords } = usePrismexStore();
   const hostBridge = PremiereHostBridge.getInstance();
 
-  // Mock transcript tokens for preview
   const sampleWords = [
     { id: '1', word: 'Welcome', start: 1.0, end: 1.4 },
     { id: '2', word: 'back', start: 1.45, end: 1.7 },
@@ -32,6 +32,16 @@ export const TranscriptView: React.FC = () => {
     { id: '21', word: 'is', start: 8.95, end: 9.1 },
     { id: '22', word: 'speed.', start: 9.15, end: 9.6 }
   ];
+
+  const wordsToDisplay = transcriptWords.length > 0
+    ? transcriptWords.map((w: any) => ({
+        id: w.id,
+        word: w.word,
+        start: w.start_seconds ?? w.start ?? 0,
+        end: w.end_seconds ?? w.end ?? 0,
+        isFiller: w.is_filler ?? w.isFiller ?? false
+      }))
+    : sampleWords;
 
   return (
     <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px', height: '100%', overflow: 'hidden' }}>
@@ -71,7 +81,7 @@ export const TranscriptView: React.FC = () => {
 
       {/* Transcript Text Box */}
       <div className="card" style={{ flex: 1, overflowY: 'auto', lineHeight: 1.8 }}>
-        {sampleWords.map((item) => {
+        {wordsToDisplay.map((item) => {
           const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
           return (
             <span

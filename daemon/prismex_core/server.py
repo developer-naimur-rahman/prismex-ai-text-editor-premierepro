@@ -274,7 +274,8 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
                 "executionMode": req.executionMode,
                 "totalCuts": len(cuts),
                 "timeSavedSeconds": round(total_time_saved, 2),
-                "cuts": cuts
+                "cuts": cuts,
+                "words": transcript_data.get("words", [])
             }
         })
 

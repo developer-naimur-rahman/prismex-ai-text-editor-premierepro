@@ -48,8 +48,9 @@ interface PrismexState {
   jobProgress: number;
   jobMessage: string;
 
-  // Review Queue State
+  // Review Queue & Transcript State
   reviewItems: ReviewQueueItem[];
+  transcriptWords: any[];
   setReviewItems: (items: ReviewQueueItem[]) => void;
   updateReviewItemStatus: (id: string, status: 'ACCEPTED' | 'REJECTED') => void;
   acceptAllReviewItems: () => void;
@@ -92,6 +93,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   jobMessage: 'Ready',
 
   reviewItems: [],
+  transcriptWords: [],
   setReviewItems: (items) => set({ reviewItems: items }),
 
   updateReviewItemStatus: (id, status) => {
@@ -144,11 +146,12 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           jobStatus: event.params.stage
         });
       } else if (event.method === 'job.completed') {
-        const { jobId, executionMode, cuts, timeSavedSeconds } = event.params;
+        const { jobId, executionMode, cuts, words } = event.params;
         set({
           jobProgress: 100,
           jobMessage: 'Analysis complete!',
-          jobStatus: 'COMPLETE'
+          jobStatus: 'COMPLETE',
+          transcriptWords: words || []
         });
 
         if (executionMode === 'REVIEW_EDIT') {
@@ -188,11 +191,12 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   },
 
   startMagicRoughCut: async () => {
-    const seq = get().sequenceManifest;
+    const seq = await hostBridge.getActiveSequenceManifest();
     if (!seq) {
-      alert('Please select an active sequence in Premiere Pro.');
+      alert('Please open an active sequence in Adobe Premiere Pro first.');
       return;
     }
+    set({ sequenceManifest: seq });
 
     set({
       jobProgress: 5,

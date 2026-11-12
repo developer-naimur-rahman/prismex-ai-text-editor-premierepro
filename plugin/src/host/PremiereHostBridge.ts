@@ -24,6 +24,8 @@ export class PremiereHostBridge {
     return PremiereHostBridge.instance;
   }
 
+  private cepScriptLoaded: boolean = false;
+
   private detectHost(): void {
     if (typeof window === 'undefined') return;
 
@@ -32,6 +34,7 @@ export class PremiereHostBridge {
       this.isCEP = true;
       if ((window as any).CSInterface) {
         this.csInterface = new (window as any).CSInterface();
+        this.ensureCEPScriptLoaded();
       }
       return;
     }
@@ -55,6 +58,20 @@ export class PremiereHostBridge {
     return this.isCEP;
   }
 
+  private async ensureCEPScriptLoaded(): Promise<void> {
+    if (!this.csInterface || this.cepScriptLoaded) return;
+    try {
+      const extPath = this.csInterface.getSystemPath('extension');
+      if (extPath) {
+        const cleanPath = extPath.replace(/\\/g, '/');
+        await this.evalScript(`if (typeof $._prismex === "undefined") { $.evalFile("${cleanPath}/jsx/hostscript.jsx"); }`);
+        this.cepScriptLoaded = true;
+      }
+    } catch (e) {
+      console.error('[PremiereHostBridge] Failed to load hostscript.jsx:', e);
+    }
+  }
+
   public evalScript(script: string): Promise<string> {
     return new Promise((resolve) => {
       if (!this.csInterface) {
@@ -73,6 +90,7 @@ export class PremiereHostBridge {
   public async getActiveSequenceManifest(): Promise<SequenceManifest | null> {
     // A. CEP Path
     if (this.isCEP) {
+      await this.ensureCEPScriptLoaded();
       const res = await this.evalScript("$._prismex.getActiveSequenceManifest()");
       try {
         const data = JSON.parse(res);
@@ -80,7 +98,7 @@ export class PremiereHostBridge {
           return data;
         }
       } catch (e) {}
-      return this.getMockSequenceManifest();
+      return null;
     }
 
     // B. UXP Path
@@ -145,6 +163,7 @@ export class PremiereHostBridge {
    */
   public async cloneActiveSequence(suffix: string = "_PrismexRoughCut"): Promise<{ clonedSequenceName: string } | null> {
     if (this.isCEP) {
+      await this.ensureCEPScriptLoaded();
       const res = await this.evalScript(`$._prismex.cloneActiveSequence("${suffix}")`);
       try {
         const data = JSON.parse(res);
@@ -152,7 +171,7 @@ export class PremiereHostBridge {
           return data;
         }
       } catch (e) {}
-      return { clonedSequenceName: `Demo_Interview${suffix}` };
+      return null;
     }
 
     if (this.isUXP) {

@@ -1,11 +1,13 @@
 /**
  * Prismex AI Editor - ExtendScript Host Engine for Adobe Premiere Pro
- * Provides timeline inspection, sequence cloning, playhead positioning, and cut execution.
+ * Provides timeline inspection, sequence cloning, playhead positioning, and physical ripple-cut execution.
  */
 
 if (typeof $._prismex === "undefined") {
     $._prismex = {};
 }
+
+$._prismex.TICKS_PER_SECOND = 254016000000.0;
 
 $._prismex.getActiveSequenceManifest = function() {
     try {
@@ -16,24 +18,33 @@ $._prismex.getActiveSequenceManifest = function() {
         var seq = app.project.activeSequence;
         var seqName = seq.name;
         var seqId = seq.sequenceID || seq.name;
-        var timebase = 24.0;
-        
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+
+        // Calculate exact FPS from ticks per frame (seq.timebase)
+        var fps = 24.0;
         try {
-            timebase = parseFloat(seq.timebase) / 100.0;
-            if (isNaN(timebase) || timebase <= 0) timebase = 24.0;
+            var ticksPerFrame = parseFloat(seq.timebase);
+            if (!isNaN(ticksPerFrame) && ticksPerFrame > 0) {
+                fps = Math.round((TICKS / ticksPerFrame) * 1000.0) / 1000.0;
+            }
         } catch (e) {
-            timebase = 24.0;
+            fps = 24.0;
         }
 
-        var durationTicks = "0";
+        var zeroTicks = 0.0;
         try {
-            durationTicks = seq.end; // In ticks string
+            zeroTicks = parseFloat(seq.zeroPoint || 0);
+            if (isNaN(zeroTicks)) zeroTicks = 0.0;
         } catch (e) {}
 
-        var durationSeconds = 0.0;
+        var endTicks = 0.0;
         try {
-            durationSeconds = parseFloat(durationTicks) / 254016000000.0;
+            endTicks = parseFloat(seq.end || 0);
+            if (isNaN(endTicks)) endTicks = 0.0;
         } catch (e) {}
+
+        var durationTicks = Math.max(0, endTicks - zeroTicks);
+        var durationSeconds = durationTicks / TICKS;
 
         // Inspect audio tracks and clips
         var sourceClips = [];
@@ -53,15 +64,15 @@ $._prismex.getActiveSequenceManifest = function() {
                     var inSec = 0.0;
                     var outSec = 0.0;
                     try {
-                        inSec = parseFloat(clip.start.ticks) / 254016000000.0;
-                        outSec = parseFloat(clip.end.ticks) / 254016000000.0;
+                        inSec = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
+                        outSec = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
                     } catch (te) {}
 
                     sourceClips.push({
                         mediaPath: mediaPath,
                         trackIndex: t + 1,
-                        inSeconds: inSec,
-                        outSeconds: outSec
+                        inSeconds: Math.max(0, inSec),
+                        outSeconds: Math.max(0, outSec)
                     });
                 }
             }
@@ -71,10 +82,10 @@ $._prismex.getActiveSequenceManifest = function() {
             premiereProjectId: app.project.documentID || "current_project",
             sequenceGuid: seqId,
             sequenceName: seqName,
-            fps: timebase,
+            fps: fps,
             sampleRate: 48000,
             durationSeconds: durationSeconds,
-            durationTicks: String(durationTicks),
+            durationTicks: String(Math.round(durationTicks)),
             sourceClips: sourceClips
         });
     } catch (err) {
@@ -86,7 +97,8 @@ $._prismex.setPlayheadPosition = function(seconds) {
     try {
         if (!app.project || !app.project.activeSequence) return "NO_SEQ";
         var seq = app.project.activeSequence;
-        var ticks = Math.round(parseFloat(seconds) * 254016000000);
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+        var ticks = zeroTicks + Math.round(parseFloat(seconds) * $._prismex.TICKS_PER_SECOND);
         seq.setPlayerPosition(String(ticks));
         return "OK";
     } catch (err) {
@@ -96,22 +108,35 @@ $._prismex.setPlayheadPosition = function(seconds) {
 
 $._prismex.cloneActiveSequence = function(suffix) {
     try {
-        if (!app.project || !app.project.activeSequence) return JSON.stringify({ error: "No active sequence" });
-        var seq = app.project.activeSequence;
-        var origName = seq.name;
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ error: "No active sequence found" });
+        }
+
+        var origSeq = app.project.activeSequence;
+        var origName = origSeq.name;
         var targetName = origName + (suffix || "_PrismexRoughCut");
 
-        // Clone sequence non-destructively
-        seq.clone();
+        // sequence.clone() returns boolean; cloned sequence is appended to app.project.sequences
+        var cloned = origSeq.clone();
+        if (!cloned) {
+            return JSON.stringify({ error: "Sequence clone failed" });
+        }
 
-        // In Premiere Pro, cloned sequence becomes the active sequence or is added to project
-        try {
-            if (app.project.activeSequence && app.project.activeSequence.name !== origName) {
-                app.project.activeSequence.name = targetName;
-            }
-        } catch (e) {}
+        var numSeq = app.project.sequences.numSequences;
+        var newSeq = app.project.sequences[numSeq - 1];
+        if (newSeq) {
+            newSeq.name = targetName;
+            try {
+                app.project.openSequence(newSeq.sequenceID);
+                app.project.activeSequence = newSeq;
+            } catch (openErr) {}
+        }
 
-        return JSON.stringify({ clonedSequenceName: targetName });
+        return JSON.stringify({
+            success: true,
+            clonedSequenceName: targetName,
+            sequenceId: newSeq ? newSeq.sequenceID : ""
+        });
     } catch (err) {
         return JSON.stringify({ error: String(err) });
     }
@@ -129,15 +154,18 @@ $._prismex.executeCuts = function(cutsJsonString) {
         }
 
         var seq = app.project.activeSequence;
-        var initialTicks = seq.end;
-        var initialSec = parseFloat(initialTicks) / 254016000000.0;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
 
-        // Sort cuts in descending order (reverse chronological)
+        var initialTicks = Math.max(0, parseFloat(seq.end || 0) - zeroTicks);
+        var initialSec = initialTicks / TICKS;
+
+        // Sort cuts in descending order (reverse chronological: Right to Left)
         cuts.sort(function(a, b) {
             return b.startSeconds - a.startSeconds;
         });
 
-        // Enable QE DOM for timeline manipulation
+        // Enable QE DOM for timeline razoring
         try {
             app.enableQE();
         } catch (e) {}
@@ -154,39 +182,82 @@ $._prismex.executeCuts = function(cutsJsonString) {
 
         for (var i = 0; i < cuts.length; i++) {
             var cut = cuts[i];
-            var startSec = cut.startSeconds;
-            var endSec = cut.endSeconds;
+            var startSec = parseFloat(cut.startSeconds);
+            var endSec = parseFloat(cut.endSeconds);
             var duration = endSec - startSec;
+            if (isNaN(duration) || duration <= 0.04) continue;
 
-            // In Premiere Pro, add an edit / razor marker and ripple delete
+            var startTicks = zeroTicks + Math.round(startSec * TICKS);
+            var endTicks = zeroTicks + Math.round(endSec * TICKS);
+
+            // Step 1: Razor at endSec first, then startSec, using dynamic CTI timecode
+            if (qeSeq) {
+                try {
+                    seq.setPlayerPosition(String(endTicks));
+                    var endTC = qeSeq.CTI.timecode;
+                    qeSeq.razor(endTC);
+                } catch (rzEndErr) {}
+
+                try {
+                    seq.setPlayerPosition(String(startTicks));
+                    var startTC = qeSeq.CTI.timecode;
+                    qeSeq.razor(startTC);
+                } catch (rzStartErr) {}
+            }
+
+            // Step 2: Locate the isolated slice on all video and audio tracks and ripple-remove it
+            var tolerance = 0.08; // 80ms frame boundary tolerance
+            var cutHappened = false;
+
+            // Video tracks
             try {
-                if (qeSeq) {
-                    var startTicks = Math.round(startSec * 254016000000);
-                    var endTicks = Math.round(endSec * 254016000000);
-                    
-                    // Razor sequence at start and end
-                    qeSeq.razor(String(startTicks));
-                    qeSeq.razor(String(endTicks));
-                    totalExecuted++;
-                    totalSavedSec += duration;
-                } else {
-                    // Non-destructive clip trim
-                    totalExecuted++;
-                    totalSavedSec += duration;
+                for (var v = 0; v < seq.videoTracks.numTracks; v++) {
+                    var vTrack = seq.videoTracks[v];
+                    if (vTrack.isLocked()) continue;
+                    for (var vc = vTrack.clips.numItems - 1; vc >= 0; vc--) {
+                        var vClip = vTrack.clips[vc];
+                        var vStart = (parseFloat(vClip.start.ticks) - zeroTicks) / TICKS;
+                        var vEnd = (parseFloat(vClip.end.ticks) - zeroTicks) / TICKS;
+                        if (vStart >= (startSec - tolerance) && vEnd <= (endSec + tolerance)) {
+                            vClip.remove(1, 0); // 1 = inRipple (true), 0 = inAlignToVideo (false)
+                            cutHappened = true;
+                        }
+                    }
                 }
-            } catch (cutErr) {
-                // Continue with next cut
+            } catch (vErr) {}
+
+            // Audio tracks
+            try {
+                for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+                    var aTrack = seq.audioTracks[a];
+                    if (aTrack.isLocked()) continue;
+                    for (var ac = aTrack.clips.numItems - 1; ac >= 0; ac--) {
+                        var aClip = aTrack.clips[ac];
+                        var aStart = (parseFloat(aClip.start.ticks) - zeroTicks) / TICKS;
+                        var aEnd = (parseFloat(aClip.end.ticks) - zeroTicks) / TICKS;
+                        if (aStart >= (startSec - tolerance) && aEnd <= (endSec + tolerance)) {
+                            aClip.remove(1, 0); // 1 = inRipple (true)
+                            cutHappened = true;
+                        }
+                    }
+                }
+            } catch (aErr) {}
+
+            if (cutHappened) {
+                totalExecuted++;
+                totalSavedSec += duration;
             }
         }
 
-        var finalSec = Math.max(0, initialSec - totalSavedSec);
+        var finalTicks = Math.max(0, parseFloat(seq.end || 0) - zeroTicks);
+        var finalSec = finalTicks / TICKS;
 
         return JSON.stringify({
             success: true,
             cutsExecuted: totalExecuted,
             initialDurationSeconds: initialSec,
             finalDurationSeconds: finalSec,
-            timeSavedSeconds: totalSavedSec,
+            timeSavedSeconds: Math.max(0, initialSec - finalSec),
             syncVerified: true
         });
     } catch (err) {

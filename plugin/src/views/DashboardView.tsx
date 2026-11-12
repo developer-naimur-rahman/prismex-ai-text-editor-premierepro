@@ -1,11 +1,12 @@
 import React from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
-import { Sparkles, Clock, CheckCircle, Scissors, FileText, ArrowRight } from 'lucide-react';
+import { Sparkles, Clock, CheckCircle, Scissors, FileText, ArrowRight, RefreshCw } from 'lucide-react';
 import { TimecodeConverter } from '../host/TimecodeConverter';
 
 export const DashboardView: React.FC = () => {
   const { 
     sequenceManifest, 
+    refreshSequence,
     lastReport, 
     setActiveTab, 
     startMagicRoughCut, 
@@ -61,9 +62,30 @@ export const DashboardView: React.FC = () => {
 
       {/* Active Sequence Stats Card */}
       <div className="card">
-        <h3 style={{ fontSize: '12px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-secondary)' }}>
-          ACTIVE SEQUENCE
-        </h3>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <h3 style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', margin: 0 }}>
+            ACTIVE SEQUENCE
+          </h3>
+          <button 
+            onClick={() => refreshSequence()}
+            title="Refresh Active Sequence"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-sm)',
+              color: 'var(--text-secondary)',
+              padding: '3px 8px',
+              fontSize: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              cursor: 'pointer'
+            }}
+          >
+            <RefreshCw size={10} />
+            <span>Refresh</span>
+          </button>
+        </div>
         {sequenceManifest ? (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
             <div>
