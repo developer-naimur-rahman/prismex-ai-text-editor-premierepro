@@ -159,6 +159,7 @@ export class PrismexDaemonClient {
         return {
           planId: data.planId,
           jobId: data.jobId,
+          sequenceId: data.sequenceId || '',
           totalCuts: data.totalCuts,
           totalTimeSavedSeconds: data.totalTimeSavedSeconds,
           cuts: data.cuts.map((c: any) => ({
