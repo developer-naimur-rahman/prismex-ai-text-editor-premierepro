@@ -10,7 +10,9 @@ import {
   CheckSquare,
   RefreshCw,
   Trash2,
-  VolumeX
+  VolumeX,
+  Download,
+  Bot
 } from 'lucide-react';
 
 interface WordToken {
@@ -21,6 +23,30 @@ interface WordToken {
   isFiller: boolean;
 }
 
+function formatSrtTimestamp(sec: number): string {
+  const totalMs = Math.max(0, Math.round(sec * 1000));
+  const ms = totalMs % 1000;
+  const totalSec = Math.floor(totalMs / 1000);
+  const s = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const m = totalMin % 60;
+  const h = Math.floor(totalMin / 60);
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+  return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms, 3)}`;
+}
+
+function triggerFileDownload(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export const TranscriptView: React.FC = () => {
   const {
     sequenceManifest,
@@ -28,8 +54,11 @@ export const TranscriptView: React.FC = () => {
     transcriptWords,
     detectedSilences,
     reviewItems,
+    aiSummary,
     transcribeSequence,
     deleteTranscriptRange,
+    cutAllSilencesNow,
+    runTranscriptAI,
     setExecutionMode,
     startMagicRoughCut,
     setActiveTab,
@@ -42,6 +71,9 @@ export const TranscriptView: React.FC = () => {
   const [filterMode, setFilterMode] = useState<'ALL' | 'FILLERS' | 'PAUSES'>('ALL');
   const [selStartIdx, setSelStartIdx] = useState<number | null>(null);
   const [selEndIdx, setSelEndIdx] = useState<number | null>(null);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [showAiPanel, setShowAiPanel] = useState(false);
 
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
@@ -59,7 +91,7 @@ export const TranscriptView: React.FC = () => {
 
   const fillerCount = useMemo(() => words.filter((w) => w.isFiller).length, [words]);
 
-  // Group words into paragraph chunks (~15 words or > 0.7s pause) for Premiere Pro Text Panel layout
+  // Group words into paragraph chunks (~15 words or > 0.75s pause) for Premiere Pro Text Panel layout
   const paragraphs = useMemo(() => {
     const groups: Array<{ startIdx: number; endIdx: number; startTime: number; tokens: Array<WordToken & { globalIdx: number }> }> = [];
     let current: Array<WordToken & { globalIdx: number }> = [];
@@ -119,6 +151,45 @@ export const TranscriptView: React.FC = () => {
     setSelEndIdx(null);
   };
 
+  const baseFilename = (sequenceManifest?.sequenceName || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  const handleExportTxt = () => {
+    const txt = paragraphs.map((p) => p.tokens.map((t) => t.word).join(' ')).join('\n\n');
+    triggerFileDownload(`${baseFilename}.txt`, txt, 'text/plain;charset=utf-8');
+  };
+
+  const handleExportSrt = () => {
+    // Group into ~8-word subtitle cues for clean SRT captions
+    const cues: string[] = [];
+    let cueIdx = 1;
+    for (let i = 0; i < words.length; i += 8) {
+      const chunk = words.slice(i, i + 8);
+      if (chunk.length === 0) continue;
+      const start = formatSrtTimestamp(chunk[0].start);
+      const end = formatSrtTimestamp(chunk[chunk.length - 1].end);
+      const text = chunk.map((w) => w.word).join(' ');
+      cues.push(`${cueIdx}\n${start} --> ${end}\n${text}\n`);
+      cueIdx++;
+    }
+    triggerFileDownload(`${baseFilename}.srt`, cues.join('\n'), 'application/x-subrip;charset=utf-8');
+  };
+
+  const handleExportJson = () => {
+    const payload = {
+      sequenceName: sequenceManifest?.sequenceName || 'Unknown',
+      fps,
+      words: transcriptWords
+    };
+    triggerFileDownload(`${baseFilename}_transcript.json`, JSON.stringify(payload, null, 2), 'application/json');
+  };
+
+  const handleRunAi = async () => {
+    setShowAiPanel(true);
+    setAiLoading(true);
+    await runTranscriptAI(aiPrompt || undefined);
+    setAiLoading(false);
+  };
+
   // Pre-Transcription State (Premiere Pro Text Panel First Screen)
   if (words.length === 0) {
     return (
@@ -127,7 +198,7 @@ export const TranscriptView: React.FC = () => {
           <div>
             <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Text Panel — Speech to Text</h2>
             <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-              First transcribe your sequence audio, then edit text or run Auto Cut.
+              First transcribe your sequence audio, then edit text, run AI, export SRT/TXT, or Auto Cut.
             </p>
           </div>
           <button
@@ -185,7 +256,7 @@ export const TranscriptView: React.FC = () => {
             <div>
               <div style={{ fontSize: '13px', fontWeight: 600 }}>Step 1: Transcribe Sequence</div>
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                Generates word-level transcript, detects pauses, fillers &amp; repeated takes locally via Apple Silicon MLX-Whisper.
+                Generates word-level transcript locally via Apple Silicon MLX-Whisper, plus detects silences, fillers &amp; repeated takes.
               </div>
             </div>
           </div>
@@ -234,10 +305,10 @@ export const TranscriptView: React.FC = () => {
             <button
               className="btn-secondary"
               style={{ flex: 1, fontSize: '11px' }}
-              onClick={() => setActiveTab('magic-cut')}
+              onClick={() => setActiveTab('silence')}
             >
-              <Scissors size={13} />
-              <span>Configure Cut Rules</span>
+              <VolumeX size={13} />
+              <span>Silence Cut</span>
             </button>
           </div>
         </div>
@@ -247,21 +318,29 @@ export const TranscriptView: React.FC = () => {
 
   // Post-Transcription State (Premiere Pro Text Panel Interface)
   return (
-    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', overflow: 'hidden' }}>
+    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden' }}>
       {/* Top Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
         <div style={{ fontSize: '12px', fontWeight: 600 }}>
           Transcript ({words.length} words)
         </div>
-        <div style={{ display: 'flex', gap: '6px' }}>
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
           <button
             className="btn-secondary"
             disabled={isRunning}
             onClick={transcribeSequence}
-            style={{ padding: '4px 8px', fontSize: '10.5px' }}
+            style={{ padding: '4px 7px', fontSize: '10px' }}
           >
             <Mic size={11} />
             <span>Re-Transcribe</span>
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={handleRunAi}
+            style={{ padding: '4px 7px', fontSize: '10px', borderColor: 'rgba(139, 92, 246, 0.5)', color: '#c4b5fd' }}
+          >
+            <Bot size={11} />
+            <span>AI Assistant</span>
           </button>
           <button
             className="btn-primary"
@@ -270,21 +349,104 @@ export const TranscriptView: React.FC = () => {
               setExecutionMode('AUTO_EDIT');
               startMagicRoughCut();
             }}
-            style={{ padding: '4px 10px', fontSize: '10.5px' }}
+            style={{ padding: '4px 8px', fontSize: '10px' }}
           >
             <Sparkles size={11} />
-            <span>Auto Cut All</span>
+            <span>Auto Cut</span>
           </button>
           <button
             className="btn-secondary"
             onClick={() => setActiveTab('review-queue')}
-            style={{ padding: '4px 8px', fontSize: '10.5px' }}
+            style={{ padding: '4px 7px', fontSize: '10px' }}
           >
             <CheckSquare size={11} />
             <span>Review ({reviewItems.length})</span>
           </button>
         </div>
       </div>
+
+      {/* Export Row (TXT / SRT / JSON) + Quick Silence Cut */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+            <Download size={10} /> Export:
+          </span>
+          <button onClick={handleExportTxt} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
+            .TXT
+          </button>
+          <button onClick={handleExportSrt} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
+            .SRT
+          </button>
+          <button onClick={handleExportJson} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
+            .JSON
+          </button>
+        </div>
+
+        {detectedSilences.length > 0 && (
+          <button
+            onClick={cutAllSilencesNow}
+            className="btn-secondary"
+            style={{ padding: '3px 8px', fontSize: '10px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+          >
+            <Scissors size={10} />
+            <span>Cut {detectedSilences.length} Silence(s)</span>
+          </button>
+        )}
+      </div>
+
+      {/* AI Assistant Panel */}
+      {showAiPanel && (
+        <div
+          className="card"
+          style={{
+            backgroundColor: 'rgba(139, 92, 246, 0.08)',
+            borderColor: 'rgba(139, 92, 246, 0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            padding: '8px 10px'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#c4b5fd', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Bot size={12} /> AI Transcript Assistant {aiSummary?.engine ? `(${aiSummary.engine})` : ''}
+            </span>
+            <button
+              onClick={() => setShowAiPanel(false)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '10px', cursor: 'pointer' }}
+            >
+              Close
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input
+              type="text"
+              placeholder="Ask AI about this transcript (e.g., summarize, find fluff)..."
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              style={{
+                flex: 1,
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '4px',
+                color: 'var(--text-primary)',
+                fontSize: '10.5px',
+                padding: '4px 8px'
+              }}
+            />
+            <button onClick={handleRunAi} disabled={aiLoading} className="btn-primary" style={{ padding: '4px 10px', fontSize: '10.5px' }}>
+              {aiLoading ? 'Thinking...' : 'Ask AI'}
+            </button>
+          </div>
+
+          {aiSummary && (
+            <div style={{ fontSize: '10.5px', color: 'var(--text-primary)', lineHeight: 1.5, maxHeight: '90px', overflowY: 'auto' }}>
+              {aiSummary.summary}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Search & Filter Row */}
       <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -473,7 +635,7 @@ export const TranscriptView: React.FC = () => {
                     <span
                       key={item.id}
                       onClick={(e) => handleWordClick(item.globalIdx, e)}
-                      title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s (Click to seek, Shift+Click to select range)`}
+                      title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s (Click to seek playhead, Shift+Click to select range)`}
                       style={{
                         display: 'inline-block',
                         margin: '1px 2px',

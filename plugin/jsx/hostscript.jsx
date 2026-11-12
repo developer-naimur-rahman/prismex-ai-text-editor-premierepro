@@ -99,7 +99,7 @@ $._prismex.setPlayheadPosition = function(seconds) {
         var seq = app.project.activeSequence;
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
         var ticks = zeroTicks + Math.round(parseFloat(seconds) * $._prismex.TICKS_PER_SECOND);
-        seq.setPlayerPosition(String(ticks));
+        seq.setPlayerPosition(ticks.toFixed(0));
         return "OK";
     } catch (err) {
         return "ERROR: " + String(err);
@@ -192,17 +192,22 @@ $._prismex.executeCuts = function(cutsJsonString) {
 
             // Step 1: Razor at endSec first, then startSec, using dynamic CTI timecode
             if (qeSeq) {
-                try {
-                    seq.setPlayerPosition(String(endTicks));
-                    var endTC = qeSeq.CTI.timecode;
-                    qeSeq.razor(endTC);
-                } catch (rzEndErr) {}
-
-                try {
-                    seq.setPlayerPosition(String(startTicks));
-                    var startTC = qeSeq.CTI.timecode;
-                    qeSeq.razor(startTC);
-                } catch (rzStartErr) {}
+                var razorAt = function(ticksVal) {
+                    seq.setPlayerPosition(ticksVal.toFixed(0));
+                    var tc = qeSeq.CTI.timecode;
+                    try {
+                        for (var rv = 0; rv < qeSeq.numVideoTracks; rv++) {
+                            try { qeSeq.getVideoTrackAt(rv).razor(tc); } catch (e) {}
+                        }
+                        for (var ra = 0; ra < qeSeq.numAudioTracks; ra++) {
+                            try { qeSeq.getAudioTrackAt(ra).razor(tc); } catch (e) {}
+                        }
+                    } catch (trackRzErr) {
+                        try { qeSeq.razor(tc); } catch (e2) {}
+                    }
+                };
+                try { razorAt(endTicks); } catch (rzEndErr) {}
+                try { razorAt(startTicks); } catch (rzStartErr) {}
             }
 
             // Step 2: Locate the isolated slice on all video and audio tracks and ripple-remove it

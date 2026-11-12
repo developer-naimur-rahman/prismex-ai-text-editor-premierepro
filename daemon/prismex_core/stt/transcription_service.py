@@ -37,6 +37,16 @@ class TranscriptionService:
         except Exception:
             return False
 
+    @staticmethod
+    def _load_wav_as_float32(wav_path: Path):
+        """Loads 16kHz mono 16-bit PCM WAV directly into a float32 numpy array."""
+        import numpy as np
+        with wave.open(str(wav_path), 'rb') as wf:
+            n_frames = wf.getnframes()
+            raw_data = wf.readframes(n_frames)
+            samples = np.frombuffer(raw_data, dtype=np.int16).astype(np.float32) / 32768.0
+            return samples
+
     @classmethod
     def transcribe(
         cls, 
@@ -53,8 +63,9 @@ class TranscriptionService:
         if cls._has_audible_signal(audio_wav_path):
             try:
                 import mlx_whisper
+                audio_np = cls._load_wav_as_float32(audio_wav_path)
                 result = mlx_whisper.transcribe(
-                    str(audio_wav_path),
+                    audio_np,
                     path_or_hf_repo="mlx-community/whisper-base-mlx",
                     word_timestamps=True
                 )

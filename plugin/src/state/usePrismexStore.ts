@@ -58,16 +58,29 @@ interface PrismexState {
   acceptAllReviewItems: () => void;
   rejectAllReviewItems: () => void;
 
+  // Silence Detection Config
+  silenceSettings: {
+    thresholdDbfs: number;
+    minDurationMs: number;
+    preCutPaddingMs: number;
+    postCutPaddingMs: number;
+    preserveBreathing: boolean;
+  };
+  setSilenceSettings: (patch: Partial<PrismexState['silenceSettings']>) => void;
+
   // Config State
   profiles: EditingProfile[];
   providers: ProviderStatusInfo[];
   daemonOnline: boolean;
   lastReport: RoughCutSummaryReport | null;
+  aiSummary: { summary: string; engine: string; wpm?: number; totalWords?: number; fillerCount?: number } | null;
 
   // Actions
   initApp: () => Promise<void>;
   transcribeSequence: () => Promise<void>;
   deleteTranscriptRange: (startSeconds: number, endSeconds: number) => Promise<void>;
+  cutAllSilencesNow: () => Promise<void>;
+  runTranscriptAI: (prompt?: string) => Promise<void>;
   startMagicRoughCut: () => Promise<void>;
   applyApprovedReviewQueue: () => Promise<void>;
 }
@@ -122,10 +135,21 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     }));
   },
 
+  silenceSettings: {
+    thresholdDbfs: -38,
+    minDurationMs: 500,
+    preCutPaddingMs: 80,
+    postCutPaddingMs: 120,
+    preserveBreathing: true
+  },
+  setSilenceSettings: (patch) =>
+    set((state) => ({ silenceSettings: { ...state.silenceSettings, ...patch } })),
+
   profiles: [],
   providers: [],
   daemonOnline: false,
   lastReport: null,
+  aiSummary: null,
 
   initApp: async () => {
     // 1. Check health
@@ -214,9 +238,54 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       jobStatus: 'TRANSCRIBING'
     });
 
-    const res = await client.startMagicRoughCut(seq, 'TRANSCRIBE_ONLY', get().activeProfileId);
+    const res = await client.startMagicRoughCut(seq, 'TRANSCRIBE_ONLY', get().activeProfileId, get().silenceSettings);
     if (res) {
       set({ currentJobId: res.jobId });
+    }
+  },
+
+  cutAllSilencesNow: async () => {
+    const seq = await hostBridge.getActiveSequenceManifest();
+    if (!seq) {
+      alert('Please open an active sequence in Adobe Premiere Pro first.');
+      return;
+    }
+
+    let silences = get().detectedSilences;
+    if (!silences || silences.length === 0) {
+      // If not analyzed yet, run Magic Auto Cut or ask to transcribe
+      await get().transcribeSequence();
+      return;
+    }
+
+    const fps = seq.fps || 24;
+    const cuts = silences.map((s: any, idx: number) => ({
+      cutId: `cut_sil_${idx}_${Date.now()}`,
+      startSeconds: s.start_seconds,
+      endSeconds: s.end_seconds,
+      durationSeconds: s.duration_seconds,
+      startTick: String(Math.round(s.start_seconds * 254016000000)),
+      endTick: String(Math.round(s.end_seconds * 254016000000)),
+      startFrame: Math.round(s.start_seconds * fps),
+      endFrame: Math.round(s.end_seconds * fps),
+      category: 'SILENCE' as const,
+      sourceSuggestionId: ''
+    }));
+
+    await hostBridge.cloneActiveSequence('_SilenceCut');
+    const execResult = await timelineEngine.executeCuts(cuts);
+    if (execResult.success) {
+      set({ detectedSilences: [] });
+      await get().refreshSequence();
+    }
+  },
+
+  runTranscriptAI: async (prompt?: string) => {
+    const words = get().transcriptWords;
+    if (!words || words.length === 0) return;
+    const res = await client.aiAnalyzeTranscript(words, prompt);
+    if (res) {
+      set({ aiSummary: res });
     }
   },
 
@@ -288,7 +357,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       jobStatus: 'INITIALIZING'
     });
 
-    const res = await client.startMagicRoughCut(seq, get().executionMode, get().activeProfileId);
+    const res = await client.startMagicRoughCut(seq, get().executionMode, get().activeProfileId, get().silenceSettings);
     if (res) {
       set({ currentJobId: res.jobId });
     }

@@ -206,7 +206,8 @@ export class PremiereHostBridge {
    */
   public async setPlayheadPosition(seconds: number): Promise<void> {
     if (this.isCEP) {
-      await this.evalScript(`$._prismex.setPlayheadPosition(${seconds})`);
+      await this.ensureCEPScriptLoaded();
+      await this.evalScript(`$._prismex.setPlayheadPosition(${Number(seconds) || 0})`);
       return;
     }
 

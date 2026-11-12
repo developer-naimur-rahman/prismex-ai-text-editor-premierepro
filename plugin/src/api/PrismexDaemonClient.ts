@@ -94,7 +94,14 @@ export class PrismexDaemonClient {
   public async startMagicRoughCut(
     manifest: SequenceManifest, 
     mode: ExecutionMode = 'AUTO_EDIT',
-    profileId: string = 'talking-head'
+    profileId: string = 'talking-head',
+    silenceSettings?: {
+      thresholdDbfs: number;
+      minDurationMs: number;
+      preCutPaddingMs: number;
+      postCutPaddingMs: number;
+      preserveBreathing: boolean;
+    }
   ): Promise<{ jobId: string } | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/jobs/magic-rough-cut`, {
@@ -109,7 +116,14 @@ export class PrismexDaemonClient {
           durationSeconds: manifest.durationSeconds,
           executionMode: mode,
           profileId,
-          sourceClips: manifest.sourceClips
+          sourceClips: manifest.sourceClips,
+          ...(silenceSettings ? {
+            silenceThresholdDbfs: silenceSettings.thresholdDbfs,
+            minSilenceDurationMs: silenceSettings.minDurationMs,
+            preCutPaddingMs: silenceSettings.preCutPaddingMs,
+            postCutPaddingMs: silenceSettings.postCutPaddingMs,
+            preserveBreathing: silenceSettings.preserveBreathing
+          } : {})
         })
       });
 
@@ -119,6 +133,23 @@ export class PrismexDaemonClient {
       return null;
     } catch (err) {
       console.error('[PrismexDaemonClient] startMagicRoughCut failed:', err);
+      return null;
+    }
+  }
+
+  public async aiAnalyzeTranscript(words: any[], prompt?: string): Promise<{ summary: string; engine: string; wpm?: number; totalWords?: number; fillerCount?: number } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, prompt: prompt || 'Summarize key points and highlight fluff or repeated sections to cut.' })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] aiAnalyzeTranscript failed:', err);
       return null;
     }
   }

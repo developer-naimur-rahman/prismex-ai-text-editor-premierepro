@@ -76,9 +76,18 @@ class MagicRoughCutRequest(BaseModel):
     fps: float = 23.976
     sampleRate: int = 48000
     durationSeconds: float
-    executionMode: str = "AUTO_EDIT" # AUTO_EDIT or REVIEW_EDIT
+    executionMode: str = "AUTO_EDIT" # TRANSCRIBE_ONLY, AUTO_EDIT or REVIEW_EDIT
     profileId: str = "talking-head"
     sourceClips: List[SourceClipModel] = []
+    silenceThresholdDbfs: float = -38.0
+    minSilenceDurationMs: int = 500
+    preCutPaddingMs: int = 80
+    postCutPaddingMs: int = 120
+    preserveBreathing: bool = True
+
+class TranscriptAIAnalyzeRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    prompt: str = "Summarize key points and highlight fluff or repeated sections to cut."
 
 class ApplyReviewRequest(BaseModel):
     approvedSuggestionIds: List[str]
@@ -188,14 +197,22 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             "params": {"jobId": job_id, "stage": "EXTRACTING", "percent": 15.0, "message": "Extracting audio from sequence clips..."}
         })
         
-        media_path = req.sourceClips[0].mediaPath if req.sourceClips else "dummy.mov"
+        import os
+        media_path = "dummy.mov"
+        for clip in req.sourceClips:
+            if clip.mediaPath and os.path.exists(clip.mediaPath):
+                media_path = clip.mediaPath
+                break
+        if media_path == "dummy.mov" and req.sourceClips:
+            media_path = req.sourceClips[0].mediaPath
+
         extracted_wav = AudioExtractor.extract_audio_chunk(media_path, 0.0, req.durationSeconds)
 
         # Stage 3 & 4: Transcription
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
-            "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": "Transcribing speech and aligning word timestamps..."}
+            "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": "Transcribing speech with Apple Silicon MLX-Whisper..."}
         })
         transcript_data = TranscriptionService.transcribe(extracted_wav, req.durationSeconds)
 
@@ -205,7 +222,14 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             "method": "job.progress",
             "params": {"jobId": job_id, "stage": "ANALYZING", "percent": 65.0, "message": "Analyzing voice energy, noise floor, and dead air..."}
         })
-        silence_cuts = AudioDSP.detect_silence_intervals(extracted_wav)
+        silence_cuts = AudioDSP.detect_silence_intervals(
+            extracted_wav,
+            threshold_dbfs=req.silenceThresholdDbfs,
+            min_silence_duration_ms=req.minSilenceDurationMs,
+            pre_cut_padding_ms=req.preCutPaddingMs,
+            post_cut_padding_ms=req.postCutPaddingMs,
+            preserve_breathing=req.preserveBreathing
+        )
         
         all_suggestions = []
         for sc in silence_cuts:
@@ -321,6 +345,67 @@ def start_magic_rough_cut(req: MagicRoughCutRequest, background_tasks: Backgroun
         "status": "INITIALIZING",
         "estimatedDurationSeconds": 35.0,
         "wsSubscriptionUrl": f"ws://{HOST}:{PORT}/ws/events"
+    }
+
+@app.post("/api/v1/transcript/ai-analyze")
+def ai_analyze_transcript(req: TranscriptAIAnalyzeRequest):
+    """Analyzes transcript using Cloud AI (Gemini/Groq if configured) or Local AI Intelligence."""
+    words = req.words or []
+    full_text = " ".join(str(w.get("word", "")) for w in words).strip()
+    if not full_text:
+        return {"summary": "No transcript words available to analyze.", "engine": "local", "highlights": []}
+
+    total_words = len(words)
+    first_t = float(words[0].get("start_seconds", 0.0)) if words else 0.0
+    last_t = float(words[-1].get("end_seconds", 0.0)) if words else 0.0
+    duration_min = max(0.01, (last_t - first_t) / 60.0)
+    wpm = round(total_words / duration_min)
+    filler_count = sum(1 for w in words if w.get("is_filler"))
+
+    # Check if Google Gemini API key is configured in macOS Keychain
+    gemini_key = KeychainVault.get_api_key("google-gemini")
+    if gemini_key:
+        try:
+            import requests
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
+            resp = requests.post(
+                url,
+                json={
+                    "contents": [{
+                        "parts": [{
+                            "text": f"{req.prompt}\n\nTranscript ({total_words} words, {wpm} WPM):\n{full_text[:12000]}"
+                        }]
+                    }]
+                },
+                timeout=20
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                return {
+                    "summary": text_out,
+                    "engine": "Google Gemini 2.0 Flash",
+                    "wpm": wpm,
+                    "totalWords": total_words,
+                    "fillerCount": filler_count
+                }
+        except Exception as e:
+            print(f"[AI Analyze] Gemini fallback to local: {e}")
+
+    # Local AI Summary & Pacing Analysis (Zero-Subscription Offline Fallback)
+    sentences = [s.strip() for s in full_text.replace("?", ".").replace("!", ".").split(".") if len(s.strip()) > 3]
+    top_sentences = sentences[:3]
+    summary_text = (
+        f"Local AI Analysis: {total_words} words at ~{wpm} WPM. "
+        f"Detected {filler_count} filler disfluencies. "
+        + ("Key opening points: " + " | ".join(top_sentences) if top_sentences else "")
+    )
+    return {
+        "summary": summary_text,
+        "engine": "Prismex Local AI (Offline)",
+        "wpm": wpm,
+        "totalWords": total_words,
+        "fillerCount": filler_count
     }
 
 # ----------------- WebSocket Endpoint -----------------

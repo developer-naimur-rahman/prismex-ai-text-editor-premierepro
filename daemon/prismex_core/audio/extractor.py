@@ -17,12 +17,24 @@ from ..config import TEMP_AUDIO_DIR
 class AudioExtractor:
     @staticmethod
     def get_ffmpeg_path() -> Optional[str]:
-        """Locates system or packaged FFmpeg binary."""
+        """Locates system, imageio-ffmpeg, or packaged FFmpeg binary."""
         path = shutil.which("ffmpeg")
         if path:
             return path
+        try:
+            import imageio_ffmpeg
+            exe = imageio_ffmpeg.get_ffmpeg_exe()
+            if exe and os.path.exists(exe):
+                return exe
+        except Exception:
+            pass
         # Check standard macOS locations
-        for p in ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/Applications/ffmpeg"]:
+        for p in [
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/Applications/ffmpeg",
+            "/Library/Application Support/Adobe/CEP/extensions/com.voice2captions.panel/ffmpeg/mac/arm64/ffmpeg",
+        ]:
             if os.path.exists(p) and os.access(p, os.X_OK):
                 return p
         return None
