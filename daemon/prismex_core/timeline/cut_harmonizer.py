@@ -62,20 +62,20 @@ class CutHarmonizer:
         final_cuts: List[Dict[str, Any]] = []
 
         for m in merged:
-            start_frame = round(m["start"] / frame_duration)
-            end_frame = round(m["end"] / frame_duration)
+            start_frame = round(m["start"] * fps)
+            end_frame = round(m["end"] * fps)
 
-            snapped_start = round(start_frame * frame_duration, 4)
-            snapped_end = round(end_frame * frame_duration, 4)
+            snapped_start = round(start_frame / fps, 6)
+            snapped_end = round(end_frame / fps, 6)
 
             # Minimum cut length check (at least 2 frames)
-            if (snapped_end - snapped_start) >= (frame_duration * 2):
+            if (end_frame - start_frame) >= 2:
                 final_cuts.append({
                     "start_seconds": snapped_start,
                     "end_seconds": snapped_end,
                     "start_tick": cls.seconds_to_ticks(snapped_start),
                     "end_tick": cls.seconds_to_ticks(snapped_end),
-                    "duration_seconds": round(snapped_end - snapped_start, 4)
+                    "duration_seconds": round(snapped_end - snapped_start, 6)
                 })
 
         # Final sort: REVERSE CHRONOLOGICAL ORDER (Right-to-Left)
