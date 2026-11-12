@@ -3,7 +3,7 @@
  * Aligned with Architecture Specifications (docs/16-DATA-MODEL.md & docs/23-API-REFERENCE.md)
  */
 
-export type ExecutionMode = 'AUTO_EDIT' | 'REVIEW_EDIT';
+export type ExecutionMode = 'TRANSCRIBE_ONLY' | 'AUTO_EDIT' | 'REVIEW_EDIT';
 
 export type SuggestionCategory = 'SILENCE' | 'FILLER_WORD' | 'STUTTER' | 'REPEATED_TAKE' | 'SENTENCE_CUT';
 

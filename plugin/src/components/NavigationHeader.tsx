@@ -27,9 +27,9 @@ export const NavigationHeader: React.FC = () => {
   const pendingReviewCount = reviewItems.filter(i => i.status === 'PENDING').length;
 
   const tabs: Array<{ id: ActiveTab; label: string; icon: React.ReactNode; badge?: number }> = [
+    { id: 'transcript', label: 'Text Panel', icon: <FileText size={13} /> },
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={13} /> },
     { id: 'magic-cut', label: 'Magic Cut', icon: <Sparkles size={13} /> },
-    { id: 'transcript', label: 'Transcript', icon: <FileText size={13} /> },
     { id: 'review-queue', label: 'Review Queue', icon: <CheckSquare size={13} />, badge: pendingReviewCount },
     { id: 'takes', label: 'Takes', icon: <Layers size={13} /> },
     { id: 'silence', label: 'Silence', icon: <Sliders size={13} /> },

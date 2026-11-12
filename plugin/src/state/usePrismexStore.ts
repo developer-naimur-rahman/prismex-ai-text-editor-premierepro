@@ -51,6 +51,8 @@ interface PrismexState {
   // Review Queue & Transcript State
   reviewItems: ReviewQueueItem[];
   transcriptWords: any[];
+  transcriptSentences: any[];
+  detectedSilences: any[];
   setReviewItems: (items: ReviewQueueItem[]) => void;
   updateReviewItemStatus: (id: string, status: 'ACCEPTED' | 'REJECTED') => void;
   acceptAllReviewItems: () => void;
@@ -64,6 +66,8 @@ interface PrismexState {
 
   // Actions
   initApp: () => Promise<void>;
+  transcribeSequence: () => Promise<void>;
+  deleteTranscriptRange: (startSeconds: number, endSeconds: number) => Promise<void>;
   startMagicRoughCut: () => Promise<void>;
   applyApprovedReviewQueue: () => Promise<void>;
 }
@@ -73,7 +77,7 @@ const hostBridge = PremiereHostBridge.getInstance();
 const timelineEngine = new TimelineEditingEngine();
 
 export const usePrismexStore = create<PrismexState>((set, get) => ({
-  activeTab: 'dashboard',
+  activeTab: 'transcript',
   setActiveTab: (tab) => set({ activeTab: tab }),
 
   sequenceManifest: null,
@@ -94,6 +98,8 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
   reviewItems: [],
   transcriptWords: [],
+  transcriptSentences: [],
+  detectedSilences: [],
   setReviewItems: (items) => set({ reviewItems: items }),
 
   updateReviewItemStatus: (id, status) => {
@@ -146,15 +152,20 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           jobStatus: event.params.stage
         });
       } else if (event.method === 'job.completed') {
-        const { jobId, executionMode, cuts, words } = event.params;
+        const { jobId, executionMode, cuts, words, sentences, silences } = event.params;
         set({
           jobProgress: 100,
-          jobMessage: 'Analysis complete!',
+          jobMessage: 'Transcription & analysis complete!',
           jobStatus: 'COMPLETE',
-          transcriptWords: words || []
+          transcriptWords: words || [],
+          transcriptSentences: sentences || [],
+          detectedSilences: silences || []
         });
 
-        if (executionMode === 'REVIEW_EDIT') {
+        if (executionMode === 'TRANSCRIBE_ONLY') {
+          const items = await client.getReviewQueue(jobId);
+          set({ reviewItems: items, activeTab: 'transcript' });
+        } else if (executionMode === 'REVIEW_EDIT') {
           const items = await client.getReviewQueue(jobId);
           set({ reviewItems: items, activeTab: 'review-queue' });
         } else {
@@ -188,6 +199,79 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         }
       }
     });
+  },
+
+  transcribeSequence: async () => {
+    const seq = await hostBridge.getActiveSequenceManifest();
+    if (!seq) {
+      alert('Please open an active sequence in Adobe Premiere Pro first.');
+      return;
+    }
+    set({
+      sequenceManifest: seq,
+      jobProgress: 5,
+      jobMessage: 'Extracting audio & transcribing speech...',
+      jobStatus: 'TRANSCRIBING'
+    });
+
+    const res = await client.startMagicRoughCut(seq, 'TRANSCRIBE_ONLY', get().activeProfileId);
+    if (res) {
+      set({ currentJobId: res.jobId });
+    }
+  },
+
+  deleteTranscriptRange: async (startSeconds: number, endSeconds: number) => {
+    const seq = get().sequenceManifest;
+    if (!seq) return;
+
+    const duration = Math.max(0, endSeconds - startSeconds);
+    if (duration <= 0.04) return;
+
+    const fps = seq.fps || 24;
+    const cut = {
+      cutId: `cut_txt_${Date.now()}`,
+      startSeconds,
+      endSeconds,
+      durationSeconds: duration,
+      startTick: String(Math.round(startSeconds * 254016000000)),
+      endTick: String(Math.round(endSeconds * 254016000000)),
+      startFrame: Math.round(startSeconds * fps),
+      endFrame: Math.round(endSeconds * fps),
+      category: 'SENTENCE_CUT' as const,
+      sourceSuggestionId: ''
+    };
+
+    const execResult = await timelineEngine.executeCuts([cut]);
+    if (execResult.success) {
+      // Remove deleted words and ripple-shift subsequent timestamps
+      const updatedWords = get().transcriptWords
+        .filter((w: any) => {
+          const wStart = w.start_seconds ?? w.start ?? 0;
+          const wEnd = w.end_seconds ?? w.end ?? 0;
+          return wEnd <= startSeconds + 0.02 || wStart >= endSeconds - 0.02;
+        })
+        .map((w: any) => {
+          const wStart = w.start_seconds ?? w.start ?? 0;
+          const wEnd = w.end_seconds ?? w.end ?? 0;
+          if (wStart >= endSeconds - 0.02) {
+            return {
+              ...w,
+              start_seconds: Math.max(0, wStart - duration),
+              end_seconds: Math.max(0, wEnd - duration)
+            };
+          }
+          return w;
+        });
+
+      const updatedSilences = get().detectedSilences
+        .filter((s: any) => s.end_seconds <= startSeconds + 0.02 || s.start_seconds >= endSeconds - 0.02)
+        .map((s: any) => s.start_seconds >= endSeconds - 0.02
+          ? { ...s, start_seconds: Math.max(0, s.start_seconds - duration), end_seconds: Math.max(0, s.end_seconds - duration) }
+          : s
+        );
+
+      set({ transcriptWords: updatedWords, detectedSilences: updatedSilences });
+    }
   },
 
   startMagicRoughCut: async () => {

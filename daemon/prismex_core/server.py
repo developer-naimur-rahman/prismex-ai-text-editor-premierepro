@@ -239,6 +239,13 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
 
         # Stage 9: Filler Word & Stutter Detection
         filler_suggestions = FillerDetector.detect_disfluencies(transcript_data["words"])
+        filler_ranges = [(fs["start_seconds"], fs["end_seconds"]) for fs in filler_suggestions]
+        for w in transcript_data.get("words", []):
+            for f_start, f_end in filler_ranges:
+                if abs(w["start_seconds"] - f_start) < 0.05 and abs(w["end_seconds"] - f_end) < 0.05:
+                    w["is_filler"] = True
+                    break
+
         for fs in filler_suggestions:
             fs["job_id"] = job_id
             fs["sequence_id"] = req.sequenceGuid
@@ -275,7 +282,9 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
                 "totalCuts": len(cuts),
                 "timeSavedSeconds": round(total_time_saved, 2),
                 "cuts": cuts,
-                "words": transcript_data.get("words", [])
+                "words": transcript_data.get("words", []),
+                "sentences": transcript_data.get("sentences", []),
+                "silences": silence_cuts
             }
         })
 
