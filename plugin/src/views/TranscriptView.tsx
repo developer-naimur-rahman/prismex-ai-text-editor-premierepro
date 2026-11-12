@@ -1,7 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimecodeConverter } from '../host/TimecodeConverter';
+import { translations } from '../i18n/translations';
 import {
   Search,
   Mic,
@@ -12,7 +13,8 @@ import {
   Trash2,
   VolumeX,
   Download,
-  Bot
+  Bot,
+  Key
 } from 'lucide-react';
 
 interface WordToken {
@@ -64,9 +66,11 @@ export const TranscriptView: React.FC = () => {
     setActiveTab,
     jobStatus,
     jobProgress,
-    jobMessage
+    jobMessage,
+    language
   } = usePrismexStore();
 
+  const t = translations[language];
   const [searchTerm, setSearchTerm] = useState('');
   const [filterMode, setFilterMode] = useState<'ALL' | 'FILLERS' | 'PAUSES'>('ALL');
   const [selStartIdx, setSelStartIdx] = useState<number | null>(null);
@@ -74,10 +78,20 @@ export const TranscriptView: React.FC = () => {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [showAiPanel, setShowAiPanel] = useState(false);
+  const [playheadSec, setPlayheadSec] = useState(0);
 
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
+
+  useEffect(() => {
+    if (transcriptWords.length === 0) return;
+    const timer = setInterval(async () => {
+      const pos = await hostBridge.getPlayheadPosition();
+      setPlayheadSec(pos);
+    }, 400);
+    return () => clearInterval(timer);
+  }, [transcriptWords.length]);
 
   const words: WordToken[] = useMemo(() => {
     return transcriptWords.map((w: any, idx: number) => ({
@@ -409,14 +423,34 @@ export const TranscriptView: React.FC = () => {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '10.5px', fontWeight: 600, color: '#c4b5fd', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <Bot size={12} /> AI Transcript Assistant {aiSummary?.engine ? `(${aiSummary.engine})` : ''}
+              <Bot size={12} /> {t.aiAssistant} {aiSummary?.engine ? `(${aiSummary.engine})` : ''}
             </span>
-            <button
-              onClick={() => setShowAiPanel(false)}
-              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '10px', cursor: 'pointer' }}
-            >
-              Close
-            </button>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                onClick={() => setActiveTab('providers')}
+                style={{
+                  background: 'rgba(139, 92, 246, 0.2)',
+                  border: '1px solid rgba(139, 92, 246, 0.4)',
+                  borderRadius: '4px',
+                  color: '#ddd6fe',
+                  fontSize: '9.5px',
+                  padding: '2px 6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  cursor: 'pointer'
+                }}
+              >
+                <Key size={10} />
+                <span>{t.setupAiKey}</span>
+              </button>
+              <button
+                onClick={() => setShowAiPanel(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '10px', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', gap: '6px' }}>
@@ -630,6 +664,7 @@ export const TranscriptView: React.FC = () => {
                   if (filterMode === 'FILLERS' && !item.isFiller) return null;
                   const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
                   const isSelected = hasSelection && item.globalIdx >= minSel && item.globalIdx <= maxSel;
+                  const isPlayingWord = playheadSec > 0 && playheadSec >= item.start && playheadSec <= item.end;
 
                   return (
                     <span
@@ -642,19 +677,24 @@ export const TranscriptView: React.FC = () => {
                         padding: '1px 4px',
                         borderRadius: '3px',
                         cursor: 'pointer',
-                        backgroundColor: isSelected
+                        backgroundColor: isPlayingWord
+                          ? 'rgba(16, 185, 129, 0.38)'
+                          : isSelected
                           ? 'rgba(59, 130, 246, 0.45)'
                           : matches
                           ? '#3b82f6'
                           : item.isFiller
                           ? 'rgba(250, 204, 21, 0.25)'
                           : 'transparent',
-                        color: item.isFiller ? '#facc15' : 'var(--text-primary)',
-                        border: isSelected
+                        color: isPlayingWord ? '#fff' : item.isFiller ? '#facc15' : 'var(--text-primary)',
+                        border: isPlayingWord
+                          ? '1px solid #34d399'
+                          : isSelected
                           ? '1px solid #60a5fa'
                           : item.isFiller
                           ? '1px dashed rgba(250, 204, 21, 0.4)'
                           : '1px solid transparent',
+                        textDecoration: isPlayingWord ? 'underline' : 'none',
                         fontSize: '12px'
                       }}
                     >

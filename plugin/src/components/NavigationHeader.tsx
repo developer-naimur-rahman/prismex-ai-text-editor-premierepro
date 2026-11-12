@@ -1,5 +1,6 @@
 import React from 'react';
 import { usePrismexStore, ActiveTab } from '../state/usePrismexStore';
+import { translations } from '../i18n/translations';
 import { 
   Sparkles, 
   LayoutDashboard, 
@@ -21,22 +22,25 @@ export const NavigationHeader: React.FC = () => {
     sequenceManifest, 
     refreshSequence, 
     daemonOnline,
-    reviewItems 
+    reviewItems,
+    language,
+    setLanguage
   } = usePrismexStore();
 
+  const t = translations[language];
   const pendingReviewCount = reviewItems.filter(i => i.status === 'PENDING').length;
 
   const tabs: Array<{ id: ActiveTab; label: string; icon: React.ReactNode; badge?: number }> = [
-    { id: 'transcript', label: 'Text Panel', icon: <FileText size={13} /> },
-    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={13} /> },
-    { id: 'magic-cut', label: 'Magic Cut', icon: <Sparkles size={13} /> },
-    { id: 'review-queue', label: 'Review Queue', icon: <CheckSquare size={13} />, badge: pendingReviewCount },
-    { id: 'takes', label: 'Takes', icon: <Layers size={13} /> },
-    { id: 'silence', label: 'Silence', icon: <Sliders size={13} /> },
-    { id: 'providers', label: 'Providers', icon: <Cpu size={13} /> },
-    { id: 'profiles', label: 'Profiles', icon: <Bookmark size={13} /> },
-    { id: 'settings', label: 'Settings', icon: <Settings size={13} /> },
-    { id: 'history', label: 'History', icon: <History size={13} /> }
+    { id: 'transcript', label: t.tabTranscript, icon: <FileText size={13} /> },
+    { id: 'dashboard', label: t.tabDashboard, icon: <LayoutDashboard size={13} /> },
+    { id: 'magic-cut', label: t.tabMagicCut, icon: <Sparkles size={13} /> },
+    { id: 'review-queue', label: t.tabReviewQueue, icon: <CheckSquare size={13} />, badge: pendingReviewCount },
+    { id: 'silence', label: t.tabSilence, icon: <Sliders size={13} /> },
+    { id: 'providers', label: t.tabProviders, icon: <Cpu size={13} /> },
+    { id: 'settings', label: t.tabSettings, icon: <Settings size={13} /> },
+    { id: 'takes', label: t.tabTakes, icon: <Layers size={13} /> },
+    { id: 'profiles', label: t.tabProfiles, icon: <Bookmark size={13} /> },
+    { id: 'history', label: t.tabHistory, icon: <History size={13} /> }
   ];
 
   return (
@@ -108,8 +112,25 @@ export const NavigationHeader: React.FC = () => {
               borderRadius: '50%', 
               backgroundColor: daemonOnline ? 'var(--success-color)' : 'var(--warning-color)' 
             }} />
-            <span>{daemonOnline ? 'Engine Ready' : 'Offline'}</span>
+            <span>{daemonOnline ? t.engineReady : t.engineOffline}</span>
           </div>
+
+          <button
+            onClick={() => setLanguage(language === 'en' ? 'bn' : 'en')}
+            title="Switch Language (English / বাংলা)"
+            style={{
+              backgroundColor: 'var(--bg-tertiary)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: '10px',
+              color: 'var(--text-primary)',
+              fontSize: '9.5px',
+              fontWeight: 600,
+              padding: '2px 7px',
+              cursor: 'pointer'
+            }}
+          >
+            {language === 'en' ? 'বাং' : 'EN'}
+          </button>
         </div>
       </div>
 

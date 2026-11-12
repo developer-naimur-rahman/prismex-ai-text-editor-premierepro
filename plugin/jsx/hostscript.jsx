@@ -1,6 +1,7 @@
 /**
  * Prismex AI Editor - ExtendScript Host Engine for Adobe Premiere Pro
- * Provides timeline inspection, sequence cloning, playhead positioning, and physical ripple-cut execution.
+ * Uses 100% Official Standard DOM for timeline inspection, sequence cloning,
+ * playhead sync, and frame-accurate ripple-cut execution.
  */
 
 if (typeof $._prismex === "undefined") {
@@ -46,7 +47,7 @@ $._prismex.getActiveSequenceManifest = function() {
         var durationTicks = Math.max(0, endTicks - zeroTicks);
         var durationSeconds = durationTicks / TICKS;
 
-        // Inspect audio tracks and clips
+        // Inspect audio tracks and clips (both timeline start/end AND source media inPoint/outPoint)
         var sourceClips = [];
         try {
             var audioTrackCount = seq.audioTracks.numTracks;
@@ -63,16 +64,22 @@ $._prismex.getActiveSequenceManifest = function() {
 
                     var inSec = 0.0;
                     var outSec = 0.0;
+                    var srcInSec = 0.0;
+                    var srcOutSec = 0.0;
                     try {
                         inSec = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
                         outSec = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
+                        srcInSec = parseFloat(clip.inPoint.ticks) / TICKS;
+                        srcOutSec = parseFloat(clip.outPoint.ticks) / TICKS;
                     } catch (te) {}
 
                     sourceClips.push({
                         mediaPath: mediaPath,
                         trackIndex: t + 1,
                         inSeconds: Math.max(0, inSec),
-                        outSeconds: Math.max(0, outSec)
+                        outSeconds: Math.max(0, outSec),
+                        sourceInSeconds: Math.max(0, srcInSec),
+                        sourceOutSeconds: Math.max(0, srcOutSec)
                     });
                 }
             }
@@ -90,6 +97,20 @@ $._prismex.getActiveSequenceManifest = function() {
         });
     } catch (err) {
         return JSON.stringify({ error: String(err) });
+    }
+};
+
+$._prismex.getPlayheadPosition = function() {
+    try {
+        if (!app.project || !app.project.activeSequence) return "0";
+        var seq = app.project.activeSequence;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+        var pos = seq.getPlayerPosition();
+        if (!pos) return "0";
+        var sec = (parseFloat(pos.ticks) - zeroTicks) / $._prismex.TICKS_PER_SECOND;
+        return String(Math.max(0, sec));
+    } catch (err) {
+        return "0";
     }
 };
 
@@ -116,7 +137,6 @@ $._prismex.cloneActiveSequence = function(suffix) {
         var origName = origSeq.name;
         var targetName = origName + (suffix || "_PrismexRoughCut");
 
-        // sequence.clone() returns boolean; cloned sequence is appended to app.project.sequences
         var cloned = origSeq.clone();
         if (!cloned) {
             return JSON.stringify({ error: "Sequence clone failed" });
@@ -142,14 +162,86 @@ $._prismex.cloneActiveSequence = function(suffix) {
     }
 };
 
+/**
+ * Merges overlapping/adjacent cut intervals and sorts ascending (left-to-right).
+ */
+$._prismex._mergeCutsAscending = function(cuts) {
+    var clean = [];
+    for (var i = 0; i < cuts.length; i++) {
+        var s = parseFloat(cuts[i].startSeconds);
+        var e = parseFloat(cuts[i].endSeconds);
+        if (!isNaN(s) && !isNaN(e) && (e - s) > 0.04) {
+            clean.push({ startSeconds: s, endSeconds: e });
+        }
+    }
+    if (clean.length === 0) return [];
+    clean.sort(function(a, b) { return a.startSeconds - b.startSeconds; });
+
+    var merged = [clean[0]];
+    for (var j = 1; j < clean.length; j++) {
+        var prev = merged[merged.length - 1];
+        var curr = clean[j];
+        if (curr.startSeconds <= prev.endSeconds + 0.02) {
+            if (curr.endSeconds > prev.endSeconds) {
+                prev.endSeconds = curr.endSeconds;
+            }
+        } else {
+            merged.push(curr);
+        }
+    }
+    return merged;
+};
+
+/**
+ * Computes kept sub-segments for a clip [clipStart, clipEnd] after removing merged cuts,
+ * plus the cumulative cut duration preceding each kept segment.
+ */
+$._prismex._computeKeptSegments = function(clipStart, clipEnd, mergedCuts) {
+    var segments = [];
+    var cursor = clipStart;
+
+    for (var i = 0; i < mergedCuts.length; i++) {
+        var cStart = mergedCuts[i].startSeconds;
+        var cEnd = mergedCuts[i].endSeconds;
+        if (cEnd <= cursor) continue;
+        if (cStart >= clipEnd) break;
+
+        if (cStart > cursor + 0.02) {
+            segments.push({ start: cursor, end: Math.min(cStart, clipEnd) });
+        }
+        cursor = Math.max(cursor, cEnd);
+    }
+
+    if (cursor < clipEnd - 0.02) {
+        segments.push({ start: cursor, end: clipEnd });
+    }
+
+    // Calculate cumulative cut time before each segment's start
+    for (var s = 0; s < segments.length; s++) {
+        var segStart = segments[s].start;
+        var cutBefore = 0.0;
+        for (var k = 0; k < mergedCuts.length; k++) {
+            if (mergedCuts[k].endSeconds <= segStart + 0.001) {
+                cutBefore += (mergedCuts[k].endSeconds - mergedCuts[k].startSeconds);
+            } else if (mergedCuts[k].startSeconds < segStart) {
+                cutBefore += (segStart - mergedCuts[k].startSeconds);
+            }
+        }
+        segments[s].newTimelineStart = Math.max(0, segStart - cutBefore);
+    }
+
+    return segments;
+};
+
 $._prismex.executeCuts = function(cutsJsonString) {
     try {
         if (!app.project || !app.project.activeSequence) {
             return JSON.stringify({ success: false, error: "No active sequence" });
         }
 
-        var cuts = JSON.parse(cutsJsonString);
-        if (!cuts || cuts.length === 0) {
+        var rawCuts = JSON.parse(cutsJsonString);
+        var mergedCuts = $._prismex._mergeCutsAscending(rawCuts || []);
+        if (mergedCuts.length === 0) {
             return JSON.stringify({ success: true, cutsExecuted: 0 });
         }
 
@@ -160,97 +252,132 @@ $._prismex.executeCuts = function(cutsJsonString) {
         var initialTicks = Math.max(0, parseFloat(seq.end || 0) - zeroTicks);
         var initialSec = initialTicks / TICKS;
 
-        // Sort cuts in descending order (reverse chronological: Right to Left)
-        cuts.sort(function(a, b) {
-            return b.startSeconds - a.startSeconds;
-        });
+        var totalClipsProcessed = 0;
 
-        // Enable QE DOM for timeline razoring
-        try {
-            app.enableQE();
-        } catch (e) {}
-
-        var qeSeq = null;
-        try {
-            if (typeof qe !== "undefined" && qe.project) {
-                qeSeq = qe.project.getActiveSequence();
+        // Snapshot all video track clips first
+        var videoTrackSnapshots = [];
+        for (var v = 0; v < seq.videoTracks.numTracks; v++) {
+            var vTrack = seq.videoTracks[v];
+            if (vTrack.isLocked()) continue;
+            var vClips = [];
+            for (var vc = 0; vc < vTrack.clips.numItems; vc++) {
+                var vcItem = vTrack.clips[vc];
+                if (!vcItem.projectItem) continue;
+                vClips.push({
+                    clipRef: vcItem,
+                    projectItem: vcItem.projectItem,
+                    tlStart: (parseFloat(vcItem.start.ticks) - zeroTicks) / TICKS,
+                    tlEnd: (parseFloat(vcItem.end.ticks) - zeroTicks) / TICKS,
+                    srcIn: parseFloat(vcItem.inPoint.ticks) / TICKS,
+                    srcOut: parseFloat(vcItem.outPoint.ticks) / TICKS
+                });
             }
-        } catch (e) {}
+            videoTrackSnapshots.push({ trackIndex: v, track: vTrack, clips: vClips });
+        }
 
-        var totalExecuted = 0;
-        var totalSavedSec = 0;
+        // Snapshot audio-only clips (or if there are no video tracks)
+        var hasVideoClips = false;
+        for (var vs = 0; vs < videoTrackSnapshots.length; vs++) {
+            if (videoTrackSnapshots[vs].clips.length > 0) {
+                hasVideoClips = true;
+                break;
+            }
+        }
 
-        for (var i = 0; i < cuts.length; i++) {
-            var cut = cuts[i];
-            var startSec = parseFloat(cut.startSeconds);
-            var endSec = parseFloat(cut.endSeconds);
-            var duration = endSec - startSec;
-            if (isNaN(duration) || duration <= 0.04) continue;
+        if (hasVideoClips) {
+            // Remove all existing unlocked video & audio clips cleanly before rebuilding kept segments
+            // (overwriteClip on a video track drops both linked video & audio cleanly in Premiere Pro)
+            for (var vIdx = 0; vIdx < videoTrackSnapshots.length; vIdx++) {
+                var vt = videoTrackSnapshots[vIdx].track;
+                for (var cDel = vt.clips.numItems - 1; cDel >= 0; cDel--) {
+                    try { vt.clips[cDel].remove(0, 0); } catch (e) {}
+                }
+            }
+            for (var aIdx = 0; aIdx < seq.audioTracks.numTracks; aIdx++) {
+                var at = seq.audioTracks[aIdx];
+                if (at.isLocked()) continue;
+                for (var aDel = at.clips.numItems - 1; aDel >= 0; aDel--) {
+                    try { at.clips[aDel].remove(0, 0); } catch (e) {}
+                }
+            }
 
-            var startTicks = zeroTicks + Math.round(startSec * TICKS);
-            var endTicks = zeroTicks + Math.round(endSec * TICKS);
+            // Rebuild kept segments onto the timeline using 100% official overwriteClip
+            for (var vSnapIdx = 0; vSnapIdx < videoTrackSnapshots.length; vSnapIdx++) {
+                var snap = videoTrackSnapshots[vSnapIdx];
+                for (var ci = 0; ci < snap.clips.length; ci++) {
+                    var info = snap.clips[ci];
+                    var keptSegs = $._prismex._computeKeptSegments(info.tlStart, info.tlEnd, mergedCuts);
 
-            // Step 1: Razor at endSec first, then startSec, using dynamic CTI timecode
-            if (qeSeq) {
-                var razorAt = function(ticksVal) {
-                    seq.setPlayerPosition(ticksVal.toFixed(0));
-                    var tc = qeSeq.CTI.timecode;
+                    for (var si = 0; si < keptSegs.length; si++) {
+                        var seg = keptSegs[si];
+                        var offsetInClip = seg.start - info.tlStart;
+                        var segDur = seg.end - seg.start;
+                        var segSrcInTicks = Math.round((info.srcIn + offsetInClip) * TICKS);
+                        var segSrcOutTicks = Math.round((info.srcIn + offsetInClip + segDur) * TICKS);
+                        var tlTargetTicks = zeroTicks + Math.round(seg.newTimelineStart * TICKS);
+
+                        try {
+                            info.projectItem.setInPoint(segSrcInTicks.toFixed(0), 4);
+                            info.projectItem.setOutPoint(segSrcOutTicks.toFixed(0), 4);
+                            snap.track.overwriteClip(info.projectItem, tlTargetTicks.toFixed(0));
+                            totalClipsProcessed++;
+                        } catch (owErr) {}
+                    }
+
+                    // Restore projectItem in/out points
                     try {
-                        for (var rv = 0; rv < qeSeq.numVideoTracks; rv++) {
-                            try { qeSeq.getVideoTrackAt(rv).razor(tc); } catch (e) {}
-                        }
-                        for (var ra = 0; ra < qeSeq.numAudioTracks; ra++) {
-                            try { qeSeq.getAudioTrackAt(ra).razor(tc); } catch (e) {}
-                        }
-                    } catch (trackRzErr) {
-                        try { qeSeq.razor(tc); } catch (e2) {}
-                    }
-                };
-                try { razorAt(endTicks); } catch (rzEndErr) {}
-                try { razorAt(startTicks); } catch (rzStartErr) {}
+                        info.projectItem.clearInPoint();
+                        info.projectItem.clearOutPoint();
+                    } catch (clrErr) {}
+                }
+            }
+        } else {
+            // Audio-only sequence handling
+            var audioSnapshots = [];
+            for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+                var aTrack = seq.audioTracks[a];
+                if (aTrack.isLocked()) continue;
+                var aClips = [];
+                for (var ac = 0; ac < aTrack.clips.numItems; ac++) {
+                    var acItem = aTrack.clips[ac];
+                    if (!acItem.projectItem) continue;
+                    aClips.push({
+                        projectItem: acItem.projectItem,
+                        tlStart: (parseFloat(acItem.start.ticks) - zeroTicks) / TICKS,
+                        tlEnd: (parseFloat(acItem.end.ticks) - zeroTicks) / TICKS,
+                        srcIn: parseFloat(acItem.inPoint.ticks) / TICKS
+                    });
+                }
+                audioSnapshots.push({ track: aTrack, clips: aClips });
+                for (var ad = aTrack.clips.numItems - 1; ad >= 0; ad--) {
+                    try { aTrack.clips[ad].remove(0, 0); } catch (e) {}
+                }
             }
 
-            // Step 2: Locate the isolated slice on all video and audio tracks and ripple-remove it
-            var tolerance = 0.08; // 80ms frame boundary tolerance
-            var cutHappened = false;
-
-            // Video tracks
-            try {
-                for (var v = 0; v < seq.videoTracks.numTracks; v++) {
-                    var vTrack = seq.videoTracks[v];
-                    if (vTrack.isLocked()) continue;
-                    for (var vc = vTrack.clips.numItems - 1; vc >= 0; vc--) {
-                        var vClip = vTrack.clips[vc];
-                        var vStart = (parseFloat(vClip.start.ticks) - zeroTicks) / TICKS;
-                        var vEnd = (parseFloat(vClip.end.ticks) - zeroTicks) / TICKS;
-                        if (vStart >= (startSec - tolerance) && vEnd <= (endSec + tolerance)) {
-                            vClip.remove(1, 0); // 1 = inRipple (true), 0 = inAlignToVideo (false)
-                            cutHappened = true;
-                        }
+            for (var asIdx = 0; asIdx < audioSnapshots.length; asIdx++) {
+                var aSnap = audioSnapshots[asIdx];
+                for (var aci = 0; aci < aSnap.clips.length; aci++) {
+                    var aInfo = aSnap.clips[aci];
+                    var aKept = $._prismex._computeKeptSegments(aInfo.tlStart, aInfo.tlEnd, mergedCuts);
+                    for (var asi = 0; asi < aKept.length; asi++) {
+                        var aSeg = aKept[asi];
+                        var aOffset = aSeg.start - aInfo.tlStart;
+                        var aDur = aSeg.end - aSeg.start;
+                        var aInTicks = Math.round((aInfo.srcIn + aOffset) * TICKS);
+                        var aOutTicks = Math.round((aInfo.srcIn + aOffset + aDur) * TICKS);
+                        var aTargetTicks = zeroTicks + Math.round(aSeg.newTimelineStart * TICKS);
+                        try {
+                            aInfo.projectItem.setInPoint(aInTicks.toFixed(0), 2);
+                            aInfo.projectItem.setOutPoint(aOutTicks.toFixed(0), 2);
+                            aSnap.track.overwriteClip(aInfo.projectItem, aTargetTicks.toFixed(0));
+                            totalClipsProcessed++;
+                        } catch (aOwErr) {}
                     }
+                    try {
+                        aInfo.projectItem.clearInPoint();
+                        aInfo.projectItem.clearOutPoint();
+                    } catch (e) {}
                 }
-            } catch (vErr) {}
-
-            // Audio tracks
-            try {
-                for (var a = 0; a < seq.audioTracks.numTracks; a++) {
-                    var aTrack = seq.audioTracks[a];
-                    if (aTrack.isLocked()) continue;
-                    for (var ac = aTrack.clips.numItems - 1; ac >= 0; ac--) {
-                        var aClip = aTrack.clips[ac];
-                        var aStart = (parseFloat(aClip.start.ticks) - zeroTicks) / TICKS;
-                        var aEnd = (parseFloat(aClip.end.ticks) - zeroTicks) / TICKS;
-                        if (aStart >= (startSec - tolerance) && aEnd <= (endSec + tolerance)) {
-                            aClip.remove(1, 0); // 1 = inRipple (true)
-                            cutHappened = true;
-                        }
-                    }
-                }
-            } catch (aErr) {}
-
-            if (cutHappened) {
-                totalExecuted++;
-                totalSavedSec += duration;
             }
         }
 
@@ -258,8 +385,9 @@ $._prismex.executeCuts = function(cutsJsonString) {
         var finalSec = finalTicks / TICKS;
 
         return JSON.stringify({
-            success: true,
-            cutsExecuted: totalExecuted,
+            success: totalClipsProcessed > 0,
+            cutsExecuted: mergedCuts.length,
+            segmentsPlaced: totalClipsProcessed,
             initialDurationSeconds: initialSec,
             finalDurationSeconds: finalSec,
             timeSavedSeconds: Math.max(0, initialSec - finalSec),

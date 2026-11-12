@@ -68,6 +68,8 @@ class SourceClipModel(BaseModel):
     trackIndex: int = 1
     inSeconds: float = 0.0
     outSeconds: float = 0.0
+    sourceInSeconds: float = 0.0
+    sourceOutSeconds: float = 0.0
 
 class MagicRoughCutRequest(BaseModel):
     premiereProjectId: str = "default_proj"
@@ -199,14 +201,21 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
         
         import os
         media_path = "dummy.mov"
+        target_clip = None
         for clip in req.sourceClips:
             if clip.mediaPath and os.path.exists(clip.mediaPath):
                 media_path = clip.mediaPath
+                target_clip = clip
                 break
-        if media_path == "dummy.mov" and req.sourceClips:
-            media_path = req.sourceClips[0].mediaPath
+        if target_clip is None and req.sourceClips:
+            target_clip = req.sourceClips[0]
+            media_path = target_clip.mediaPath
 
-        extracted_wav = AudioExtractor.extract_audio_chunk(media_path, 0.0, req.durationSeconds)
+        src_in = target_clip.sourceInSeconds if (target_clip and target_clip.sourceOutSeconds > target_clip.sourceInSeconds) else 0.0
+        src_out = target_clip.sourceOutSeconds if (target_clip and target_clip.sourceOutSeconds > target_clip.sourceInSeconds) else req.durationSeconds
+        timeline_offset = target_clip.inSeconds if target_clip else 0.0
+
+        extracted_wav = AudioExtractor.extract_audio_chunk(media_path, src_in, src_out)
 
         # Stage 3 & 4: Transcription
         await ws_manager.broadcast({
@@ -214,7 +223,16 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             "method": "job.progress",
             "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": "Transcribing speech with Apple Silicon MLX-Whisper..."}
         })
-        transcript_data = TranscriptionService.transcribe(extracted_wav, req.durationSeconds)
+        transcript_data = TranscriptionService.transcribe(extracted_wav, max(0.1, src_out - src_in))
+
+        # Apply exact timeline offset so word & sentence timestamps match Premiere Pro timeline
+        if timeline_offset > 0:
+            for w in transcript_data.get("words", []):
+                w["start_seconds"] = round(w["start_seconds"] + timeline_offset, 3)
+                w["end_seconds"] = round(w["end_seconds"] + timeline_offset, 3)
+            for s in transcript_data.get("sentences", []):
+                s["start_seconds"] = round(s["start_seconds"] + timeline_offset, 3)
+                s["end_seconds"] = round(s["end_seconds"] + timeline_offset, 3)
 
         # Stage 5 & 6: Silence Detection
         await ws_manager.broadcast({
@@ -230,6 +248,10 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             post_cut_padding_ms=req.postCutPaddingMs,
             preserve_breathing=req.preserveBreathing
         )
+        if timeline_offset > 0:
+            for sc in silence_cuts:
+                sc["start_seconds"] = round(sc["start_seconds"] + timeline_offset, 3)
+                sc["end_seconds"] = round(sc["end_seconds"] + timeline_offset, 3)
         
         all_suggestions = []
         for sc in silence_cuts:

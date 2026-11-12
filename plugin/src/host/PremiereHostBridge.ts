@@ -202,6 +202,19 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Gets the current timeline CTI playhead position in seconds.
+   */
+  public async getPlayheadPosition(): Promise<number> {
+    if (this.isCEP) {
+      await this.ensureCEPScriptLoaded();
+      const res = await this.evalScript('$._prismex.getPlayheadPosition()');
+      const val = parseFloat(res);
+      return isNaN(val) ? 0 : val;
+    }
+    return 0;
+  }
+
+  /**
    * Sets the timeline CTI playhead position to a given second timestamp.
    */
   public async setPlayheadPosition(seconds: number): Promise<void> {

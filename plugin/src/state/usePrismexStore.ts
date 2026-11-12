@@ -16,6 +16,7 @@ import {
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimelineEditingEngine } from '../host/TimelineEditingEngine';
+import { AppLanguage } from '../i18n/translations';
 
 export type ActiveTab = 
   | 'dashboard' 
@@ -32,6 +33,10 @@ export type ActiveTab =
 interface PrismexState {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
+
+  // Localization
+  language: AppLanguage;
+  setLanguage: (lang: AppLanguage) => void;
 
   // Premiere Pro Host State
   sequenceManifest: SequenceManifest | null;
@@ -92,6 +97,14 @@ const timelineEngine = new TimelineEditingEngine();
 export const usePrismexStore = create<PrismexState>((set, get) => ({
   activeTab: 'transcript',
   setActiveTab: (tab) => set({ activeTab: tab }),
+
+  language: (typeof window !== 'undefined' && (localStorage.getItem('prismex_lang') as AppLanguage)) || 'en',
+  setLanguage: (lang) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('prismex_lang', lang);
+    }
+    set({ language: lang });
+  },
 
   sequenceManifest: null,
   refreshSequence: async () => {
@@ -199,7 +212,19 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
             const cloneRes = await hostBridge.cloneActiveSequence();
             const clonedName = cloneRes?.clonedSequenceName || `${seq.sequenceName}_PrismexRoughCut`;
             
-            const execResult = await timelineEngine.executeCuts(cuts);
+            const normalizedCuts = (cuts || []).map((c: any) => ({
+              cutId: c.cutId || c.id || `cut_${Date.now()}`,
+              startSeconds: c.startSeconds ?? c.start_seconds ?? 0,
+              endSeconds: c.endSeconds ?? c.end_seconds ?? 0,
+              durationSeconds: c.durationSeconds ?? c.duration_seconds ?? 0,
+              startTick: c.startTick ?? c.start_tick ?? '0',
+              endTick: c.endTick ?? c.end_tick ?? '0',
+              startFrame: c.startFrame ?? c.start_frame ?? 0,
+              endFrame: c.endFrame ?? c.end_frame ?? 0,
+              category: c.category || 'SILENCE',
+              sourceSuggestionId: c.sourceSuggestionId || ''
+            }));
+            const execResult = await timelineEngine.executeCuts(normalizedCuts);
 
             const report: RoughCutSummaryReport = {
               jobId,

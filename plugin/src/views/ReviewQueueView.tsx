@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
+import { translations } from '../i18n/translations';
 import { 
   Check, 
   X, 
@@ -19,11 +20,23 @@ export const ReviewQueueView: React.FC = () => {
     updateReviewItemStatus, 
     acceptAllReviewItems, 
     rejectAllReviewItems, 
-    applyApprovedReviewQueue 
+    applyApprovedReviewQueue,
+    language
   } = usePrismexStore();
 
+  const t = translations[language];
   const [filterCategory, setFilterCategory] = useState<string>('ALL');
+  const [applying, setApplying] = useState(false);
   const hostBridge = PremiereHostBridge.getInstance();
+
+  const handleApply = async () => {
+    setApplying(true);
+    try {
+      await applyApprovedReviewQueue();
+    } finally {
+      setApplying(false);
+    }
+  };
 
   const filteredItems = reviewItems.filter(item => {
     if (filterCategory === 'ALL') return true;
@@ -175,12 +188,16 @@ export const ReviewQueueView: React.FC = () => {
       <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: '10px' }}>
         <button 
           className="btn-primary" 
-          disabled={acceptedCount === 0}
-          onClick={applyApprovedReviewQueue}
+          disabled={acceptedCount === 0 || applying}
+          onClick={handleApply}
           style={{ width: '100%', padding: '9px 12px', fontSize: '12px', fontWeight: 600 }}
         >
           <Zap size={14} />
-          <span>Apply {acceptedCount} Approved Cuts to Timeline</span>
+          <span>
+            {applying
+              ? t.applyingCuts
+              : t.applyApproved.replace('{n}', String(acceptedCount))}
+          </span>
         </button>
       </div>
     </div>
