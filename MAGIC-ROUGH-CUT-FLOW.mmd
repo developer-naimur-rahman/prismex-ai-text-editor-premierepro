@@ -1,0 +1,49 @@
+flowchart TD
+    Start([User Initiates Magic Rough Cut]) --> CheckActiveSeq{Active Sequence Detected?}
+    CheckActiveSeq -- No --> PromptSelect[Show Empty State: 'Please open and select a sequence in Premiere Pro']
+    CheckActiveSeq -- Yes --> GetMetadata[Extract Sequence Metadata: Name, Frame Rate, Timecode, Audio Channels, Clips]
+
+    GetMetadata --> ModeSelect{Selected Mode}
+    ModeSelect -->|Auto Edit| FlagAuto[Set Execution Mode: Direct Apply on New Sequence]
+    ModeSelect -->|Review Edit| FlagReview[Set Execution Mode: Populate Review Queue]
+
+    FlagAuto --> ExtractAudio[Stage 1: Audio Extraction via FFmpeg Neon / Clip Stitching]
+    FlagReview --> ExtractAudio
+
+    ExtractAudio --> Transcribe[Stage 2: Speech Recognition - MLX-Whisper / Groq Cloud]
+    Transcribe --> AlignWords[Stage 3: Word-Level Forced Alignment - Wav2Vec2 CTC / DTW]
+
+    AlignWords --> ParallelAnalysis[Stage 4: Parallel Intelligence Engines]
+    
+    subgraph IntelligenceEngines["Parallel Signal & Content Analysis"]
+        VAD["Silence Detection\nSilero VAD + Adaptive RMS"]
+        Filler["Filler & Stutter Detection\nDictionary + Context Model"]
+        Takes["Repeated Take Detection\nSemantic Similarity + Take Ranking"]
+    end
+
+    ParallelAnalysis --> VAD
+    ParallelAnalysis --> Filler
+    ParallelAnalysis --> Takes
+
+    VAD --> ConflictResolution[Stage 5: Cut Decision Harmonizer & Boundary Padding]
+    Filler --> ConflictResolution
+    Takes --> ConflictResolution
+
+    ConflictResolution --> FilterOverlap{Overlapping Cuts or Speech Incursions?}
+    FilterOverlap -- Yes --> ResolvePadding[Enforce Pre-roll/Post-roll Padding & Protect Active Speech]
+    FilterOverlap -- No --> BuildCutPlan[Stage 6: Generate Atomic Cut Decisions & Edit Decision List]
+
+    BuildCutPlan --> BranchMode{Execution Mode}
+
+    BranchMode -->|Review Edit| PushQueue[Push to Review Queue UI]
+    PushQueue --> UserReview[User Inspects, Previews, Accepts/Rejects]
+    UserReview --> UserApprove[User Clicks 'Apply Approved Edits']
+    UserApprove --> CloneSeq[Stage 7: Clone Original Sequence via UXP]
+
+    BranchMode -->|Auto Edit| CloneSeq
+
+    CloneSeq --> ExecuteEdits[Stage 8: Execute Timeline Cuts via SequenceEditor / Batch Actions]
+    ExecuteEdits --> VerifySync{Verify Sync & Track Integrity}
+    VerifySync -- Failed --> Rollback[Trigger Safe Rollback / Report Discrepancy]
+    VerifySync -- Passed --> GenReport[Stage 9: Generate Rough Cut Summary Report]
+    GenReport --> Finish([Rough Cut Ready for Inspection])

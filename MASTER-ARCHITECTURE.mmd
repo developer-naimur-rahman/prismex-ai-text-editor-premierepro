@@ -1,0 +1,62 @@
+flowchart TB
+    subgraph AdobePremierePro["Adobe Premiere Pro Host (macOS Apple Silicon)"]
+        subgraph UXPPlugin["Prismex UXP Plugin Panel (HTML5 / React 18 / Tailwind)"]
+            UI_View["Views: Dashboard | Transcript | Review Queue | Providers | Settings"]
+            UI_State["Client State & Cache (Zustand)"]
+            UXP_Bridge["UXP Premiere DOM Bridge (`ppro` / `SequenceEditor`)"]
+            WS_Client["Local WebSocket / HTTP Client"]
+            UI_View --> UI_State
+            UI_State --> UXP_Bridge
+            UI_State --> WS_Client
+        end
+        PPro_DOM["Premiere Pro C++ Core / UXP Host DOM (`premierepro`)"]
+        Active_Seq["Active Sequence & Track Items"]
+        UXP_Bridge <-->|"Async Actions / TickTime / Selection"| PPro_DOM
+        PPro_DOM <--> Active_Seq
+    end
+
+    subgraph LocalCompanion["Prismex Core Companion Daemon (Local Python 3.11 / Rust Engine on 127.0.0.1:49152)"]
+        API_Gateway["FastAPI / WebSocket Server (Unix Socket / Loopback)"]
+        Job_Queue["Job & Task Orchestrator (Asyncio Priority Queue)"]
+        Storage_Engine["Embedded SQLite DB (`prismex_project.db`) + WAL Mode"]
+        Keyring_Vault["macOS Keychain Security Wrapper"]
+
+        API_Gateway <--> Job_Queue
+        API_Gateway <--> Storage_Engine
+        API_Gateway <--> Keyring_Vault
+
+        subgraph AudioPipeline["Audio Extraction & VAD Subsystem"]
+            FFmpeg_Engine["Native FFmpeg (ARM64 Neon Accelerated)"]
+            VAD_Engine["Silero VAD v5 (ONNX Runtime / CoreML)"]
+            DSP_RMS["RMS & Noise Floor Analyzer (NumPy)"]
+        end
+
+        subgraph TranscriptionSubsystem["Local Transcription & Alignment Engine"]
+            MLX_Whisper["MLX-Whisper (Apple Silicon GPU / Neural Engine)"]
+            Faster_Whisper["Faster-Whisper (CTranslate2 CPU Fallback)"]
+            Wav2Vec2_Aligner["Wav2Vec2 CTC Forced Aligner (PyTorch/CoreML)"]
+        end
+
+        subgraph IntelligenceLayer["Reasoning & Analysis Engines"]
+            Take_Detector["Repeated Take Matcher (TF-IDF + Levenshtein + Semantic)"]
+            Filler_Detector["Filler Word & Stutter Rule Engine"]
+            Router["Task-Based AI Provider Router"]
+        end
+
+        Job_Queue --> AudioPipeline
+        Job_Queue --> TranscriptionSubsystem
+        Job_Queue --> IntelligenceLayer
+    end
+
+    subgraph ExternalCloud["External Cloud AI Providers (User-Supplied API Keys)"]
+        Google_Gemini["Google Gemini 1.5/2.0 Flash (Multimodal Audio/Text)"]
+        Groq_LPU["Groq Cloud (Whisper-v3-Turbo & Llama 3.3 70B)"]
+        Cerebras["Cerebras Fast Inference (Llama 3.1 70B)"]
+        OpenRouter["OpenRouter (Free-tier Community Models)"]
+    end
+
+    WS_Client <==>|"Bi-directional IPC (JSON-RPC over WebSocket)"| API_Gateway
+    Router <-->|"TLS HTTPS / Free-Only Guard"| ExternalCloud
+    AudioPipeline --> TranscriptionSubsystem
+    TranscriptionSubsystem --> IntelligenceLayer
+    IntelligenceLayer --> Storage_Engine

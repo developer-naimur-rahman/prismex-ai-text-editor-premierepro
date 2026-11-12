@@ -1,0 +1,30 @@
+flowchart TD
+    InCutPlan([Input: Approved Cut Decision List & Sequence ID]) --> LockUI[Lock Plugin Interaction & Display Progress Modal]
+    LockUI --> FetchOrig[Inspect Original Sequence in Premiere Pro DOM]
+    FetchOrig --> DuplicateSeq[Invoke sequence.createCloneAction to Create Non-Destructive Copy]
+    DuplicateSeq --> TargetNewSeq[Set Active Target: 'OriginalName_PrismexRoughCut']
+
+    TargetNewSeq --> ScanTracks[Scan Video and Audio Tracks, Linked Clips & Track Targeting]
+    ScanTracks --> CheckProtected[Filter Out Protected Tracks: Locked Tracks, Music, SFX, Adjustment Layers]
+
+    CheckProtected --> SortCuts[Sort Cut Intervals in REVERSE Chronological Order: End of Timeline to Start]
+    
+    SortCuts --> StrategySelect{Select Editing Strategy}
+    
+    StrategySelect -->|Strategy A: Backward Ripple Delete| BackwardRipple[Iterate Cut Intervals from Right to Left\nRazor Track Items at In/Out -> Ripple Delete Segment]
+    StrategySelect -->|Strategy B: Non-Destructive Reassembly| Reassemble[Create Clean Target Sequence -> Sequentially Insert Preserved Keep-Ranges from Left to Right]
+
+    BackwardRipple --> ExecuteStep[Execute Batch via SequenceEditor & TickTime]
+    Reassemble --> ExecuteStep
+
+    ExecuteStep --> CheckErrors{Any API Exceptions or Sync Drop?}
+    CheckErrors -- Yes --> AbortAndRollback[Halt Execution, Preserve Partial Clone, Prompt User Rollback]
+    CheckErrors -- No --> VerifyTiming[Post-Execution Integrity Verification:\nCompare Expected Duration vs Actual Timeline Duration]
+
+    VerifyTiming --> DurationCheck{Duration Matches Expected Sum?}
+    DurationCheck -- No --> FlagDiscrepancy[Log Warning in Edit Report & Highlight Drift Markers]
+    DurationCheck -- Yes --> FinalizeTimeline[Link Audio/Video Clips & Add Chapter / Edit Markers]
+
+    FlagDiscrepancy --> FinalizeTimeline
+    FinalizeTimeline --> UnlockUI[Unlock UI & Focus New Rough Cut Sequence]
+    UnlockUI --> RenderSummary([Render Edit Completion Summary to User])

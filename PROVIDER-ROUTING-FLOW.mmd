@@ -1,0 +1,42 @@
+flowchart TD
+    TaskIn([Incoming Task Request]) --> IdentifyTask[Identify Task Type:\nTranscription | Alignment | VAD | Filler | Take Ranking | Reasoning]
+    IdentifyTask --> LookupCaps[Query Provider Registry for Required Capability]
+    
+    LookupCaps --> CheckFreeOnly{Free-Only Protection Enabled?}
+    
+    CheckFreeOnly -- Yes --> FilterPaid[Filter Out All Paid-Only Models & Non-Free Endpoints]
+    CheckFreeOnly -- No --> CheckBudget{Configured Budget Exceeded?}
+    CheckBudget -- Yes --> RejectBudget[Raise BudgetExceededError & Fall Back to Free/Local]
+    CheckBudget -- No --> KeepEligible[Keep Both Free and Allowed Paid Endpoints]
+    FilterPaid --> KeepEligible
+
+    KeepEligible --> FilterLocalPreference{User Preference: Local-First?}
+    FilterLocalPreference -- Yes --> PrioritizeLocal[Prioritize Local Models: MLX-Whisper, Silero, Local Heuristics]
+    FilterLocalPreference -- No --> PrioritizeSpeed[Prioritize Fast Cloud Free: Groq, Gemini Flash, Cerebras]
+
+    PrioritizeLocal --> CheckHealth{Target Engine Available & Memory Within 16GB Budget?}
+    PrioritizeSpeed --> CheckHealth
+
+    CheckHealth -- No --> FailoverNext[Try Next Eligible Engine in Priority Order]
+    CheckHealth -- Yes --> RouteEngine[Dispatch Task to Engine]
+
+    RouteEngine --> ExecuteCall[Execute API Call or Run Local Inference]
+    ExecuteCall --> CallSuccess{Call Succeeded?}
+
+    CallSuccess -- Yes --> RecordUsage[Update Local Usage Tracker & Record Latency]
+    RecordUsage --> ReturnResult([Return Task Output])
+
+    CallSuccess -- No --> AnalyzeError{Error Type}
+    AnalyzeError -->|Rate Limit / 429| MarkRateLimited[Cooldown Provider for N seconds]
+    AnalyzeError -->|Auth / 401 / 403| DisableProvider[Flag Invalid API Key & Alert User]
+    AnalyzeError -->|Network Failure / 5xx| IncrErrorCount[Increment Temporary Failure Count]
+    AnalyzeError -->|OOM / Model Crash| UnloadModel[Evict Local Model & Free Unified Memory]
+
+    MarkRateLimited --> FallbackEngine[Select Fallback Engine from Registry]
+    DisableProvider --> FallbackEngine
+    IncrErrorCount --> FallbackEngine
+    UnloadModel --> FallbackEngine
+
+    FallbackEngine --> CheckRemaining{Any Eligible Engine Left?}
+    CheckRemaining -- Yes --> RouteEngine
+    CheckRemaining -- No --> GracefulFailure([Abort Task with Clear Diagnostics & Safe Local Alternative])

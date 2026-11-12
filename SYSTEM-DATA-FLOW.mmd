@@ -1,0 +1,68 @@
+sequenceDiagram
+    autonumber
+    actor User as Video Editor (User)
+    participant UI as Prismex UXP Panel (React)
+    participant PPro as Premiere Pro DOM (`ppro`)
+    participant Core as Prismex Daemon (FastAPI/Engine)
+    participant Extractor as FFmpeg Audio Service
+    participant Transcriber as MLX / Groq Engine
+    participant Aligner as Forced Aligner (CTC/DTW)
+    participant Analyzer as Silence/Filler/Take Analyzers
+    participant DB as SQLite Project Store
+
+    User->>UI: Clicks "Magic Rough Cut" (or Analyze Sequence)
+    UI->>PPro: Inspect activeSequence (tracks, items, mediaPaths, in/out)
+    PPro-->>UI: Return SequenceManifest (name, fps, sampleRate, clipList)
+    UI->>Core: POST /api/v1/jobs/magic-rough-cut (SequenceManifest, ProfileConfig)
+    Core->>DB: Create Job record (status: INITIALIZING)
+    Core-->>UI: Job Created (jobId: "job_01h...")
+    
+    rect rgb(240, 248, 255)
+        note over Core,Extractor: Stage 1: Audio Extraction
+        Core->>Extractor: Extract audio from source clips or sequence bounce
+        Extractor-->>Core: High-fidelity mono 16kHz WAV generated in scratch cache
+    end
+
+    rect rgb(255, 250, 240)
+        note over Core,Transcriber: Stage 2: Transcription & Alignment
+        Core->>Transcriber: Transcribe audio (MLX-Whisper / Groq Whisper)
+        Transcriber-->>Core: Raw transcript with segment timestamps
+        Core->>Aligner: Force-align words with Wav2Vec2 CTC / DTW
+        Aligner-->>Core: Microsecond-precision WordTimestamps[]
+        Core->>DB: Persist Transcript & WordTimestamps
+    end
+
+    rect rgb(245, 255, 250)
+        note over Core,Analyzer: Stage 3: Feature Detection Pipelines
+        par Silence Detection
+            Core->>Analyzer: Run Silero VAD v5 + Adaptive RMS
+            Analyzer-->>Core: SilenceSegments[]
+        and Filler & Stutter Detection
+            Core->>Analyzer: Run regex dictionary + LLM speech hesitation detector
+            Analyzer-->>Core: FillerDecisions[]
+        and Repeated Take Analysis
+            Core->>Analyzer: Detect duplicate sentences & score best takes
+            Analyzer-->>Core: TakeGroups[] (recommended candidates)
+        end
+    end
+
+    Core->>Core: Consolidate into Candidate Edits & Cut Decision List (EDL)
+    Core->>DB: Save EditingSuggestions & CutPlan
+    Core->>UI: WebSocket push: JOB_COMPLETE (ReviewQueuePayload)
+
+    alt Mode: Magic Auto Edit
+        UI->>PPro: Request Sequence Duplicate (`createCloneAction`)
+        PPro-->>UI: New Sequence Created ("SequenceName_RoughCut")
+        UI->>Core: POST /api/v1/timeline/apply-cuts (approvedCuts)
+        Core->>UI: Return atomic TimelineActionSteps
+        UI->>PPro: Execute SequenceEditor batch operations (ripples/splits)
+        PPro-->>UI: Timeline updated successfully
+        UI-->>User: Magic Rough Cut complete! (Report displayed)
+    else Mode: Magic Review Edit
+        UI-->>User: Render Review Queue (interactive preview, accept/reject chips)
+        User->>UI: Review & approve/modify suggestions
+        User->>UI: Clicks "Apply Approved Edits"
+        UI->>PPro: Clone sequence & execute approved timeline operations
+        PPro-->>UI: Sequence edited non-destructively
+        UI-->>User: Editing applied & report saved
+    end
