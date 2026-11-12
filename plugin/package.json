@@ -2,6 +2,7 @@
   "name": "prismex-uxp-plugin",
   "version": "1.0.0",
   "description": "Adobe Premiere Pro UXP Panel for Prismex AI Editor",
+  "type": "module",
   "main": "dist/index.html",
   "scripts": {
     "dev": "vite",
