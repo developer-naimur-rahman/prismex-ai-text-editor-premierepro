@@ -1,0 +1,18 @@
+{
+  "name": "prismex-ai-editor",
+  "version": "1.0.0",
+  "description": "Production-grade AI-powered Adobe Premiere Pro rough-cutting and editing plugin",
+  "author": "Prismex Architecture Team",
+  "license": "UNLICENSED",
+  "private": true,
+  "workspaces": [
+    "plugin"
+  ],
+  "scripts": {
+    "dev:plugin": "npm --prefix plugin run dev",
+    "build:plugin": "npm --prefix plugin run build",
+    "package:ccx": "npm --prefix plugin run package",
+    "start:daemon": "python3 daemon/prismex_core/server.py",
+    "test:all": "npm --prefix plugin test && python3 -m unittest discover -s tests"
+  }
+}
