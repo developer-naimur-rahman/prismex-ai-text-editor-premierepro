@@ -17,7 +17,15 @@ import {
   Key,
   Subtitles,
   Sliders,
-  CheckCircle2
+  CheckCircle2,
+  Type,
+  Copy,
+  Film,
+  Tag,
+  BookmarkPlus,
+  FileCode,
+  RotateCcw,
+  SlidersHorizontal
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
@@ -58,9 +66,11 @@ export const TranscriptView: React.FC = () => {
     sequenceManifest,
     refreshSequence,
     transcriptWords,
+    transcriptSentences,
     detectedSilences,
     reviewItems,
     aiSummary,
+    setTranscriptWords,
     transcribeSequence,
     deleteTranscriptRange,
     cutAllSilencesNow,
@@ -94,11 +104,42 @@ export const TranscriptView: React.FC = () => {
   const [smartSrtText, setSmartSrtText] = useState<string>('');
   const [smartSrtEngine, setSmartSrtEngine] = useState<string>('');
   const [isGeneratingSrt, setIsGeneratingSrt] = useState(false);
+  const [srtPreset, setSrtPreset] = useState<'SHORTS' | 'YOUTUBE' | 'PODCAST' | 'CUSTOM'>('SHORTS');
+
+  // Find & Replace State
+  const [showFindReplace, setShowFindReplace] = useState(false);
+  const [findText, setFindText] = useState('');
+  const [replaceText, setReplaceText] = useState('');
+
+  // AI Creative Studio State (Shorts, Markers, Spell, AE Typography)
+  const [showCreativeStudio, setShowCreativeStudio] = useState(false);
+  const [creativeTab, setCreativeTab] = useState<'SHORTS' | 'MARKERS' | 'SPELL' | 'AE'>('SHORTS');
+  const [viralShorts, setViralShorts] = useState<any[]>([]);
+  const [aiMarkersList, setAiMarkersList] = useState<any[]>([]);
+  const [aeTypographyData, setAeTypographyData] = useState<{ formattedText: string; lines: string[]; aeSnippet: string } | null>(null);
+  const [isProcessingCreative, setIsProcessingCreative] = useState(false);
+  const [creativeStatus, setCreativeStatus] = useState<string | null>(null);
 
   const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
+
+  // Spacebar Playhead Playback Toggle
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'Space') {
+        const activeEl = document.activeElement;
+        const isInput = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || (activeEl as HTMLElement)?.isContentEditable;
+        if (!isInput) {
+          e.preventDefault();
+          hostBridge.togglePlayback();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   useEffect(() => {
     if (transcriptWords.length === 0) return;
@@ -212,6 +253,208 @@ export const TranscriptView: React.FC = () => {
     } finally {
       setIsGeneratingSrt(false);
     }
+  };
+
+  const handleApplyPreset = (preset: 'SHORTS' | 'YOUTUBE' | 'PODCAST') => {
+    setSrtPreset(preset);
+    if (preset === 'SHORTS') {
+      setTargetWords(3);
+      setTargetChars(18);
+      setMaxChars(26);
+    } else if (preset === 'YOUTUBE') {
+      setTargetWords(6);
+      setTargetChars(32);
+      setMaxChars(42);
+    } else if (preset === 'PODCAST') {
+      setTargetWords(10);
+      setTargetChars(45);
+      setMaxChars(60);
+    }
+  };
+
+  const handleCueKeyDown = (idx: number, e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const cue = smartCues[idx];
+      if (!cue) return;
+      const wordsInCue = cue.text.split(' ');
+      if (wordsInCue.length < 2) return;
+      const mid = Math.ceil(wordsInCue.length / 2);
+      const text1 = wordsInCue.slice(0, mid).join(' ');
+      const text2 = wordsInCue.slice(mid).join(' ');
+      const midFrame = Math.round((cue.startFrame + cue.endFrame) / 2);
+      const midSec = midFrame / fps;
+
+      const cue1 = {
+        ...cue,
+        text: text1,
+        endFrame: midFrame,
+        endSeconds: midSec,
+        endSrt: formatSrtTimestamp(midSec),
+        wordCount: mid,
+        charCount: text1.length
+      };
+      const cue2 = {
+        ...cue,
+        index: cue.index + 1,
+        text: text2,
+        startFrame: midFrame,
+        startSeconds: midSec,
+        startSrt: formatSrtTimestamp(midSec),
+        wordCount: wordsInCue.length - mid,
+        charCount: text2.length
+      };
+
+      const newCues = [...smartCues.slice(0, idx), cue1, cue2, ...smartCues.slice(idx + 1)].map((c, i) => ({ ...c, index: i + 1 }));
+      setSmartCues(newCues);
+      const srtText = newCues.map((c) => `${c.index}\n${c.startSrt} --> ${c.endSrt}\n${c.text}\n`).join('\n');
+      setSmartSrtText(srtText);
+    }
+  };
+
+  const handleCueTextChange = (idx: number, newText: string) => {
+    const updated = [...smartCues];
+    updated[idx] = { ...updated[idx], text: newText, charCount: newText.length };
+    setSmartCues(updated);
+    const srtText = updated.map((c) => `${c.index}\n${c.startSrt} --> ${c.endSrt}\n${c.text}\n`).join('\n');
+    setSmartSrtText(srtText);
+  };
+
+  const handleDeleteCue = (idx: number) => {
+    const updated = smartCues.filter((_, i) => i !== idx).map((c, i) => ({ ...c, index: i + 1 }));
+    setSmartCues(updated);
+    const srtText = updated.map((c) => `${c.index}\n${c.startSrt} --> ${c.endSrt}\n${c.text}\n`).join('\n');
+    setSmartSrtText(srtText);
+  };
+
+  const handleMergeNextCue = (idx: number) => {
+    if (idx >= smartCues.length - 1) return;
+    const curr = smartCues[idx];
+    const nxt = smartCues[idx + 1];
+    const mergedCue = {
+      ...curr,
+      text: `${curr.text} ${nxt.text}`.trim(),
+      endFrame: nxt.endFrame,
+      endSeconds: nxt.endSeconds,
+      endSrt: nxt.endSrt,
+      wordCount: curr.wordCount + nxt.wordCount,
+      charCount: curr.text.length + nxt.text.length + 1
+    };
+    const newCues = [...smartCues.slice(0, idx), mergedCue, ...smartCues.slice(idx + 2)].map((c, i) => ({ ...c, index: i + 1 }));
+    setSmartCues(newCues);
+    const srtText = newCues.map((c) => `${c.index}\n${c.startSrt} --> ${c.endSrt}\n${c.text}\n`).join('\n');
+    setSmartSrtText(srtText);
+  };
+
+  const handleReplaceAll = () => {
+    if (!findText) return;
+    const regex = new RegExp(findText, 'gi');
+    const updated = transcriptWords.map((w: any) => ({
+      ...w,
+      word: String(w.word || '').replace(regex, replaceText)
+    }));
+    setTranscriptWords(updated);
+    setExportStatus(`Replaced all "${findText}" with "${replaceText}"`);
+    setTimeout(() => setExportStatus(null), 2500);
+  };
+
+  const handleStripPunctuation = (type: 'COMMAS' | 'PERIODS' | 'ALL' | 'UPPER') => {
+    const updated = transcriptWords.map((w: any) => {
+      let str = String(w.word || '');
+      if (type === 'COMMAS') {
+        str = str.replace(/[,،]/g, '');
+      } else if (type === 'PERIODS') {
+        str = str.replace(/[.।]/g, '');
+      } else if (type === 'ALL') {
+        str = str.replace(/[,.?!।:;—"']/g, '');
+      } else if (type === 'UPPER') {
+        str = str.toUpperCase();
+      }
+      return { ...w, word: str };
+    });
+    setTranscriptWords(updated);
+    setExportStatus(`Punctuation updated!`);
+    setTimeout(() => setExportStatus(null), 2500);
+  };
+
+  const handleRunSpellCheck = async () => {
+    setIsProcessingCreative(true);
+    setCreativeStatus('Checking spelling & grammar...');
+    try {
+      const res = await client.aiSpellCheck(transcriptWords);
+      if (res && res.words) {
+        setTranscriptWords(res.words);
+        setCreativeStatus(`Fixed ${res.corrections} word(s) (${res.engine})!`);
+      }
+    } finally {
+      setIsProcessingCreative(false);
+    }
+  };
+
+  const handleDetectViralShorts = async () => {
+    setIsProcessingCreative(true);
+    setCreativeStatus('Analyzing transcript for 9:16 Viral Shorts...');
+    try {
+      const shorts = await client.aiViralShorts({
+        words: transcriptWords,
+        sentences: transcriptSentences,
+        targetCount: 5,
+        fps
+      });
+      if (shorts) {
+        setViralShorts(shorts);
+        setCreativeStatus(`Generated ${shorts.length} viral vertical short moments!`);
+      }
+    } finally {
+      setIsProcessingCreative(false);
+    }
+  };
+
+  const handleAnalyzeMarkers = async () => {
+    setIsProcessingCreative(true);
+    setCreativeStatus('Analyzing Emphasis, B-Roll, & Icon triggers...');
+    try {
+      const res = await client.aiMarkers(transcriptWords);
+      if (res && res.markers) {
+        setAiMarkersList(res.markers);
+        setCreativeStatus(`Identified ${res.markers.length} visual cues!`);
+      }
+    } finally {
+      setIsProcessingCreative(false);
+    }
+  };
+
+  const handleSendMarkersToPremiere = async () => {
+    if (aiMarkersList.length === 0) return;
+    const res = await hostBridge.addTimelineMarkers(aiMarkersList);
+    if (res.success) {
+      setCreativeStatus(`Added ${res.count} colored markers to Premiere timeline!`);
+    } else {
+      setCreativeStatus(res.error || 'Failed to add timeline markers');
+    }
+  };
+
+  const handleGenerateAeTypography = async (sampleText?: string) => {
+    const textToFormat = sampleText || (hasSelection ? words.slice(minSel, maxSel + 1).map((w) => w.word).join(' ') : words.slice(0, 15).map((w) => w.word).join(' '));
+    if (!textToFormat) return;
+    setIsProcessingCreative(true);
+    setCreativeStatus('Formatting After Effects Kinetic Typography...');
+    try {
+      const res = await client.formatAeTypography(textToFormat);
+      if (res) {
+        setAeTypographyData(res);
+        setCreativeStatus('Kinetic typography ready for After Effects!');
+      }
+    } finally {
+      setIsProcessingCreative(false);
+    }
+  };
+
+  const handleCopyAeScript = () => {
+    if (!aeTypographyData) return;
+    navigator.clipboard.writeText(aeTypographyData.aeSnippet);
+    setCreativeStatus('After Effects Script copied to clipboard!');
+    setTimeout(() => setCreativeStatus(null), 3000);
   };
 
   const buildSrtContent = () => {
@@ -529,6 +772,42 @@ export const TranscriptView: React.FC = () => {
             <span>{language === 'bn' ? 'AI স্মার্ট SRT' : 'Smart SRT'}</span>
           </button>
           <button
+            onClick={() => setShowFindReplace(!showFindReplace)}
+            className="btn-secondary"
+            title="Find & Replace text and strip punctuation"
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              color: showFindReplace ? '#fef08a' : '#facc15',
+              backgroundColor: showFindReplace ? 'rgba(250, 204, 21, 0.2)' : 'transparent',
+              borderColor: 'rgba(250, 204, 21, 0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+          >
+            <Type size={10} />
+            <span>{language === 'bn' ? 'খুঁজুন/মুছুন' : 'Find/Clean'}</span>
+          </button>
+          <button
+            onClick={() => setShowCreativeStudio(!showCreativeStudio)}
+            className="btn-secondary"
+            title="Viral Shorts (9:16), Colored Timeline Markers, Spell Check, AE Typography"
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              color: showCreativeStudio ? '#f472b6' : '#ec4899',
+              backgroundColor: showCreativeStudio ? 'rgba(236, 72, 153, 0.2)' : 'transparent',
+              borderColor: 'rgba(236, 72, 153, 0.4)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+          >
+            <Sparkles size={10} />
+            <span>{language === 'bn' ? 'AI স্টুডিও' : 'AI Studio'}</span>
+          </button>
+          <button
             onClick={handleSendToPremiereCaptions}
             className="btn-secondary"
             title="Create Caption Track in Premiere Pro & populate Text Panel Captions"
@@ -629,6 +908,360 @@ export const TranscriptView: React.FC = () => {
         </div>
       )}
 
+      {/* Find & Replace / Punctuation Cleaner Panel */}
+      {showFindReplace && (
+        <div
+          className="card"
+          style={{
+            backgroundColor: 'rgba(250, 204, 21, 0.08)',
+            borderColor: 'rgba(250, 204, 21, 0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            padding: '10px 12px'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#fef08a', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Type size={12} /> {language === 'bn' ? 'টেক্সট খুঁজুন ও বিরতিচিহ্ন মুছুন' : 'Find & Replace / Punctuation Cleaner'}
+            </span>
+            <button
+              onClick={() => setShowFindReplace(false)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '6px' }}>
+            <input
+              type="text"
+              placeholder={language === 'bn' ? 'কী শব্দ খুঁজবেন...' : 'Find text...'}
+              value={findText}
+              onChange={(e) => setFindText(e.target.value)}
+              style={{
+                flex: 1,
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '4px',
+                color: 'var(--text-primary)',
+                fontSize: '11px',
+                padding: '4px 8px'
+              }}
+            />
+            <input
+              type="text"
+              placeholder={language === 'bn' ? 'কী শব্দ দিয়ে বদলাবেন...' : 'Replace with...'}
+              value={replaceText}
+              onChange={(e) => setReplaceText(e.target.value)}
+              style={{
+                flex: 1,
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '4px',
+                color: 'var(--text-primary)',
+                fontSize: '11px',
+                padding: '4px 8px'
+              }}
+            />
+            <button onClick={handleReplaceAll} className="btn-primary" style={{ padding: '4px 10px', fontSize: '10.5px' }}>
+              {language === 'bn' ? 'সব বদলান' : 'Replace All'}
+            </button>
+          </div>
+
+          <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>1-Click Quick Clean:</span>
+            <button
+              onClick={() => handleStripPunctuation('COMMAS')}
+              className="btn-secondary"
+              style={{ padding: '2px 6px', fontSize: '9.5px' }}
+            >
+              Strip Commas (,)
+            </button>
+            <button
+              onClick={() => handleStripPunctuation('PERIODS')}
+              className="btn-secondary"
+              style={{ padding: '2px 6px', fontSize: '9.5px' }}
+            >
+              Strip Periods (.)
+            </button>
+            <button
+              onClick={() => handleStripPunctuation('ALL')}
+              className="btn-secondary"
+              style={{ padding: '2px 6px', fontSize: '9.5px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+            >
+              Strip All Punctuation
+            </button>
+            <button
+              onClick={() => handleStripPunctuation('UPPER')}
+              className="btn-secondary"
+              style={{ padding: '2px 6px', fontSize: '9.5px' }}
+            >
+              ALL CAPS
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* AI Creative Studio Panel (Viral Shorts, Markers, Spell Check, AE Typography) */}
+      {showCreativeStudio && (
+        <div
+          className="card"
+          style={{
+            backgroundColor: 'rgba(236, 72, 153, 0.08)',
+            borderColor: 'rgba(236, 72, 153, 0.35)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            padding: '10px 12px'
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#f472b6', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Sparkles size={12} /> {language === 'bn' ? 'AI ক্রিয়েটিভ স্টুডিও' : 'AI Creative Studio'}
+            </span>
+            <button
+              onClick={() => setShowCreativeStudio(false)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '11px', cursor: 'pointer' }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Subtabs: SHORTS, MARKERS, SPELL, AE */}
+          <div style={{ display: 'flex', gap: '4px' }}>
+            <button
+              onClick={() => setCreativeTab('SHORTS')}
+              style={{
+                padding: '3px 8px',
+                fontSize: '10px',
+                backgroundColor: creativeTab === 'SHORTS' ? '#ec4899' : 'var(--bg-tertiary)',
+                color: creativeTab === 'SHORTS' ? '#fff' : 'var(--text-secondary)',
+                borderRadius: '4px'
+              }}
+            >
+              <Film size={10} style={{ marginRight: '3px' }} />
+              {language === 'bn' ? 'ভাইরাল শর্টস (9:16)' : 'Viral Shorts (9:16)'}
+            </button>
+            <button
+              onClick={() => setCreativeTab('MARKERS')}
+              style={{
+                padding: '3px 8px',
+                fontSize: '10px',
+                backgroundColor: creativeTab === 'MARKERS' ? '#ec4899' : 'var(--bg-tertiary)',
+                color: creativeTab === 'MARKERS' ? '#fff' : 'var(--text-secondary)',
+                borderRadius: '4px'
+              }}
+            >
+              <Tag size={10} style={{ marginRight: '3px' }} />
+              {language === 'bn' ? 'কালার মার্কার (লাল/সবুজ/নীল)' : 'Colored Markers'}
+            </button>
+            <button
+              onClick={() => setCreativeTab('SPELL')}
+              style={{
+                padding: '3px 8px',
+                fontSize: '10px',
+                backgroundColor: creativeTab === 'SPELL' ? '#ec4899' : 'var(--bg-tertiary)',
+                color: creativeTab === 'SPELL' ? '#fff' : 'var(--text-secondary)',
+                borderRadius: '4px'
+              }}
+            >
+              <Type size={10} style={{ marginRight: '3px' }} />
+              {language === 'bn' ? 'বানান সংশোধন' : 'Spell Check'}
+            </button>
+            <button
+              onClick={() => setCreativeTab('AE')}
+              style={{
+                padding: '3px 8px',
+                fontSize: '10px',
+                backgroundColor: creativeTab === 'AE' ? '#ec4899' : 'var(--bg-tertiary)',
+                color: creativeTab === 'AE' ? '#fff' : 'var(--text-secondary)',
+                borderRadius: '4px'
+              }}
+            >
+              <FileCode size={10} style={{ marginRight: '3px' }} />
+              {language === 'bn' ? 'After Effects টাইপোগ্রাফি' : 'After Effects Kinetic'}
+            </button>
+          </div>
+
+          {creativeStatus && (
+            <div style={{ fontSize: '10px', color: '#f472b6', fontWeight: 600 }}>{creativeStatus}</div>
+          )}
+
+          {/* Tab 1: SHORTS */}
+          {creativeTab === 'SHORTS' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                  AI analyzes script to identify top 5 high-hook 30-60s vertical moments.
+                </span>
+                <button
+                  onClick={handleDetectViralShorts}
+                  disabled={isProcessingCreative}
+                  className="btn-primary"
+                  style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: '#ec4899' }}
+                >
+                  {isProcessingCreative ? 'Analyzing...' : 'Generate 5 Viral Shorts'}
+                </button>
+              </div>
+
+              {viralShorts.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '130px', overflowY: 'auto' }}>
+                  {viralShorts.map((sh, idx) => (
+                    <div
+                      key={`sh_${idx}`}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        backgroundColor: 'var(--bg-tertiary)',
+                        fontSize: '10px'
+                      }}
+                    >
+                      <div>
+                        <span style={{ fontWeight: 600, color: '#f472b6' }}>#{idx + 1} {sh.title}</span>
+                        <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
+                          {sh.startSeconds}s - {sh.endSeconds}s ({sh.durationSeconds}s)
+                        </span>
+                        <div style={{ color: 'var(--text-secondary)', fontSize: '9px' }}>Hook: "{sh.hook}"</div>
+                      </div>
+                      <button
+                        className="btn-secondary"
+                        style={{ padding: '2px 6px', fontSize: '9px' }}
+                        onClick={() => hostBridge.setPlayheadPosition(sh.startSeconds)}
+                      >
+                        Seek
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tab 2: MARKERS */}
+          {creativeTab === 'MARKERS' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                  Classifies Emphasis (RED), B-Roll (GREEN), and Icon/Graphic (BLUE) moments.
+                </span>
+                <div style={{ display: 'flex', gap: '4px' }}>
+                  <button
+                    onClick={handleAnalyzeMarkers}
+                    disabled={isProcessingCreative}
+                    className="btn-secondary"
+                    style={{ padding: '3px 8px', fontSize: '10px' }}
+                  >
+                    Analyze Visuals
+                  </button>
+                  {aiMarkersList.length > 0 && (
+                    <button
+                      onClick={handleSendMarkersToPremiere}
+                      className="btn-primary"
+                      style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: '#10b981' }}
+                    >
+                      Send to Timeline
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {aiMarkersList.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '120px', overflowY: 'auto' }}>
+                  {aiMarkersList.map((m, idx) => (
+                    <div
+                      key={`mk_${idx}`}
+                      onClick={() => hostBridge.setPlayheadPosition(m.startSeconds)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '3px 6px',
+                        borderRadius: '3px',
+                        backgroundColor: 'var(--bg-tertiary)',
+                        fontSize: '9.5px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span
+                          style={{
+                            width: '8px',
+                            height: '8px',
+                            borderRadius: '50%',
+                            backgroundColor: m.color === 'RED' ? '#ef4444' : m.color === 'GREEN' ? '#10b981' : '#3b82f6'
+                          }}
+                        />
+                        <span style={{ fontWeight: 600 }}>{m.name}</span>
+                        <span style={{ color: 'var(--text-muted)' }}>{m.comment}</span>
+                      </div>
+                      <span style={{ color: '#a78bfa', fontFamily: 'monospace' }}>{m.startSeconds.toFixed(2)}s</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tab 3: SPELL CHECK */}
+          {creativeTab === 'SPELL' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                  Scans speech-to-text transcript with AI proofreader to eliminate all spelling &amp; grammar errors.
+                </span>
+                <button
+                  onClick={handleRunSpellCheck}
+                  disabled={isProcessingCreative}
+                  className="btn-primary"
+                  style={{ padding: '3px 8px', fontSize: '10px' }}
+                >
+                  {isProcessingCreative ? 'Checking...' : 'Run Spell Check & Polish'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Tab 4: AE TYPOGRAPHY */}
+          {creativeTab === 'AE' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                  Formats text into Kinetic Typography layout with 1-click script for Adobe After Effects.
+                </span>
+                <button
+                  onClick={() => handleGenerateAeTypography()}
+                  disabled={isProcessingCreative}
+                  className="btn-secondary"
+                  style={{ padding: '3px 8px', fontSize: '10px' }}
+                >
+                  Format Kinetic Text
+                </button>
+              </div>
+
+              {aeTypographyData && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', backgroundColor: 'var(--bg-tertiary)', padding: '6px', borderRadius: '4px' }}>
+                  <div style={{ fontFamily: 'monospace', fontSize: '11px', whiteSpace: 'pre-wrap', color: '#fef08a' }}>
+                    {aeTypographyData.formattedText}
+                  </div>
+                  <button
+                    onClick={handleCopyAeScript}
+                    className="btn-primary"
+                    style={{ alignSelf: 'flex-start', padding: '3px 8px', fontSize: '9.5px', marginTop: '4px' }}
+                  >
+                    <Copy size={10} style={{ marginRight: '3px' }} />
+                    Copy After Effects Script (.jsx)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* AI Smart Flexible SRT Panel */}
       {showSmartSrt && (
         <div
@@ -671,6 +1304,47 @@ export const TranscriptView: React.FC = () => {
             </button>
           </div>
 
+          {/* Quick Presets Row */}
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>Presets:</span>
+            <button
+              onClick={() => handleApplyPreset('SHORTS')}
+              style={{
+                padding: '2px 7px',
+                fontSize: '9.5px',
+                borderRadius: '3px',
+                backgroundColor: srtPreset === 'SHORTS' ? '#3b82f6' : 'var(--bg-tertiary)',
+                color: srtPreset === 'SHORTS' ? '#fff' : 'var(--text-secondary)'
+              }}
+            >
+              Shorts/Reels (2-3 words)
+            </button>
+            <button
+              onClick={() => handleApplyPreset('YOUTUBE')}
+              style={{
+                padding: '2px 7px',
+                fontSize: '9.5px',
+                borderRadius: '3px',
+                backgroundColor: srtPreset === 'YOUTUBE' ? '#3b82f6' : 'var(--bg-tertiary)',
+                color: srtPreset === 'YOUTUBE' ? '#fff' : 'var(--text-secondary)'
+              }}
+            >
+              YouTube Standard (5-7 words)
+            </button>
+            <button
+              onClick={() => handleApplyPreset('PODCAST')}
+              style={{
+                padding: '2px 7px',
+                fontSize: '9.5px',
+                borderRadius: '3px',
+                backgroundColor: srtPreset === 'PODCAST' ? '#3b82f6' : 'var(--bg-tertiary)',
+                color: srtPreset === 'PODCAST' ? '#fff' : 'var(--text-secondary)'
+              }}
+            >
+              Podcast/Full Line (8-12 words)
+            </button>
+          </div>
+
           {/* Controls: Target Words, Flexibility, Target Chars, Max Chars */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '8px', alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -680,7 +1354,7 @@ export const TranscriptView: React.FC = () => {
               <input
                 type="number"
                 min={1}
-                max={10}
+                max={12}
                 value={targetWords}
                 onChange={(e) => setTargetWords(Math.max(1, parseInt(e.target.value) || 1))}
                 style={{
@@ -786,14 +1460,14 @@ export const TranscriptView: React.FC = () => {
             )}
           </div>
 
-          {/* Cues Preview Inspector */}
+          {/* Cues Interactive Editor & Inspector */}
           {smartCues.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '4px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
                 <span>
                   {language === 'bn'
-                    ? `মোট ${smartCues.length} টি কিউ • সিকোয়েন্স ফ্রেমরেট: ${fps} fps • জিরো ফ্রেম ড্রিফট`
-                    : `${smartCues.length} Cues • Sequence: ${fps} fps • 100% 0-Frame Drift`}
+                    ? `মোট ${smartCues.length} টি কিউ • সিকোয়েন্স ফ্রেমরেট: ${fps} fps • [Enter চাপলে লাইন স্প্লিট হবে]`
+                    : `${smartCues.length} Cues • Sequence: ${fps} fps • [Press Enter in box to split line]`}
                 </span>
                 <span style={{ color: '#34d399', display: 'flex', alignItems: 'center', gap: '3px' }}>
                   <CheckCircle2 size={10} /> {language === 'bn' ? 'ফ্রেম সিঙ্ক সক্রিয়' : 'Frame Synced'}
@@ -801,56 +1475,74 @@ export const TranscriptView: React.FC = () => {
               </div>
               <div
                 style={{
-                  maxHeight: '130px',
+                  maxHeight: '150px',
                   overflowY: 'auto',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '3px',
+                  gap: '4px',
                   backgroundColor: 'var(--bg-tertiary)',
                   borderRadius: '4px',
                   padding: '4px',
                   border: '1px solid var(--border-subtle)'
                 }}
               >
-                {smartCues.map((cue: any) => (
+                {smartCues.map((cue: any, cIdx: number) => (
                   <div
                     key={`cue_${cue.index}`}
-                    onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'space-between',
+                      gap: '6px',
                       padding: '3px 6px',
                       borderRadius: '3px',
                       backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                      cursor: 'pointer',
                       fontSize: '10px'
                     }}
-                    title={`Click to seek playhead to ${cue.startSrt} (Frame ${cue.startFrame})`}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: '#60a5fa', fontWeight: 600, width: '22px' }}>#{cue.index}</span>
-                      <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>"{cue.text}"</span>
-                      <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>
-                        ({cue.wordCount}w, {cue.charCount}c)
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span style={{ color: '#a78bfa', fontSize: '9px', fontFamily: 'monospace' }}>
-                        F:{cue.startFrame}-{cue.endFrame}
-                      </span>
-                      <span
-                        style={{
-                          fontSize: '8.5px',
-                          padding: '1px 4px',
-                          borderRadius: '2px',
-                          backgroundColor: 'rgba(52, 211, 153, 0.15)',
-                          color: '#34d399'
-                        }}
-                      >
-                        {cue.reason}
-                      </span>
-                    </div>
+                    <span
+                      onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
+                      style={{ color: '#60a5fa', fontWeight: 600, width: '22px', cursor: 'pointer' }}
+                      title="Click to seek"
+                    >
+                      #{cue.index}
+                    </span>
+
+                    <input
+                      type="text"
+                      value={cue.text}
+                      onChange={(e) => handleCueTextChange(cIdx, e.target.value)}
+                      onKeyDown={(e) => handleCueKeyDown(cIdx, e)}
+                      title="Edit text (Press Enter to split cue into two lines)"
+                      style={{
+                        flex: 1,
+                        backgroundColor: 'rgba(0,0,0,0.2)',
+                        border: '1px solid rgba(255,255,255,0.08)',
+                        borderRadius: '3px',
+                        color: 'var(--text-primary)',
+                        fontSize: '10px',
+                        padding: '2px 6px'
+                      }}
+                    />
+
+                    <span style={{ color: '#a78bfa', fontSize: '9px', fontFamily: 'monospace' }}>
+                      F:{cue.startFrame}-{cue.endFrame}
+                    </span>
+
+                    <button
+                      onClick={() => handleMergeNextCue(cIdx)}
+                      title="Merge with next cue line"
+                      style={{ padding: '1px 4px', fontSize: '8.5px', background: 'transparent', color: 'var(--text-muted)' }}
+                    >
+                      Merge ↓
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteCue(cIdx)}
+                      title="Delete this cue"
+                      style={{ padding: '1px 4px', fontSize: '8.5px', background: 'transparent', color: '#f87171' }}
+                    >
+                      ✕
+                    </button>
                   </div>
                 ))}
               </div>

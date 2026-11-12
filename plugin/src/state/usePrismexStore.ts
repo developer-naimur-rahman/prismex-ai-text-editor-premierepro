@@ -59,6 +59,7 @@ interface PrismexState {
   transcriptWords: any[];
   transcriptSentences: any[];
   detectedSilences: any[];
+  setTranscriptWords: (words: any[]) => void;
   setReviewItems: (items: ReviewQueueItem[]) => void;
   updateReviewItemStatus: (id: string, status: 'ACCEPTED' | 'REJECTED') => void;
   acceptAllReviewItems: () => void;
@@ -111,6 +112,21 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   refreshSequence: async () => {
     const manifest = await hostBridge.getActiveSequenceManifest();
     set({ sequenceManifest: manifest });
+    if (manifest?.sequenceGuid && get().transcriptWords.length === 0 && typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem(`prismex_tx_${manifest.sequenceGuid}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed.words && parsed.words.length > 0) {
+            set({
+              transcriptWords: parsed.words,
+              transcriptSentences: parsed.sentences || [],
+              detectedSilences: parsed.silences || []
+            });
+          }
+        }
+      } catch {}
+    }
   },
 
   executionMode: 'AUTO_EDIT',
@@ -127,6 +143,21 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   transcriptWords: [],
   transcriptSentences: [],
   detectedSilences: [],
+  setTranscriptWords: (words) => {
+    set({ transcriptWords: words });
+    if (typeof window !== 'undefined') {
+      try {
+        const seq = get().sequenceManifest;
+        if (seq?.sequenceGuid) {
+          localStorage.setItem(`prismex_tx_${seq.sequenceGuid}`, JSON.stringify({
+            words,
+            sentences: get().transcriptSentences,
+            silences: get().detectedSilences
+          }));
+        }
+      } catch {}
+    }
+  },
   setReviewItems: (items) => set({ reviewItems: items }),
 
   updateReviewItemStatus: (id, status) => {
@@ -200,9 +231,26 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           detectedSilences: silences || []
         });
 
+        if (typeof window !== 'undefined') {
+          try {
+            const seq = get().sequenceManifest;
+            if (seq?.sequenceGuid) {
+              localStorage.setItem(`prismex_tx_${seq.sequenceGuid}`, JSON.stringify({
+                words: words || [],
+                sentences: sentences || [],
+                silences: silences || []
+              }));
+            }
+          } catch {}
+        }
+
         if (executionMode === 'TRANSCRIBE_ONLY') {
           const items = await client.getReviewQueue(jobId);
-          set({ reviewItems: items, activeTab: 'transcript' });
+          const currentTab = get().activeTab;
+          set({
+            reviewItems: items,
+            activeTab: (currentTab === 'silence' || currentTab === 'takes') ? currentTab : 'transcript'
+          });
         } else if (executionMode === 'REVIEW_EDIT') {
           const items = await client.getReviewQueue(jobId);
           set({ reviewItems: items, activeTab: 'review-queue' });

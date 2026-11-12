@@ -240,6 +240,51 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Undoes the last timeline cut by reverting to the previous un-cut sequence.
+   */
+  public async undoLastCut(): Promise<{ success: boolean; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true };
+    }
+    try {
+      const res = await this.evalScript('$._prismex.undoLastCut()');
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
+   * Toggles playback on the active Premiere Pro sequence player.
+   */
+  public async togglePlayback(): Promise<boolean> {
+    if (!this.isCEP) return false;
+    try {
+      const res = await this.evalScript('$._prismex.togglePlayback()');
+      const data = JSON.parse(res);
+      return !!data.success;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Adds colored markers to the Premiere Pro timeline for emphasis words (RED),
+   * B-Roll opportunities (GREEN), and icons/graphics (BLUE).
+   */
+  public async addTimelineMarkers(markers: any[]): Promise<{ success: boolean; count?: number; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, count: markers.length };
+    }
+    try {
+      const res = await this.evalScript(`$._prismex.addTimelineMarkers('${JSON.stringify(markers)}')`);
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
    * Opens a URL in the user's default system browser (Chrome/Safari).
    */
   public openExternalUrl(url: string): void {

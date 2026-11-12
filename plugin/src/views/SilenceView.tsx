@@ -1,6 +1,7 @@
 import React from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
-import { Scissors, VolumeX, Sparkles } from 'lucide-react';
+import { PremiereHostBridge } from '../host/PremiereHostBridge';
+import { Scissors, VolumeX, Sparkles, Play } from 'lucide-react';
 
 export const SilenceView: React.FC = () => {
   const {
@@ -11,10 +12,12 @@ export const SilenceView: React.FC = () => {
     cutAllSilencesNow,
     sequenceManifest,
     jobStatus,
-    jobProgress
+    jobProgress,
+    jobMessage
   } = usePrismexStore();
 
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
+  const hostBridge = PremiereHostBridge.getInstance();
 
   return (
     <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', overflowY: 'auto' }}>
@@ -102,6 +105,57 @@ export const SilenceView: React.FC = () => {
           onChange={(e) => setSilenceSettings({ preserveBreathing: e.target.checked })}
         />
       </div>
+
+      {/* Progress Bar during Scan */}
+      {isRunning && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10.5px' }}>
+            <span style={{ color: 'var(--text-secondary)' }}>{jobMessage}</span>
+            <span style={{ fontWeight: 600 }}>{Math.round(jobProgress)}%</span>
+          </div>
+          <div style={{ width: '100%', height: '6px', backgroundColor: 'var(--bg-tertiary)', borderRadius: '3px', overflow: 'hidden' }}>
+            <div style={{ width: `${jobProgress}%`, height: '100%', backgroundColor: 'var(--accent-color)', transition: 'width 0.3s ease' }} />
+          </div>
+        </div>
+      )}
+
+      {/* Detected Silences List */}
+      {detectedSilences.length > 0 && (
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '180px', overflowY: 'auto' }}>
+          <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+            DETECTED SILENCES ({detectedSilences.length})
+          </div>
+          {detectedSilences.map((s: any, idx: number) => (
+            <div
+              key={`sil_${idx}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '4px 8px',
+                borderRadius: '4px',
+                backgroundColor: 'var(--bg-tertiary)',
+                fontSize: '10.5px'
+              }}
+            >
+              <div>
+                <span style={{ fontWeight: 600, color: '#f87171' }}>Silence #{idx + 1}</span>
+                <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>
+                  {s.start_seconds?.toFixed(2)}s - {s.end_seconds?.toFixed(2)}s ({s.duration_seconds?.toFixed(2)}s)
+                </span>
+              </div>
+              <button
+                className="btn-secondary"
+                style={{ padding: '2px 6px', fontSize: '9.5px' }}
+                onClick={() => hostBridge.setPlayheadPosition(s.start_seconds)}
+              >
+                <Play size={10} />
+                <span>Seek</span>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Action Buttons */}
       <div style={{ marginTop: 'auto', display: 'flex', gap: '8px' }}>

@@ -115,4 +115,13 @@ button:focus-visible {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: 12px;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+input, select, textarea {
+  box-sizing: border-box;
+  max-width: 100%;
 }

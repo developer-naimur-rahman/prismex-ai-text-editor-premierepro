@@ -12,8 +12,10 @@ import {
   Bookmark, 
   Settings, 
   History, 
-  RefreshCw 
+  RefreshCw,
+  RotateCcw 
 } from 'lucide-react';
+import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
 export const NavigationHeader: React.FC = () => {
   const { 
@@ -114,6 +116,32 @@ export const NavigationHeader: React.FC = () => {
             }} />
             <span>{daemonOnline ? t.engineReady : t.engineOffline}</span>
           </div>
+
+          <button
+            onClick={async () => {
+              const res = await PremiereHostBridge.getInstance().undoLastCut();
+              if (res.success) {
+                await refreshSequence();
+              }
+            }}
+            title={language === 'bn' ? 'পূর্ববর্তী সিকোয়েন্সে ফিরে যান (Undo)' : 'Revert to previous un-cut sequence (Undo)'}
+            style={{
+              backgroundColor: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              borderRadius: '10px',
+              color: '#fca5a5',
+              fontSize: '9.5px',
+              fontWeight: 600,
+              padding: '2px 7px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+          >
+            <RotateCcw size={10} />
+            <span>{language === 'bn' ? 'আনডু' : 'Undo'}</span>
+          </button>
 
           <button
             onClick={() => setLanguage(language === 'en' ? 'bn' : 'en')}

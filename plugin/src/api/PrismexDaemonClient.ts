@@ -181,6 +181,71 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async aiSpellCheck(words: any[]): Promise<{ words: any[]; corrections: number; engine: string } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-spell-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] aiSpellCheck failed:', err);
+      return null;
+    }
+  }
+
+  public async aiViralShorts(params: {
+    words: any[];
+    sentences: any[];
+    targetCount?: number;
+    fps?: number;
+  }): Promise<any[] | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-viral-shorts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] aiViralShorts failed:', err);
+      return null;
+    }
+  }
+
+  public async aiMarkers(words: any[]): Promise<{ markers: any[]; total: number } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-markers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] aiMarkers failed:', err);
+      return null;
+    }
+  }
+
+  public async formatAeTypography(text: string): Promise<{ formattedText: string; lines: string[]; aeSnippet: string } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/ae-typography`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] formatAeTypography failed:', err);
+      return null;
+    }
+  }
+
   public async getReviewQueue(jobId: string): Promise<ReviewQueueItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/review-queue/${jobId}`);

@@ -146,6 +146,8 @@ $._prismex.cloneActiveSequence = function(suffix) {
         var newSeq = app.project.sequences[numSeq - 1];
         if (newSeq) {
             newSeq.name = targetName;
+            $._prismex._previousSequenceID = origSeq.sequenceID;
+            $._prismex._lastClonedSequenceID = newSeq.sequenceID;
             try {
                 app.project.openSequence(newSeq.sequenceID);
                 app.project.activeSequence = newSeq;
@@ -159,6 +161,76 @@ $._prismex.cloneActiveSequence = function(suffix) {
         });
     } catch (err) {
         return JSON.stringify({ error: String(err) });
+    }
+};
+
+$._prismex.undoLastCut = function() {
+    try {
+        if (!app.project) return JSON.stringify({ success: false, error: "No active project" });
+        if ($._prismex._previousSequenceID) {
+            app.project.openSequence($._prismex._previousSequenceID);
+            return JSON.stringify({ success: true, restoredSequenceId: $._prismex._previousSequenceID });
+        }
+        var active = app.project.activeSequence;
+        if (active) {
+            for (var i = 0; i < app.project.sequences.numSequences; i++) {
+                var s = app.project.sequences[i];
+                if (s.sequenceID !== active.sequenceID && active.name.indexOf(s.name) === 0) {
+                    app.project.openSequence(s.sequenceID);
+                    return JSON.stringify({ success: true, restoredSequenceId: s.sequenceID });
+                }
+            }
+        }
+        return JSON.stringify({ success: false, error: "No previous sequence history" });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+$._prismex.togglePlayback = function() {
+    try {
+        app.enableQE();
+        var qeSeq = qe.project.getActiveSequence();
+        if (qeSeq && qeSeq.player) {
+            if (qeSeq.player.isPlaying) {
+                qeSeq.player.stop();
+            } else {
+                qeSeq.player.play(1);
+            }
+            return JSON.stringify({ success: true });
+        }
+    } catch (e) {}
+    return JSON.stringify({ success: false });
+};
+
+$._prismex.addTimelineMarkers = function(markersJson) {
+    try {
+        if (!app.project || !app.project.activeSequence) return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = app.project.activeSequence;
+        var markers = JSON.parse(markersJson);
+        var count = 0;
+        for (var i = 0; i < markers.length; i++) {
+            var mData = markers[i];
+            var tSec = parseFloat(mData.startSeconds || 0);
+            var durSec = parseFloat(mData.durationSeconds || 1.0);
+            var marker = seq.markers.createMarker(tSec);
+            if (marker) {
+                marker.name = mData.name || "Prismex Marker";
+                marker.comments = mData.comment || "";
+                marker.end = tSec + durSec;
+                if (mData.color === "RED") {
+                    marker.setColorByIndex(1);
+                } else if (mData.color === "GREEN") {
+                    marker.setColorByIndex(0);
+                } else if (mData.color === "BLUE") {
+                    marker.setColorByIndex(6);
+                }
+                count++;
+            }
+        }
+        return JSON.stringify({ success: true, count: count });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
     }
 };
 

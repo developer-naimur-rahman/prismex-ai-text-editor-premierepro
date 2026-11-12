@@ -26,6 +26,7 @@ from .stt.transcription_service import TranscriptionService
 from .intelligence.take_detector import TakeDetector
 from .intelligence.filler_detector import FillerDetector
 from .intelligence.smart_srt import SmartSRTSegmenter
+from .intelligence.creative_ai import CreativeAI
 from .timeline.cut_harmonizer import CutHarmonizer
 
 app = FastAPI(title="Prismex Core Companion Daemon", version="1.0.0")
@@ -102,6 +103,21 @@ class SmartSrtRequest(BaseModel):
     maxChars: int = 28
     flexible: bool = True
     useAi: bool = True
+
+class SpellCheckRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+
+class ViralShortsRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    targetCount: int = 5
+    fps: float = 24.0
+
+class MarkerAnalysisRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+
+class TypographyRequest(BaseModel):
+    text: str
 
 class ApplyReviewRequest(BaseModel):
     approvedSuggestionIds: List[str]
@@ -204,47 +220,22 @@ def apply_review_queue(job_id: str, payload: ApplyReviewRequest):
 async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutRequest):
     """Executes the master 14-stage Magic Rough Cut pipeline asynchronously."""
     try:
-        # Stage 1 & 2: Audio Extraction
+        # Stage 1 & 2: Audio Extraction across all timeline clips
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
-            "params": {"jobId": job_id, "stage": "EXTRACTING", "percent": 15.0, "message": "Extracting audio from sequence clips..."}
+            "params": {"jobId": job_id, "stage": "EXTRACTING", "percent": 15.0, "message": "Extracting & stitching audio from sequence clips..."}
         })
         
-        import os
-        media_path = "dummy.mov"
-        target_clip = None
-        for clip in req.sourceClips:
-            if clip.mediaPath and os.path.exists(clip.mediaPath):
-                media_path = clip.mediaPath
-                target_clip = clip
-                break
-        if target_clip is None and req.sourceClips:
-            target_clip = req.sourceClips[0]
-            media_path = target_clip.mediaPath
+        extracted_wav = AudioExtractor.extract_sequence_timeline_audio(req.sourceClips, req.durationSeconds)
 
-        src_in = target_clip.sourceInSeconds if (target_clip and target_clip.sourceOutSeconds > target_clip.sourceInSeconds) else 0.0
-        src_out = target_clip.sourceOutSeconds if (target_clip and target_clip.sourceOutSeconds > target_clip.sourceInSeconds) else req.durationSeconds
-        timeline_offset = target_clip.inSeconds if target_clip else 0.0
-
-        extracted_wav = AudioExtractor.extract_audio_chunk(media_path, src_in, src_out)
-
-        # Stage 3 & 4: Transcription
+        # Stage 3 & 4: Transcription across entire sequence timeline
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
             "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": "Transcribing speech with Apple Silicon MLX-Whisper..."}
         })
-        transcript_data = TranscriptionService.transcribe(extracted_wav, max(0.1, src_out - src_in))
-
-        # Apply exact timeline offset so word & sentence timestamps match Premiere Pro timeline
-        if timeline_offset > 0:
-            for w in transcript_data.get("words", []):
-                w["start_seconds"] = round(w["start_seconds"] + timeline_offset, 3)
-                w["end_seconds"] = round(w["end_seconds"] + timeline_offset, 3)
-            for s in transcript_data.get("sentences", []):
-                s["start_seconds"] = round(s["start_seconds"] + timeline_offset, 3)
-                s["end_seconds"] = round(s["end_seconds"] + timeline_offset, 3)
+        transcript_data = TranscriptionService.transcribe(extracted_wav, max(0.1, req.durationSeconds))
 
         # Stage 5 & 6: Silence Detection
         await ws_manager.broadcast({
@@ -260,10 +251,6 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             post_cut_padding_ms=req.postCutPaddingMs,
             preserve_breathing=req.preserveBreathing
         )
-        if timeline_offset > 0:
-            for sc in silence_cuts:
-                sc["start_seconds"] = round(sc["start_seconds"] + timeline_offset, 3)
-                sc["end_seconds"] = round(sc["end_seconds"] + timeline_offset, 3)
         
         all_suggestions = []
         for sc in silence_cuts:
@@ -456,6 +443,26 @@ def generate_smart_srt(req: SmartSrtRequest):
         flexible=req.flexible,
         use_ai=req.useAi,
     )
+
+@app.post("/api/v1/transcript/ai-spell-check")
+def ai_spell_check(req: SpellCheckRequest):
+    """Detects typos or speech-to-text misspellings and returns corrected words with preserved timestamps."""
+    return CreativeAI.spell_check(req.words)
+
+@app.post("/api/v1/transcript/ai-viral-shorts")
+def ai_viral_shorts(req: ViralShortsRequest):
+    """Generates 3-5 high-engagement viral vertical shorts from the transcript."""
+    return CreativeAI.detect_viral_shorts(req.words, req.sentences, req.targetCount, req.fps)
+
+@app.post("/api/v1/transcript/ai-markers")
+def ai_markers(req: MarkerAnalysisRequest):
+    """Classifies emphasis keywords (RED), B-Roll visual cues (GREEN), and icons/graphics (BLUE)."""
+    return CreativeAI.analyze_markers(req.words)
+
+@app.post("/api/v1/transcript/ae-typography")
+def format_ae_typography(req: TypographyRequest):
+    """Formats text into multi-line kinetic typography layout with ready-to-paste AE ExtendScript."""
+    return CreativeAI.format_after_effects_typography(req.text)
 
 # ----------------- WebSocket Endpoint -----------------
 
