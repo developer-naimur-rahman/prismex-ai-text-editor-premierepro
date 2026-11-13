@@ -342,6 +342,88 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async discoverShortTopics(
+    words: any[],
+    sentences: any[],
+    targetCount: number = 6,
+    customPrompt?: string
+  ): Promise<any[]> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-short-topics`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, sentences, targetCount, customPrompt })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  public async getAlternativeHooks(
+    short: any,
+    words: any[],
+    sentences: any[]
+  ): Promise<any[]> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-alternative-hooks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ short, words, sentences })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  public async getAlternativeCtas(
+    short: any,
+    words: any[],
+    sentences: any[]
+  ): Promise<any[]> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-alternative-ctas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ short, words, sentences })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  public async matchClientScript(
+    clientScript: string,
+    words: any[],
+    sentences: any[],
+    fps: number = 24.0
+  ): Promise<any | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-match-client-script`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientScript, words, sentences, fps })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public async getProjectCache(projectId: string, sequenceName: string): Promise<any | null> {
     try {
       const p = encodeURIComponent(projectId || 'default_project');

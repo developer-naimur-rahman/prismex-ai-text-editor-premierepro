@@ -121,6 +121,28 @@ class ShortRefineRequest(BaseModel):
     words: List[Dict[str, Any]] = []
     fps: float = 24.0
 
+class ShortTopicsRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    targetCount: int = 6
+    customPrompt: Optional[str] = None
+
+class AlternativeHooksRequest(BaseModel):
+    short: Dict[str, Any]
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+
+class AlternativeCtasRequest(BaseModel):
+    short: Dict[str, Any]
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+
+class ClientScriptMatchRequest(BaseModel):
+    clientScript: str
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    fps: float = 24.0
+
 class MarkerAnalysisRequest(BaseModel):
     words: List[Dict[str, Any]] = []
 
@@ -484,6 +506,26 @@ def ai_viral_shorts(req: ViralShortsRequest):
 def ai_refine_viral_short(req: ShortRefineRequest):
     """Interactively refines a short candidate via user instruction."""
     return CreativeAI.refine_short(req.short, req.instruction, req.words, req.fps)
+
+@app.post("/api/v1/transcript/ai-short-topics")
+def ai_short_topics(req: ShortTopicsRequest):
+    """Discovers high-potential Short topics with Bengali summaries, key points, and virality scores."""
+    return CreativeAI.discover_short_topics(req.words, req.sentences, req.targetCount, req.customPrompt)
+
+@app.post("/api/v1/transcript/ai-alternative-hooks")
+def ai_alternative_hooks(req: AlternativeHooksRequest):
+    """Generates 5 distinct alternative hooks tailored to the short's story body."""
+    return CreativeAI.generate_alternative_hooks(req.short, req.words, req.sentences)
+
+@app.post("/api/v1/transcript/ai-alternative-ctas")
+def ai_alternative_ctas(req: AlternativeCtasRequest):
+    """Generates 3-5 alternative closing CTAs matching the story body."""
+    return CreativeAI.generate_alternative_ctas(req.short, req.words, req.sentences)
+
+@app.post("/api/v1/transcript/ai-match-client-script")
+def ai_match_client_script(req: ClientScriptMatchRequest):
+    """Matches a client-provided script to video dialogue timestamps for 1-click sequence creation."""
+    return CreativeAI.match_client_script_to_sequence(req.clientScript, req.words, req.sentences, req.fps)
 
 @app.post("/api/v1/transcript/ai-markers")
 def ai_markers(req: MarkerAnalysisRequest):

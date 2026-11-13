@@ -5,6 +5,7 @@ and After Effects Kinetic Typography.
 
 import json
 import re
+import time
 from typing import Any, Dict, List, Optional
 from ..security.keychain_vault import KeychainVault
 
@@ -519,4 +520,356 @@ class CreativeAI:
             "formattedText": formatted_text,
             "lines": lines,
             "aeSnippet": ae_snippet
+        }
+
+    @classmethod
+    def discover_short_topics(
+        cls,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        target_count: int = 6,
+        custom_prompt: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Analyzes the full video transcript and discovers distinct potential Short topics
+        with Bengali summaries, key takeaways, virality potential, and time ranges.
+        """
+        if not words:
+            return []
+
+        full_text = " ".join(str(s.get("text", "")).strip() for s in sentences) if sentences else " ".join(str(w.get("word", "")) for w in words)
+        total_dur = float(words[-1].get("end_seconds", 0.0)) if words else 0.0
+
+        user_guidance = f"\nUser Focus Direction: {custom_prompt}\n" if custom_prompt else ""
+
+        prompt = (
+            "You are an expert video content strategist for YouTube Shorts, Reels, and TikTok.\n"
+            "Analyze the transcript of this long video and identify "
+            f"up to {target_count} distinct high-interest topics or stories that would make viral 30-60s vertical shorts.\n\n"
+            f"{user_guidance}\n"
+            "For each topic you MUST provide:\n"
+            "- A punchy title in Bengali or English\n"
+            "- A detailed summary in Bengali (সারমর্ম) explaining what is discussed and the core value\n"
+            "- 3-4 bullet key points in Bengali (কী-পয়েন্ট)\n"
+            "- An estimated duration in seconds (25 to 60s)\n"
+            "- A virality score (80 to 98)\n"
+            "- Approximate start and end seconds in the video where this story takes place\n\n"
+            f"Transcript ({round(total_dur, 1)}s total):\n{full_text[:9000]}\n\n"
+            "Return ONLY a JSON array of objects with keys:\n"
+            "[\n"
+            "  {\n"
+            '    "id": "topic_1",\n'
+            '    "topicTitle": "Topic Title",\n'
+            '    "topicSummaryBn": "বাংলায় এই টপিকের বিশদ সারমর্ম",\n'
+            '    "keyPoints": ["মূল পয়েন্ট ১", "মূল পয়েন্ট ২", "মূল পয়েন্ট ৩"],\n'
+            '    "viralityScore": 95,\n'
+            '    "estimatedDurationSeconds": 45,\n'
+            '    "startSeconds": 15.0,\n'
+            '    "endSeconds": 60.0\n'
+            "  }\n"
+            "]"
+        )
+
+        ai_res = cls._call_gemini_json(prompt)
+        if isinstance(ai_res, list) and len(ai_res) > 0:
+            return ai_res
+
+        # Local Offline Fallback: Extract semantic clusters of sentences
+        sent_list = sentences if sentences else []
+        n_sent = len(sent_list)
+        if n_sent == 0:
+            return []
+
+        chunk_size = max(3, min(8, n_sent // max(1, target_count)))
+        topics = []
+        curr_idx = 0
+        t_idx = 1
+        while curr_idx < n_sent and len(topics) < target_count:
+            end_idx = min(n_sent, curr_idx + chunk_size)
+            chunk = sent_list[curr_idx:end_idx]
+            if not chunk:
+                break
+
+            s_sec = round(float(chunk[0].get("start_seconds", 0.0)), 2)
+            e_sec = round(float(chunk[-1].get("end_seconds", 0.0)), 2)
+            c_texts = [str(s.get("text", "")).strip() for s in chunk if s.get("text")]
+            snippet = " ".join(c_texts)
+
+            first_words = snippet.split()[:6]
+            title = " ".join(first_words) if first_words else f"টপিক #{t_idx}"
+
+            topics.append({
+                "id": f"topic_{t_idx}_{int(s_sec)}",
+                "topicTitle": f"টপিক #{t_idx}: {title}",
+                "topicSummaryBn": f"এই অংশের সারমর্ম: {snippet[:140]}... এটি দর্শকদের জন্য একটি অর্থপূর্ণ শর্টস হিসেবে প্রযোজ্য।",
+                "keyPoints": [
+                    c_texts[0][:50] if len(c_texts) > 0 else "মূল আকর্ষণ ও সূচনা",
+                    c_texts[1][:50] if len(c_texts) > 1 else "ব্যাখ্যা ও ঘটনা",
+                    c_texts[-1][:50] if len(c_texts) > 2 else "উপসংহার ও শিক্ষা"
+                ],
+                "viralityScore": max(75, 96 - (t_idx * 3)),
+                "estimatedDurationSeconds": min(60, max(25, int(e_sec - s_sec))),
+                "startSeconds": s_sec,
+                "endSeconds": e_sec
+            })
+            curr_idx = end_idx
+            t_idx += 1
+
+        return topics
+
+    @classmethod
+    def generate_alternative_hooks(
+        cls,
+        short_data: Dict[str, Any],
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Generates 5 distinct alternative hooks from the video dialogue
+        specifically tailored to match the story body of the short.
+        """
+        body_text = ""
+        if isinstance(short_data.get("body"), dict):
+            body_text = short_data["body"].get("text", "")
+        elif isinstance(short_data.get("body"), str):
+            body_text = short_data.get("body", "")
+
+        prompt = (
+            "You are an elite viral video hook specialist for YouTube Shorts and TikTok.\n"
+            f"The short's main story / body is:\n\"{body_text}\"\n\n"
+            "From the long video transcript, extract 5 DISTINCT alternative viral opening hooks (0-5 seconds each).\n"
+            "Hook Types:\n"
+            "1. CURIOSITY / QUESTION (প্রশ্নবোধক ও কৌতুহল উদ্দীপক)\n"
+            "2. SHOCK / CONTRARIAN (চমকপ্রদ ও অপ্রত্যাশিত সত্য)\n"
+            "3. STORY TEASER (গল্পের রহস্যময় সূচনা)\n"
+            "4. EMOTIONAL PUNCH (অনুভূতিপূর্ণ ও গভীর উপলব্ধি)\n"
+            "5. HIGH-ENERGY STAT (সরাসরি ও প্রভাবশালী বক্তব্য)\n\n"
+            "Return ONLY a JSON array of 5 objects with keys:\n"
+            "[\n"
+            '  {"type": "CURIOSITY", "label": "কৌতুহল উদ্দীপক প্রশ্ন", "text": "Hook text", "startSeconds": 10.0, "endSeconds": 14.5},\n'
+            '  {"type": "SHOCK", "label": "চমকপ্রদ ও অপ্রত্যাশিত", "text": "Hook text", "startSeconds": 45.0, "endSeconds": 49.0},\n'
+            '  {"type": "STORY", "label": "রহস্যময় গল্প সূচনা", "text": "Hook text", "startSeconds": 120.0, "endSeconds": 124.5},\n'
+            '  {"type": "EMOTIONAL", "label": "গভীর উপলব্ধি", "text": "Hook text", "startSeconds": 180.0, "endSeconds": 184.0},\n'
+            '  {"type": "PUNCH", "label": "হাই-এনার্জি পাঞ্চ", "text": "Hook text", "startSeconds": 210.0, "endSeconds": 214.5}\n'
+            "]"
+        )
+
+        ai_res = cls._call_gemini_json(prompt)
+        if isinstance(ai_res, list) and len(ai_res) > 0:
+            return ai_res
+
+        # Heuristic fallback: pick 5 punchy sentences from sentences list
+        sent_list = sentences if sentences else []
+        candidates = []
+        labels = [
+            ("CURIOSITY", "কৌতুহল উদ্দীপক প্রশ্ন"),
+            ("SHOCK", "চমকপ্রদ ও অপ্রত্যাশিত"),
+            ("STORY", "রহস্যময় গল্প সূচনা"),
+            ("EMOTIONAL", "গভীর উপলব্ধি"),
+            ("PUNCH", "হাই-এনার্জি পাঞ্চ")
+        ]
+        step = max(1, len(sent_list) // 6)
+        for i, (htype, hlabel) in enumerate(labels):
+            idx = min(len(sent_list) - 1, (i + 1) * step)
+            if idx < len(sent_list):
+                s = sent_list[idx]
+                candidates.append({
+                    "type": htype,
+                    "label": hlabel,
+                    "text": str(s.get("text", "")).strip(),
+                    "startSeconds": round(float(s.get("start_seconds", 0.0)), 2),
+                    "endSeconds": round(float(s.get("end_seconds", 0.0)), 2),
+                    "durationSeconds": round(max(1.0, float(s.get("end_seconds", 0.0)) - float(s.get("start_seconds", 0.0))), 2)
+                })
+        return candidates
+
+    @classmethod
+    def generate_alternative_ctas(
+        cls,
+        short_data: Dict[str, Any],
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Generates 3-5 alternative closing CTAs matching the story body."""
+        body_text = short_data.get("body", {}).get("text", "") if isinstance(short_data.get("body"), dict) else str(short_data.get("body", ""))
+
+        prompt = (
+            "You are an elite video editor.\n"
+            f"The short's main story / body is:\n\"{body_text}\"\n\n"
+            "From the video transcript, extract 3 to 4 distinct closing CTA / Takeaways (3-8 seconds each).\n"
+            "CTA Types:\n"
+            "1. ENGAGEMENT QUESTION (দর্শকের মতামত জিজ্ঞাসা)\n"
+            "2. ACTIONABLE ADVICE (উপদেশ বা সিদ্ধান্তমূলক বার্তা)\n"
+            "3. INSPIRING TAKEAWAY (অনুপ্রেরণামূলক সমাপ্তি)\n"
+            "4. LOOP / TEASER (পরবর্তী অংশের কৌতূহল)\n\n"
+            "Return ONLY a JSON array of objects with keys:\n"
+            "[\n"
+            '  {"type": "ENGAGEMENT", "label": "দর্শকের মতামত", "text": "...", "startSeconds": 0.0, "endSeconds": 5.0},\n'
+            '  {"type": "ADVICE", "label": "সিদ্ধান্তমূলক বার্তা", "text": "...", "startSeconds": 0.0, "endSeconds": 5.0},\n'
+            '  {"type": "INSPIRING", "label": "অনুপ্রেরণামূলক সমাপ্তি", "text": "...", "startSeconds": 0.0, "endSeconds": 5.0}\n'
+            "]"
+        )
+
+        ai_res = cls._call_gemini_json(prompt)
+        if isinstance(ai_res, list) and len(ai_res) > 0:
+            return ai_res
+
+        # Heuristic fallback: pick sentences from the latter half of the video
+        sent_list = sentences if sentences else []
+        candidates = []
+        labels = [
+            ("ENGAGEMENT", "দর্শকের মতামত"),
+            ("ADVICE", "সিদ্ধান্তমূলক বার্তা"),
+            ("INSPIRING", "অনুপ্রেরণামূলক সমাপ্তি")
+        ]
+        total_sents = len(sent_list)
+        for i, (ctype, clabel) in enumerate(labels):
+            idx = max(0, total_sents - (i + 1) * 2)
+            if idx < total_sents:
+                s = sent_list[idx]
+                candidates.append({
+                    "type": ctype,
+                    "label": clabel,
+                    "text": str(s.get("text", "")).strip(),
+                    "startSeconds": round(float(s.get("start_seconds", 0.0)), 2),
+                    "endSeconds": round(float(s.get("end_seconds", 0.0)), 2),
+                    "durationSeconds": round(max(1.0, float(s.get("end_seconds", 0.0)) - float(s.get("start_seconds", 0.0))), 2)
+                })
+        return candidates
+
+    @classmethod
+    def match_client_script_to_sequence(
+        cls,
+        client_script: str,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        fps: float = 24.0,
+    ) -> Dict[str, Any]:
+        """
+        Takes a client-provided script or dialogue paragraphs, searches the long video
+        transcript for the exact or closest spoken phrases, and outputs a complete
+        structured Short with multi-segment cuts ready for 1-click sequence creation!
+        """
+        if not client_script or not client_script.strip():
+            return {}
+
+        total_dur = float(words[-1].get("end_seconds", 0.0)) if words else 100.0
+
+        # Ask Gemini to match client script phrases to timeline timestamps
+        prompt = (
+            "You are an expert video conform and dialogue matching specialist.\n"
+            "A client has provided a custom script for a Short/Reel.\n"
+            f"Client Script:\n\"\"\"{client_script.strip()}\"\"\"\n\n"
+            "Match the client's script phrases to the spoken dialogue in the long video transcript.\n"
+            "Break the matched parts into ordered segments: HOOK (first part), BODY (middle parts), CTA (closing part).\n"
+            "Find the closest startSeconds and endSeconds in the transcript for each segment.\n\n"
+            f"Transcript snippet:\n{' '.join(str(s.get('text', '')) for s in sentences)[:8000]}\n\n"
+            "Return ONLY a JSON object with keys:\n"
+            "{\n"
+            '  "title": "Client Script Short",\n'
+            '  "educationalLesson": "Takeaway from client script",\n'
+            '  "viralityScore": 92,\n'
+            '  "hook": {"text": "Opening hook line", "startSeconds": 0.0, "endSeconds": 5.0},\n'
+            '  "body": {"text": "Middle body explanation", "startSeconds": 5.0, "endSeconds": 40.0},\n'
+            '  "cta": {"text": "Closing takeaway line", "startSeconds": 40.0, "endSeconds": 45.0},\n'
+            '  "segments": [\n'
+            '    {"role": "HOOK", "startSeconds": 0.0, "endSeconds": 5.0, "text": "..."},\n'
+            '    {"role": "BODY", "startSeconds": 5.0, "endSeconds": 40.0, "text": "..."},\n'
+            '    {"role": "CTA", "startSeconds": 40.0, "endSeconds": 45.0, "text": "..."}\n'
+            '  ],\n'
+            '  "brollSuggestions": ["Overlay graphics", "Add zoom punch"]\n'
+            "}"
+        )
+
+        ai_res = cls._call_gemini_json(prompt)
+        if isinstance(ai_res, dict) and "segments" in ai_res:
+            segs = ai_res.get("segments", [])
+            h = ai_res.get("hook", segs[0] if segs else {})
+            b = ai_res.get("body", segs[1] if len(segs) > 1 else {})
+            c = ai_res.get("cta", segs[-1] if len(segs) > 2 else {})
+
+            total_dur_calc = sum(max(0.5, float(s.get("endSeconds", 0)) - float(s.get("startSeconds", 0))) for s in segs)
+            formatted_script = (
+                f"🎯 HOOK:\n\"{h.get('text', '')}\"\n\n"
+                f"📖 BODY / STORY:\n\"{b.get('text', '')}\"\n\n"
+                f"📢 CTA / TAKEAWAY:\n\"{c.get('text', '')}\""
+            )
+
+            return {
+                "id": f"client_short_{int(time.time())}",
+                "title": ai_res.get("title", "Client Custom Script Short"),
+                "educationalLesson": ai_res.get("educationalLesson", "Matched from client script"),
+                "viralityScore": ai_res.get("viralityScore", 92),
+                "reason": "Matched 1:1 with client provided script",
+                "hook": h,
+                "body": b,
+                "cta": c,
+                "segments": segs,
+                "totalDurationSeconds": round(total_dur_calc, 2),
+                "durationSeconds": round(total_dur_calc, 2),
+                "startSeconds": segs[0].get("startSeconds", 0.0) if segs else 0.0,
+                "endSeconds": segs[-1].get("endSeconds", 45.0) if segs else 45.0,
+                "startFrame": int(round((segs[0].get("startSeconds", 0.0) if segs else 0.0) * fps)),
+                "endFrame": int(round((segs[-1].get("endSeconds", 45.0) if segs else 45.0) * fps)),
+                "brollSuggestions": ai_res.get("brollSuggestions", ["Match client B-roll", "Add text titles"]),
+                "scriptText": formatted_script,
+                "markers": [
+                    {"seconds": 0.0, "type": "EMPHASIS", "name": "Client Hook", "comment": "Hook start"},
+                    {"seconds": 5.0, "type": "BROLL", "name": "Story Body", "comment": "Main body"},
+                    {"seconds": max(0.0, total_dur_calc - 4.0), "type": "SFX", "name": "CTA Outro", "comment": "Closing"}
+                ]
+            }
+
+        # Offline Lexical Matcher Fallback
+        script_tokens = set(re.findall(r'\w+', client_script.lower()))
+        matched_sentences = []
+        for s in sentences:
+            s_text = str(s.get("text", "")).lower()
+            s_tokens = set(re.findall(r'\w+', s_text))
+            overlap = len(script_tokens.intersection(s_tokens))
+            if overlap > 0:
+                matched_sentences.append((overlap, s))
+
+        matched_sentences.sort(key=lambda x: x[0], reverse=True)
+        top_sents = [s for _, s in matched_sentences[:5]]
+        top_sents.sort(key=lambda s: float(s.get("start_seconds", 0.0)))
+
+        if not top_sents:
+            top_sents = sentences[:3] if sentences else []
+
+        h_sent = top_sents[0] if top_sents else {"text": client_script[:50], "start_seconds": 0.0, "end_seconds": 5.0}
+        c_sent = top_sents[-1] if len(top_sents) > 1 else h_sent
+        b_sents = top_sents[1:-1] if len(top_sents) > 2 else [h_sent]
+
+        h = {"text": str(h_sent.get("text", "")).strip(), "startSeconds": round(float(h_sent.get("start_seconds", 0.0)), 2), "endSeconds": round(float(h_sent.get("end_seconds", 5.0)), 2)}
+        b = {"text": " ".join(str(s.get("text", "")).strip() for s in b_sents), "startSeconds": round(float(b_sents[0].get("start_seconds", 5.0)), 2), "endSeconds": round(float(b_sents[-1].get("end_seconds", 35.0)), 2)}
+        c = {"text": str(c_sent.get("text", "")).strip(), "startSeconds": round(float(c_sent.get("start_seconds", 35.0)), 2), "endSeconds": round(float(c_sent.get("end_seconds", 40.0)), 2)}
+
+        segs = [
+            {"role": "HOOK", "startSeconds": h["startSeconds"], "endSeconds": h["endSeconds"], "text": h["text"]},
+            {"role": "BODY", "startSeconds": b["startSeconds"], "endSeconds": b["endSeconds"], "text": b["text"]},
+            {"role": "CTA", "startSeconds": c["startSeconds"], "endSeconds": c["endSeconds"], "text": c["text"]}
+        ]
+        total_d = sum(s["endSeconds"] - s["startSeconds"] for s in segs)
+
+        return {
+            "id": f"client_short_{int(time.time())}",
+            "title": "Client Script Short",
+            "educationalLesson": "Custom story from client script",
+            "viralityScore": 90,
+            "reason": "Lexical alignment with client script",
+            "hook": h,
+            "body": b,
+            "cta": c,
+            "segments": segs,
+            "totalDurationSeconds": round(total_d, 2),
+            "durationSeconds": round(total_d, 2),
+            "startSeconds": h["startSeconds"],
+            "endSeconds": c["endSeconds"],
+            "scriptText": f"🎯 HOOK:\n\"{h['text']}\"\n\n📖 BODY:\n\"{b['text']}\"\n\n📢 CTA:\n\"{c['text']}\"",
+            "markers": [
+                {"seconds": 0.0, "type": "EMPHASIS", "name": "Hook", "comment": "Hook"},
+                {"seconds": h["endSeconds"] - h["startSeconds"], "type": "BROLL", "name": "Body", "comment": "Body"},
+                {"seconds": max(0.0, total_d - 4.0), "type": "SFX", "name": "CTA", "comment": "CTA"}
+            ]
         }
