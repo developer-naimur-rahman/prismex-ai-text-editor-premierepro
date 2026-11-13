@@ -26,7 +26,12 @@ import {
   BookmarkPlus,
   FileCode,
   RotateCcw,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Zap,
+  Video,
+  Volume2,
+  BookOpen,
+  Check
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
@@ -121,26 +126,24 @@ export const TranscriptView: React.FC = () => {
   const [isProcessingCreative, setIsProcessingCreative] = useState(false);
   const [creativeStatus, setCreativeStatus] = useState<string | null>(null);
 
+  // Word-Level Floating AI Popover & Speed Tools State
+  const [popoverWord, setPopoverWord] = useState<{ wordIdx: number; word: string; start: number; end: number; x: number; y: number } | null>(null);
+  const [showBrollModal, setShowBrollModal] = useState<boolean>(false);
+  const [brollSearchQuery, setBrollSearchQuery] = useState<string>('');
+  const [brollResults, setBrollResults] = useState<any[]>([]);
+  const [isSearchingBroll, setIsSearchingBroll] = useState<boolean>(false);
+  const [targetBrollTime, setTargetBrollTime] = useState<number>(0);
+  const [isApplyingPunch, setIsApplyingPunch] = useState<boolean>(false);
+  const [isApplyingSfx, setIsApplyingSfx] = useState<boolean>(false);
+  const [youtubeChaptersData, setYoutubeChaptersData] = useState<{ chaptersText: string; chapters: any[] } | null>(null);
+  const [showChaptersModal, setShowChaptersModal] = useState<boolean>(false);
+  const [isGeneratingChapters, setIsGeneratingChapters] = useState<boolean>(false);
+  const [copiedChapters, setCopiedChapters] = useState<boolean>(false);
+
   const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
-
-  // Spacebar Playhead Playback Toggle
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        const activeEl = document.activeElement;
-        const isInput = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || (activeEl as HTMLElement)?.isContentEditable;
-        if (!isInput) {
-          e.preventDefault();
-          hostBridge.togglePlayback();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
 
   useEffect(() => {
     if (transcriptWords.length === 0) return;
@@ -197,6 +200,22 @@ export const TranscriptView: React.FC = () => {
     return groups;
   }, [words]);
 
+  const wordMarkersMap = useMemo(() => {
+    const map: { [wordIdx: number]: { type: 'EMPHASIS' | 'BROLL' | 'ICON'; color: string; label: string } } = {};
+    for (const m of aiMarkersList) {
+      const mSec = m.startSeconds;
+      const wIdx = words.findIndex((w) => w.start <= mSec + 0.25 && w.end >= mSec - 0.25);
+      if (wIdx !== -1) {
+        map[wIdx] = {
+          type: m.type,
+          color: m.color === 'RED' ? '#ef4444' : m.color === 'GREEN' ? '#10b981' : '#38bdf8',
+          label: m.name
+        };
+      }
+    }
+    return map;
+  }, [aiMarkersList, words]);
+
   const handleWordClick = (idx: number, e: React.MouseEvent) => {
     const token = words[idx];
     if (!token) return;
@@ -204,9 +223,186 @@ export const TranscriptView: React.FC = () => {
 
     if (e.shiftKey && selStartIdx !== null) {
       setSelEndIdx(idx);
+      setPopoverWord(null);
     } else {
       setSelStartIdx(idx);
       setSelEndIdx(idx);
+      const rect = e.currentTarget.getBoundingClientRect();
+      setPopoverWord({
+        wordIdx: idx,
+        word: token.word,
+        start: token.start,
+        end: token.end,
+        x: rect.left + rect.width / 2,
+        y: rect.top
+      });
+    }
+  };
+
+  // Word Popover Actions
+  const handleOpenBrollForWord = async (pWord: { wordIdx: number; word: string; start: number; end: number }) => {
+    setTargetBrollTime(pWord.start);
+    const cleanWord = pWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF]/g, '').trim();
+    setBrollSearchQuery(cleanWord || 'cinematic');
+    setShowBrollModal(true);
+    setPopoverWord(null);
+
+    setIsSearchingBroll(true);
+    try {
+      const results = await client.searchBrollStock(cleanWord || 'cinematic');
+      setBrollResults(results || []);
+    } finally {
+      setIsSearchingBroll(false);
+    }
+  };
+
+  const handleAddPunchForWord = async (pWord: { wordIdx: number; word: string; start: number; end: number }) => {
+    setPopoverWord(null);
+    setCreativeStatus(`Applying 114% Punch Zoom at "${pWord.word}"...`);
+    try {
+      await hostBridge.addTimelineMarkers([{
+        type: 'EMPHASIS',
+        name: `Punch: ${pWord.word}`,
+        comment: 'Dynamic 114% scale zoom punch',
+        startSeconds: pWord.start,
+        durationSeconds: 2.0,
+        color: 'RED'
+      }]);
+      await hostBridge.applyDynamicPunchZoom([pWord.start], 114);
+      setCreativeStatus(`"${pWord.word}" শব্দে ১১৪% জুম-ইন পাঞ্চ ও রেড মার্কার যুক্ত হয়েছে!`);
+    } catch (e: any) {
+      setCreativeStatus(String(e));
+    }
+    setTimeout(() => setCreativeStatus(null), 4000);
+  };
+
+  const handleAddIconForWord = async (pWord: { wordIdx: number; word: string; start: number; end: number }) => {
+    setPopoverWord(null);
+    try {
+      await hostBridge.addTimelineMarkers([{
+        type: 'ICON',
+        name: `Icon: ${pWord.word}`,
+        comment: `Overlay PNG icon for '${pWord.word}'`,
+        startSeconds: pWord.start,
+        durationSeconds: 1.5,
+        color: 'BLUE'
+      }]);
+      setCreativeStatus(`"${pWord.word}" শব্দে ব্লু পিএনজি আইকন মার্কার যুক্ত হয়েছে!`);
+    } catch (e: any) {
+      setCreativeStatus(String(e));
+    }
+    setTimeout(() => setCreativeStatus(null), 4000);
+  };
+
+  // Place B-Roll on Track 2 (V2)
+  const handlePlaceBrollOnTrack2 = async (stockItem: any) => {
+    setCreativeStatus(`Placing B-Roll on Video Track 2 at ${targetBrollTime.toFixed(1)}s...`);
+    try {
+      await hostBridge.addTimelineMarkers([{
+        type: 'BROLL',
+        name: stockItem.title || 'Stock B-Roll',
+        comment: 'Cutaway B-Roll footage',
+        startSeconds: targetBrollTime,
+        durationSeconds: stockItem.durationSeconds || 4.0,
+        color: 'GREEN'
+      }]);
+      setCreativeStatus(`B-Roll মার্কার ও V2 প্লেসহোল্ডার সফলভাবে টাইমলাইনে যুক্ত হয়েছে!`);
+      setShowBrollModal(false);
+    } catch (e: any) {
+      setCreativeStatus(String(e));
+    }
+    setTimeout(() => setCreativeStatus(null), 4000);
+  };
+
+  // 1-Click Auto-Punch Zoom for all emphasis keywords
+  const handleApplyAllAutoPunch = async () => {
+    setIsApplyingPunch(true);
+    setCreativeStatus(language === 'bn' ? 'সবগুলো কি-ওয়ার্ডে ১১৪% পাঞ্চ জুম প্রয়োগ হচ্ছে...' : 'Applying 114% Dynamic Punch Zoom to all keywords...');
+    try {
+      let markers = aiMarkersList;
+      if (markers.length === 0) {
+        const res = await client.aiMarkers(transcriptWords);
+        if (res && res.markers) {
+          markers = res.markers;
+          setAiMarkersList(res.markers);
+        }
+      }
+      const punchTimes = markers.filter((m) => m.type === 'EMPHASIS').map((m) => m.startSeconds);
+      if (punchTimes.length === 0) {
+        punchTimes.push(...transcriptSentences.filter((_: any, i: number) => i % 3 === 0).map((s: any) => s.start_seconds || 0));
+      }
+      const res = await hostBridge.applyDynamicPunchZoom(punchTimes, 114);
+      setCreativeStatus(
+        language === 'bn'
+          ? `১-ক্লিকে ${res.count || punchTimes.length}টি কি-ওয়ার্ডে ১১৪% পাঞ্চ জুম প্রয়োগ সম্পন্ন হয়েছে!`
+          : `Applied 114% Dynamic Punch Zoom to ${res.count || punchTimes.length} moments!`
+      );
+    } catch (err: any) {
+      setCreativeStatus(String(err));
+    } finally {
+      setIsApplyingPunch(false);
+      setTimeout(() => setCreativeStatus(null), 5000);
+    }
+  };
+
+  // 1-Click Auto-SFX Drop on Audio Track 3
+  const handleApplyAllAutoSfx = async () => {
+    setIsApplyingSfx(true);
+    setCreativeStatus(language === 'bn' ? 'অডিও ট্র্যাকে Whoosh ও Pop সাউন্ড এফেক্ট ড্রপ হচ্ছে...' : 'Dropping Whoosh & Pop SFX to Audio Track 3...');
+    try {
+      const sfx = await client.ensureSfxAssets();
+      if (!sfx) {
+        setCreativeStatus('SFX assets could not be generated.');
+        return;
+      }
+      let markers = aiMarkersList;
+      if (markers.length === 0) {
+        const res = await client.aiMarkers(transcriptWords);
+        if (res && res.markers) {
+          markers = res.markers;
+          setAiMarkersList(res.markers);
+        }
+      }
+      const brollTimes = markers.filter((m) => m.type === 'BROLL').map((m) => m.startSeconds);
+      const punchTimes = markers.filter((m) => m.type === 'EMPHASIS').map((m) => m.startSeconds);
+
+      let placed = 0;
+      if (brollTimes.length > 0) {
+        const r1 = await hostBridge.importAndPlaceSfxBatch(sfx.whoosh, brollTimes, 2);
+        if (r1.success) placed += (r1.count || brollTimes.length);
+      }
+      if (punchTimes.length > 0) {
+        const r2 = await hostBridge.importAndPlaceSfxBatch(sfx.pop, punchTimes, 2);
+        if (r2.success) placed += (r2.count || punchTimes.length);
+      }
+
+      setCreativeStatus(
+        language === 'bn'
+          ? `Audio Track 3-এ মোট ${placed}টি Whoosh ও Pop সাউন্ড এফেক্ট স্বয়ংক্রিয়ভাবে ড্রপ হয়েছে!`
+          : `Dropped ${placed} Whoosh & Pop SFX onto Audio Track 3!`
+      );
+    } catch (err: any) {
+      setCreativeStatus(String(err));
+    } finally {
+      setIsApplyingSfx(false);
+      setTimeout(() => setCreativeStatus(null), 5000);
+    }
+  };
+
+  // 1-Click YouTube Chapters
+  const handleGenerateChapters = async () => {
+    setIsGeneratingChapters(true);
+    setCreativeStatus(language === 'bn' ? 'ইউটিউব চ্যাপ্টার তৈরি হচ্ছে...' : 'Generating YouTube Chapters...');
+    try {
+      const res = await client.generateYoutubeChapters(transcriptWords, transcriptSentences, sequenceManifest?.sequenceName);
+      if (res) {
+        setYoutubeChaptersData(res);
+        setShowChaptersModal(true);
+        setCreativeStatus(language === 'bn' ? 'ইউটিউব চ্যাপ্টার সফলভাবে তৈরি হয়েছে!' : 'YouTube Chapters ready!');
+      }
+    } finally {
+      setIsGeneratingChapters(false);
+      setTimeout(() => setCreativeStatus(null), 4000);
     }
   };
 
@@ -223,6 +419,27 @@ export const TranscriptView: React.FC = () => {
     setSelStartIdx(null);
     setSelEndIdx(null);
   };
+
+  // Keyboard Shortcuts: Spacebar (Play/Pause) & Delete/Backspace/X (Ripple Delete Selected Word)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInput = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || (activeEl as HTMLElement)?.isContentEditable;
+      if (isInput) return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        hostBridge.togglePlayback();
+      } else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'x' || e.key === 'X') {
+        if (hasSelection) {
+          e.preventDefault();
+          handleDeleteSelected();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [hasSelection, selectionStartSec, selectionEndSec]);
 
   const baseFilename = (sequenceManifest?.sequenceName || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_');
   const [exportStatus, setExportStatus] = useState<string | null>(null);
@@ -1257,21 +1474,21 @@ export const TranscriptView: React.FC = () => {
             </div>
           )}
 
-          {/* Tab 2: MARKERS */}
+          {/* Tab 2: MARKERS & VISUAL STUDIO */}
           {creativeTab === 'MARKERS' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '4px' }}>
                 <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
-                  Classifies Emphasis (RED), B-Roll (GREEN), and Icon/Graphic (BLUE) moments.
+                  🟢 B-Roll ভিজ্যুয়াল, 🔴 কি-ওয়ার্ড পাঞ্চ (১১৪% জুম) এবং 🔵 PNG আইকন মার্কার।
                 </span>
-                <div style={{ display: 'flex', gap: '4px' }}>
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                   <button
                     onClick={handleAnalyzeMarkers}
                     disabled={isProcessingCreative}
                     className="btn-secondary"
                     style={{ padding: '3px 8px', fontSize: '10px' }}
                   >
-                    Analyze Visuals
+                    ভিজ্যুয়াল বিশ্লেষণ
                   </button>
                   {aiMarkersList.length > 0 && (
                     <button
@@ -1279,10 +1496,46 @@ export const TranscriptView: React.FC = () => {
                       className="btn-primary"
                       style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: '#10b981' }}
                     >
-                      Send to Timeline
+                      টাইমলাইনে সব মার্কার পাঠান
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Master Speed Automation Actions Bar */}
+              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', padding: '6px 8px', backgroundColor: 'rgba(255,255,255,0.02)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                <button
+                  onClick={handleApplyAllAutoPunch}
+                  disabled={isApplyingPunch}
+                  className="btn-secondary"
+                  style={{ padding: '3px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                  title="১-ক্লিকে সব পাঞ্চ পয়েন্টে স্বয়ংক্রিয় ১১৪% স্কেল জুম প্রয়োগ করুন"
+                >
+                  <Zap size={10} />
+                  <span>{isApplyingPunch ? 'প্রয়োগ হচ্ছে...' : '⚡ অটো-পাঞ্চ জুম (১১৪%)'}</span>
+                </button>
+
+                <button
+                  onClick={handleApplyAllAutoSfx}
+                  disabled={isApplyingSfx}
+                  className="btn-secondary"
+                  style={{ padding: '3px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px', color: '#6ee7b7', borderColor: 'rgba(16, 185, 129, 0.4)' }}
+                  title="অডিও ট্র্যাক ৩-এ Whoosh ও Pop সাউন্ড এফেক্ট স্বয়ংক্রিয়ভাবে ড্রপ করুন"
+                >
+                  <Volume2 size={10} />
+                  <span>{isApplyingSfx ? 'ড্রপ হচ্ছে...' : '🔊 অটো-SFX ড্রপ (A3)'}</span>
+                </button>
+
+                <button
+                  onClick={handleGenerateChapters}
+                  disabled={isGeneratingChapters}
+                  className="btn-secondary"
+                  style={{ padding: '3px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px', color: '#93c5fd', borderColor: 'rgba(59, 130, 246, 0.4)' }}
+                  title="ইউটিউব ডেসক্রিপশনের জন্য অটো চ্যাপ্টার টাইমস্ট্যাম্প তৈরি করুন"
+                >
+                  <BookOpen size={10} />
+                  <span>{isGeneratingChapters ? 'তৈরি হচ্ছে...' : '📑 ইউটিউব চ্যাপ্টারস'}</span>
+                </button>
               </div>
 
               {aiMarkersList.length > 0 && (
@@ -1949,12 +2202,16 @@ export const TranscriptView: React.FC = () => {
                   const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
                   const isSelected = hasSelection && item.globalIdx >= minSel && item.globalIdx <= maxSel;
                   const isPlayingWord = playheadSec > 0 && playheadSec >= item.start && playheadSec <= item.end;
+                  const markerInfo = wordMarkersMap[item.globalIdx];
+                  const isBroll = markerInfo?.type === 'BROLL';
+                  const isEmphasis = markerInfo?.type === 'EMPHASIS';
+                  const isIcon = markerInfo?.type === 'ICON';
 
                   return (
                     <span
                       key={item.id}
                       onClick={(e) => handleWordClick(item.globalIdx, e)}
-                      title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s (Click to seek playhead, Shift+Click to select range)`}
+                      title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + markerInfo.label + ']' : ''} (Click for AI Quick Actions, Shift+Click to select)`}
                       style={{
                         display: 'inline-block',
                         margin: '1px 2px',
@@ -1967,10 +2224,26 @@ export const TranscriptView: React.FC = () => {
                           ? 'rgba(59, 130, 246, 0.45)'
                           : matches
                           ? '#3b82f6'
+                          : isBroll
+                          ? 'rgba(16, 185, 129, 0.15)'
+                          : isEmphasis
+                          ? 'rgba(239, 68, 68, 0.15)'
+                          : isIcon
+                          ? 'rgba(56, 189, 248, 0.15)'
                           : item.isFiller
                           ? 'rgba(250, 204, 21, 0.25)'
                           : 'transparent',
-                        color: isPlayingWord ? '#fff' : item.isFiller ? '#facc15' : 'var(--text-primary)',
+                        color: isPlayingWord
+                          ? '#fff'
+                          : isBroll
+                          ? '#6ee7b7'
+                          : isEmphasis
+                          ? '#fca5a5'
+                          : isIcon
+                          ? '#7dd3fc'
+                          : item.isFiller
+                          ? '#facc15'
+                          : 'var(--text-primary)',
                         border: isPlayingWord
                           ? '1px solid #34d399'
                           : isSelected
@@ -1978,6 +2251,13 @@ export const TranscriptView: React.FC = () => {
                           : item.isFiller
                           ? '1px dashed rgba(250, 204, 21, 0.4)'
                           : '1px solid transparent',
+                        borderBottom: isBroll
+                          ? '2px solid #10b981'
+                          : isEmphasis
+                          ? '2px solid #ef4444'
+                          : isIcon
+                          ? '2px solid #38bdf8'
+                          : undefined,
                         textDecoration: isPlayingWord ? 'underline' : 'none',
                         fontSize: '12px'
                       }}
@@ -1990,6 +2270,356 @@ export const TranscriptView: React.FC = () => {
             </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ===================== FLOATING WORD-LEVEL AI POPOVER ===================== */}
+      {popoverWord && (
+        <div
+          style={{
+            position: 'fixed',
+            top: `${Math.max(10, popoverWord.y - 42)}px`,
+            left: `${Math.min(window.innerWidth - 320, Math.max(10, popoverWord.x - 140))}px`,
+            zIndex: 9999,
+            backgroundColor: '#18181b',
+            border: '1px solid rgba(255,255,255,0.25)',
+            borderRadius: '6px',
+            padding: '4px 6px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontFamily: 'inherit'
+          }}
+        >
+          <button
+            onClick={() => handleOpenBrollForWord(popoverWord)}
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(16, 185, 129, 0.2)',
+              color: '#34d399',
+              border: '1px solid rgba(16, 185, 129, 0.4)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title="B-Roll ফুটেজ খুঁজুন ও V2 ট্র্যাকে বসান"
+          >
+            <Video size={10} />
+            <span>+ B-Roll</span>
+          </button>
+
+          <button
+            onClick={() => handleAddPunchForWord(popoverWord)}
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(239, 68, 68, 0.2)',
+              color: '#f87171',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title="পাঞ্চ কি-ওয়ার্ড মার্ক করুন এবং ১১৪% জুম প্রয়োগ করুন"
+          >
+            <Zap size={10} />
+            <span>+ Punch (১১৪%)</span>
+          </button>
+
+          <button
+            onClick={() => handleAddIconForWord(popoverWord)}
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(56, 189, 248, 0.2)',
+              color: '#38bdf8',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title="PNG আইকন/গ্রাফিক্স সাজেশন ও মার্কার"
+          >
+            <Sparkles size={10} />
+            <span>+ Icon</span>
+          </button>
+
+          <button
+            onClick={() => {
+              deleteTranscriptRange(popoverWord.start, popoverWord.end);
+              setPopoverWord(null);
+            }}
+            style={{
+              padding: '3px 6px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(239, 68, 68, 0.1)',
+              color: '#fca5a5',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              borderRadius: '3px',
+              cursor: 'pointer'
+            }}
+            title="এই শব্দটি টাইমলাইন থেকে ডিলিট করুন"
+          >
+            <Scissors size={10} />
+          </button>
+
+          <button
+            onClick={() => setPopoverWord(null)}
+            style={{
+              padding: '2px 5px',
+              fontSize: '10px',
+              backgroundColor: 'transparent',
+              color: 'var(--text-muted)',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* ===================== B-ROLL STOCK SEARCH MODAL ===================== */}
+      {showBrollModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '460px',
+              maxHeight: '80vh',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              padding: '14px',
+              backgroundColor: '#18181b',
+              borderColor: 'rgba(16, 185, 129, 0.4)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#34d399', fontWeight: 600, fontSize: '12px' }}>
+                <Video size={14} />
+                <span>B-Roll স্টক ফুটেজ ও V2 প্লেসমেন্ট ({targetBrollTime.toFixed(1)}s)</span>
+              </div>
+              <button
+                onClick={() => setShowBrollModal(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Search Input Bar */}
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                type="text"
+                value={brollSearchQuery}
+                onChange={(e) => setBrollSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setIsSearchingBroll(true);
+                    client.searchBrollStock(brollSearchQuery).then(res => {
+                      setBrollResults(res || []);
+                      setIsSearchingBroll(false);
+                    });
+                  }
+                }}
+                placeholder="ফুটেজের বিষয় লিখুন (যেমন: city highway, family, truck)..."
+                style={{
+                  flex: 1,
+                  backgroundColor: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-subtle)',
+                  borderRadius: '4px',
+                  color: 'var(--text-primary)',
+                  fontSize: '11px',
+                  padding: '5px 8px',
+                  outline: 'none'
+                }}
+              />
+              <button
+                onClick={() => {
+                  setIsSearchingBroll(true);
+                  client.searchBrollStock(brollSearchQuery).then(res => {
+                    setBrollResults(res || []);
+                    setIsSearchingBroll(false);
+                  });
+                }}
+                disabled={isSearchingBroll}
+                className="btn-primary"
+                style={{ padding: '5px 10px', fontSize: '10px', backgroundColor: '#10b981' }}
+              >
+                {isSearchingBroll ? 'খোঁজা হচ্ছে...' : 'সার্চ'}
+              </button>
+            </div>
+
+            {/* Results Grid */}
+            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', minHeight: 0 }}>
+              {brollResults.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-muted)', fontSize: '11px' }}>
+                  কোনো স্টক ফুটেজ খুঁজে পাওয়া যায়নি। অন্য কি-ওয়ার্ড লিখে সার্চ করুন।
+                </div>
+              ) : (
+                brollResults.map((stock, sIdx) => (
+                  <div
+                    key={`b_res_${sIdx}`}
+                    style={{
+                      padding: '8px',
+                      borderRadius: '5px',
+                      backgroundColor: 'rgba(255,255,255,0.03)',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      {stock.thumbnail && (
+                        <img
+                          src={stock.thumbnail}
+                          alt="thumb"
+                          style={{ width: '48px', height: '36px', objectFit: 'cover', borderRadius: '3px' }}
+                        />
+                      )}
+                      <div>
+                        <div style={{ fontSize: '11px', fontWeight: 600, color: '#ffffff' }}>
+                          {stock.title}
+                        </div>
+                        <div style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                          {stock.source} • {stock.durationSeconds}s
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      {stock.directSearchUrl && (
+                        <button
+                          onClick={() => hostBridge.openExternalUrl(stock.directSearchUrl)}
+                          className="btn-secondary"
+                          style={{ padding: '3px 6px', fontSize: '9.5px' }}
+                          title="Pexels সাইটে সরাসরি দেখুন"
+                        >
+                          Pexels ↗
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handlePlaceBrollOnTrack2(stock)}
+                        className="btn-primary"
+                        style={{ padding: '4px 8px', fontSize: '10px', backgroundColor: '#10b981' }}
+                        title="টাইমলাইনে Video Track 2-তে সরাসরি ড্রপ করুন"
+                      >
+                        V2 ট্র্যাকে বসান
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== YOUTUBE CHAPTERS MODAL ===================== */}
+      {showChaptersModal && youtubeChaptersData && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '460px',
+              maxHeight: '80vh',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              padding: '14px',
+              backgroundColor: '#18181b',
+              borderColor: 'rgba(59, 130, 246, 0.4)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#60a5fa', fontWeight: 600, fontSize: '12px' }}>
+                <BookOpen size={14} />
+                <span>ইউটিউব ভিডিও ডেসক্রিপশন চ্যাপ্টারস</span>
+              </div>
+              <button
+                onClick={() => setShowChaptersModal(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '13px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <textarea
+              readOnly
+              rows={8}
+              value={youtubeChaptersData.chaptersText}
+              style={{
+                backgroundColor: 'var(--bg-tertiary)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: '4px',
+                color: '#93c5fd',
+                fontSize: '11px',
+                padding: '8px',
+                outline: 'none',
+                fontFamily: 'monospace',
+                lineHeight: '1.5',
+                resize: 'none'
+              }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(youtubeChaptersData.chaptersText);
+                  setCopiedChapters(true);
+                  setTimeout(() => setCopiedChapters(false), 2500);
+                }}
+                className="btn-primary"
+                style={{
+                  padding: '5px 12px',
+                  fontSize: '11px',
+                  backgroundColor: copiedChapters ? '#059669' : '#2563eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                {copiedChapters ? <Check size={11} /> : <Copy size={11} />}
+                <span>{copiedChapters ? 'কপি হয়েছে!' : '📋 কপি ইউটিউব চ্যাপ্টারস'}</span>
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

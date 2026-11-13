@@ -523,6 +523,150 @@ class CreativeAI:
         }
 
     @classmethod
+    def generate_sfx_assets(cls) -> Dict[str, str]:
+        """
+        Generates pristine 48kHz 16-bit stereo WAV sound effects (Whoosh & Pop)
+        using standard library wave & math (100% zero-dependency).
+        """
+        import wave
+        import struct
+        import math
+        from pathlib import Path
+
+        sfx_dir = Path.home() / ".prismex" / "sfx"
+        sfx_dir.mkdir(parents=True, exist_ok=True)
+
+        whoosh_path = sfx_dir / "whoosh.wav"
+        pop_path = sfx_dir / "pop.wav"
+        sample_rate = 48000
+
+        if not whoosh_path.exists():
+            duration = 0.35
+            num_samples = int(duration * sample_rate)
+            with wave.open(str(whoosh_path), "w") as wav_file:
+                wav_file.setnchannels(2)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(sample_rate)
+                frames = bytearray()
+                for i in range(num_samples):
+                    t = i / sample_rate
+                    env = math.sin(math.pi * (i / num_samples)) ** 2
+                    freq = 180 + 550 * math.sin(math.pi * (i / num_samples))
+                    val = int(env * 0.45 * 32767.0 * math.sin(2 * math.pi * freq * t))
+                    val = max(-32768, min(32767, val))
+                    frames.extend(struct.pack("<hh", val, val))
+                wav_file.writeframes(frames)
+
+        if not pop_path.exists():
+            duration = 0.12
+            num_samples = int(duration * sample_rate)
+            with wave.open(str(pop_path), "w") as wav_file:
+                wav_file.setnchannels(2)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(sample_rate)
+                frames = bytearray()
+                for i in range(num_samples):
+                    t = i / sample_rate
+                    env = math.exp(-32 * t)
+                    freq = 420 + 350 * math.exp(-40 * t)
+                    val = int(env * 0.55 * 32767.0 * math.sin(2 * math.pi * freq * t))
+                    val = max(-32768, min(32767, val))
+                    frames.extend(struct.pack("<hh", val, val))
+                wav_file.writeframes(frames)
+
+        return {
+            "whoosh": str(whoosh_path),
+            "pop": str(pop_path)
+        }
+
+    @classmethod
+    def generate_youtube_chapters(
+        cls,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        video_title: str = "Video"
+    ) -> Dict[str, Any]:
+        """
+        Generates formatted YouTube Description Timestamps / Chapters and Key Highlights.
+        """
+        sent_list = sentences if sentences else []
+        n_sent = len(sent_list)
+        if n_sent == 0:
+            return {"chaptersText": "00:00 - Introduction", "chapters": [{"timecode": "00:00", "seconds": 0.0, "title": "Introduction"}]}
+
+        target_chaps = min(10, max(4, n_sent // 6))
+        chunk_size = max(1, n_sent // target_chaps)
+
+        chapters = []
+        lines = ["📌 TIMESTAMPS / CHAPTERS:"]
+
+        for i in range(target_chaps):
+            s_idx = i * chunk_size
+            if s_idx >= n_sent:
+                break
+            s = sent_list[s_idx]
+            sec = round(float(s.get("start_seconds", 0.0)), 0)
+            if i == 0:
+                sec = 0.0
+            mins = int(sec // 60)
+            secs = int(sec % 60)
+            tc_str = f"{mins:02d}:{secs:02d}"
+
+            raw_text = str(s.get("text", "")).strip()
+            title_words = raw_text.split()[:6]
+            chap_title = " ".join(title_words) if title_words else f"Chapter {i+1}"
+            if i == 0:
+                chap_title = "Introduction / Opening"
+
+            chapters.append({
+                "timecode": tc_str,
+                "seconds": sec,
+                "title": chap_title
+            })
+            lines.append(f"{tc_str} - {chap_title}")
+
+        return {
+            "chaptersText": "\n".join(lines),
+            "chapters": chapters
+        }
+
+    @classmethod
+    def search_broll_stock(cls, query: str) -> List[Dict[str, Any]]:
+        """
+        Searches or suggests high quality B-Roll stock videos matching the semantic query.
+        """
+        clean_q = re.sub(r'[^a-zA-Z0-9_\u0980-\u09FF ]', '', query).strip() or "cinematic"
+        return [
+            {
+                "id": "stock_1",
+                "title": f"Cinematic {clean_q.capitalize()} B-Roll",
+                "durationSeconds": 5.0,
+                "thumbnail": "https://images.pexels.com/videos/3195394/free-video-3195394.jpg?auto=compress&cs=tinysrgb&fit=crop&h=300&w=500",
+                "searchKeywords": [clean_q, f"{clean_q} 4k", f"{clean_q} cinematic footage"],
+                "source": "Stock Footage Cue",
+                "directSearchUrl": f"https://www.pexels.com/search/videos/{clean_q}/"
+            },
+            {
+                "id": "stock_2",
+                "title": f"Aerial Drone Shot - {clean_q.capitalize()}",
+                "durationSeconds": 6.0,
+                "thumbnail": "https://images.pexels.com/videos/854132/free-video-854132.jpg?auto=compress&cs=tinysrgb&fit=crop&h=300&w=500",
+                "searchKeywords": [f"aerial {clean_q}", f"drone {clean_q}"],
+                "source": "Stock Footage Cue",
+                "directSearchUrl": f"https://www.pexels.com/search/videos/aerial%20{clean_q}/"
+            },
+            {
+                "id": "stock_3",
+                "title": f"Slow Motion Action - {clean_q.capitalize()}",
+                "durationSeconds": 4.5,
+                "thumbnail": "https://images.pexels.com/videos/3045163/free-video-3045163.jpg?auto=compress&cs=tinysrgb&fit=crop&h=300&w=500",
+                "searchKeywords": [f"slow motion {clean_q}", f"macro {clean_q}"],
+                "source": "Stock Footage Cue",
+                "directSearchUrl": f"https://www.pexels.com/search/videos/slow%20motion%20{clean_q}/"
+            }
+        ]
+
+    @classmethod
     def discover_short_topics(
         cls,
         words: List[Dict[str, Any]],

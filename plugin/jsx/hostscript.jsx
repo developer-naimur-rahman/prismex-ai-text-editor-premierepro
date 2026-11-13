@@ -241,6 +241,249 @@ $._prismex.addTimelineMarkers = function(markersJson) {
 };
 
 /**
+ * Imports a media file (B-Roll or SFX) and places it on a specific video/audio track at targetTimeSec.
+ */
+$._prismex.importAndPlaceClipOnTrack = function(filePath, targetTimeSec, targetTrackIndex, trackType, durationSec) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+
+        var seq = app.project.activeSequence;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+        var tSec = Math.max(0, parseFloat(targetTimeSec) || 0);
+        var durSec = parseFloat(durationSec) || 4.0;
+        var trkIdx = parseInt(targetTrackIndex) || (trackType === "audio" ? 2 : 1);
+        var isAudio = (trackType === "audio");
+
+        // 1. Get or create bin for Prismex Media
+        var root = app.project.rootItem;
+        var binName = isAudio ? "_Prismex_SFX" : "_Prismex_Broll";
+        var targetBin = null;
+        for (var b = 0; b < root.children.numItems; b++) {
+            var child = root.children[b];
+            if (child.type === 2 && child.name === binName) {
+                targetBin = child;
+                break;
+            }
+        }
+        if (!targetBin) {
+            targetBin = root.createBin(binName);
+        }
+
+        // 2. Check if already imported or import now
+        var mediaFile = new File(filePath);
+        if (!mediaFile.exists) {
+            return JSON.stringify({ success: false, error: "File does not exist: " + filePath });
+        }
+
+        var projectItem = null;
+        for (var bi = 0; bi < targetBin.children.numItems; bi++) {
+            var item = targetBin.children[bi];
+            if (item.getMediaPath && item.getMediaPath() === mediaFile.fsName) {
+                projectItem = item;
+                break;
+            }
+        }
+
+        if (!projectItem) {
+            var beforeCount = targetBin.children.numItems;
+            app.project.importFiles([mediaFile.fsName], 1, targetBin, 0);
+            if (targetBin.children.numItems > beforeCount) {
+                projectItem = targetBin.children[targetBin.children.numItems - 1];
+            }
+        }
+
+        if (!projectItem) {
+            return JSON.stringify({ success: false, error: "Could not import projectItem into Premiere" });
+        }
+
+        // 3. Set In and Out points for desired duration
+        try {
+            var inT = new Time();
+            inT.ticks = "0";
+            var outT = new Time();
+            outT.ticks = Math.round(durSec * TICKS).toFixed(0);
+            projectItem.setInPoint(inT, 4);
+            projectItem.setOutPoint(outT, 4);
+        } catch (ioErr) {}
+
+        // 4. Overwrite clip onto target track
+        var targetPosTicks = zeroTicks + Math.round(tSec * TICKS);
+        var tlTimeObj = new Time();
+        tlTimeObj.ticks = targetPosTicks.toFixed(0);
+
+        if (isAudio) {
+            if (trkIdx >= seq.audioTracks.numTracks) trkIdx = seq.audioTracks.numTracks - 1;
+            var aTrack = seq.audioTracks[trkIdx];
+            if (aTrack && !aTrack.isLocked()) {
+                aTrack.overwriteClip(projectItem, tlTimeObj);
+            }
+        } else {
+            if (trkIdx >= seq.videoTracks.numTracks) trkIdx = seq.videoTracks.numTracks - 1;
+            var vTrack = seq.videoTracks[trkIdx];
+            if (vTrack && !vTrack.isLocked()) {
+                vTrack.overwriteClip(projectItem, tlTimeObj);
+            }
+        }
+
+        // 5. Clear projectItem in/out
+        try {
+            projectItem.clearInPoint();
+            projectItem.clearOutPoint();
+        } catch (clErr) {}
+
+        return JSON.stringify({
+            success: true,
+            filePath: filePath,
+            targetTimeSec: tSec,
+            trackIndex: trkIdx,
+            bin: binName
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+/**
+ * Applies Dynamic Punch Jump Zoom (e.g. 112% scale) at emphasis keyword timestamps.
+ */
+$._prismex.applyDynamicPunchZoom = function(punchTimesJson, zoomPercent) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+
+        var seq = app.project.activeSequence;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+        var zoomVal = parseFloat(zoomPercent) || 114.0;
+
+        var punchTimes = [];
+        try {
+            punchTimes = (typeof punchTimesJson === "string") ? JSON.parse(punchTimesJson) : punchTimesJson;
+        } catch (e) {
+            punchTimes = [];
+        }
+
+        if (!punchTimes || punchTimes.length === 0) {
+            return JSON.stringify({ success: true, count: 0 });
+        }
+
+        var v1Track = seq.videoTracks[0];
+        if (!v1Track || v1Track.isLocked()) {
+            return JSON.stringify({ success: false, error: "Video Track 1 is locked or missing" });
+        }
+
+        // Apply scale punch to clips that match punch time
+        var appliedCount = 0;
+        for (var c = 0; c < v1Track.clips.numItems; c++) {
+            var clip = v1Track.clips[c];
+            var cStartSec = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
+            var cEndSec = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
+
+            for (var pt = 0; pt < punchTimes.length; pt++) {
+                var pTime = parseFloat(punchTimes[pt]);
+                if (pTime >= cStartSec - 0.1 && pTime <= cStartSec + 1.5) {
+                    // This clip starts around the punch word: set Motion Scale
+                    for (var compIdx = 0; compIdx < clip.components.numItems; compIdx++) {
+                        var comp = clip.components[compIdx];
+                        if (comp.displayName === "Motion" || comp.name === "Motion") {
+                            for (var propIdx = 0; propIdx < comp.properties.numItems; propIdx++) {
+                                var prop = comp.properties[propIdx];
+                                if (prop.displayName === "Scale" || prop.name === "Scale") {
+                                    prop.setValue(zoomVal, true);
+                                    appliedCount++;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        return JSON.stringify({ success: true, count: appliedCount, zoomPercent: zoomVal });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+/**
+ * Places SFX audio clips (Whoosh / Pop) onto Audio Track 3 at the given timestamps.
+ */
+$._prismex.importAndPlaceSfxBatch = function(sfxFilePath, timesJson, trackIndex) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+
+        var seq = app.project.activeSequence;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+        var trkIdx = parseInt(trackIndex) || 2; // Default A3 (0-indexed: 2)
+
+        var times = [];
+        try {
+            times = (typeof timesJson === "string") ? JSON.parse(timesJson) : timesJson;
+        } catch (e) {
+            times = [];
+        }
+
+        if (!times || times.length === 0) {
+            return JSON.stringify({ success: true, count: 0 });
+        }
+
+        var sfxFile = new File(sfxFilePath);
+        if (!sfxFile.exists) {
+            return JSON.stringify({ success: false, error: "SFX file not found: " + sfxFilePath });
+        }
+
+        // Get or create _Prismex_SFX bin
+        var root = app.project.rootItem;
+        var targetBin = null;
+        for (var b = 0; b < root.children.numItems; b++) {
+            var child = root.children[b];
+            if (child.type === 2 && child.name === "_Prismex_SFX") {
+                targetBin = child;
+                break;
+            }
+        }
+        if (!targetBin) targetBin = root.createBin("_Prismex_SFX");
+
+        // Import SFX item
+        app.project.importFiles([sfxFile.fsName], 1, targetBin, 0);
+        var projectItem = targetBin.children[targetBin.children.numItems - 1];
+        if (!projectItem) return JSON.stringify({ success: false, error: "Could not import SFX" });
+
+        if (trkIdx >= seq.audioTracks.numTracks) trkIdx = seq.audioTracks.numTracks - 1;
+        var aTrack = seq.audioTracks[trkIdx];
+        if (!aTrack || aTrack.isLocked()) {
+            return JSON.stringify({ success: false, error: "Audio track is locked or unavailable" });
+        }
+
+        var placedCount = 0;
+        for (var i = 0; i < times.length; i++) {
+            var tSec = parseFloat(times[i]);
+            var tTicks = zeroTicks + Math.round(tSec * TICKS);
+            var tObj = new Time();
+            tObj.ticks = tTicks.toFixed(0);
+            try {
+                aTrack.overwriteClip(projectItem, tObj);
+                placedCount++;
+            } catch (pErr) {}
+        }
+
+        return JSON.stringify({ success: true, count: placedCount, trackIndex: trkIdx });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+/**
  * Merges overlapping/adjacent cut intervals and sorts ascending (left-to-right).
  */
 $._prismex._mergeCutsAscending = function(cuts) {

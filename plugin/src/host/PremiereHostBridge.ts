@@ -286,6 +286,75 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Imports a media file (B-Roll or SFX) and places it onto a specific track in Premiere Pro at targetTimeSec.
+   */
+  public async importAndPlaceClipOnTrack(
+    filePath: string,
+    targetTimeSec: number,
+    targetTrackIndex: number = 1,
+    trackType: 'video' | 'audio' = 'video',
+    durationSec: number = 4.0
+  ): Promise<{ success: boolean; bin?: string; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, bin: '_Prismex_Broll' };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const safePath = filePath.replace(/\\/g, '/');
+      const res = await this.evalScript(
+        `$._prismex.importAndPlaceClipOnTrack("${safePath}", ${targetTimeSec}, ${targetTrackIndex}, "${trackType}", ${durationSec})`
+      );
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
+   * Applies Dynamic Punch Zoom (114% scale) at emphasis keyword timestamps on Video Track 1.
+   */
+  public async applyDynamicPunchZoom(
+    punchTimes: number[],
+    zoomPercent: number = 114.0
+  ): Promise<{ success: boolean; count?: number; zoomPercent?: number; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, count: punchTimes.length, zoomPercent };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const res = await this.evalScript(
+        `$._prismex.applyDynamicPunchZoom('${JSON.stringify(punchTimes)}', ${zoomPercent})`
+      );
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
+   * Imports and places Whoosh / Pop SFX onto Audio Track 3 at all marker timestamps.
+   */
+  public async importAndPlaceSfxBatch(
+    sfxFilePath: string,
+    times: number[],
+    trackIndex: number = 2
+  ): Promise<{ success: boolean; count?: number; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, count: times.length };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const safePath = sfxFilePath.replace(/\\/g, '/');
+      const res = await this.evalScript(
+        `$._prismex.importAndPlaceSfxBatch("${safePath}", '${JSON.stringify(times)}', ${trackIndex})`
+      );
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
    * Opens a URL in the user's default system browser (Chrome/Safari).
    */
   public openExternalUrl(url: string): void {

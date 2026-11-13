@@ -342,6 +342,52 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async searchBrollStock(query: string): Promise<any[]> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/stock/broll-search`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  public async ensureSfxAssets(): Promise<{ whoosh: string; pop: string } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/sfx/ensure-assets`, {
+        method: 'POST'
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async generateYoutubeChapters(words: any[], sentences: any[], videoTitle?: string): Promise<{ chaptersText: string; chapters: any[] } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-youtube-chapters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, sentences, videoTitle })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public async discoverShortTopics(
     words: any[],
     sentences: any[],

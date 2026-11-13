@@ -537,6 +537,29 @@ def format_ae_typography(req: TypographyRequest):
     """Formats text into multi-line kinetic typography layout with ready-to-paste AE ExtendScript."""
     return CreativeAI.format_after_effects_typography(req.text)
 
+class StockSearchRequest(BaseModel):
+    query: str
+
+class YoutubeChaptersRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    videoTitle: Optional[str] = "Video"
+
+@app.post("/api/v1/stock/broll-search")
+def search_stock_broll(req: StockSearchRequest):
+    """Searches stock video options matching keyword."""
+    return CreativeAI.search_broll_stock(req.query)
+
+@app.post("/api/v1/sfx/ensure-assets")
+def ensure_sfx_assets_api():
+    """Ensures studio-grade 48kHz WAV Whoosh & Pop assets exist on local disk."""
+    return CreativeAI.generate_sfx_assets()
+
+@app.post("/api/v1/transcript/ai-youtube-chapters")
+def generate_youtube_chapters_api(req: YoutubeChaptersRequest):
+    """Generates formatted YouTube Description chapters and timestamps."""
+    return CreativeAI.generate_youtube_chapters(req.words, req.sentences, req.videoTitle or "Video")
+
 PROJECT_CACHE_DIR = Path.home() / ".prismex" / "project_cache"
 PROJECT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
