@@ -5,6 +5,7 @@
 
 import { SequenceManifest, SourceClipManifest } from '../types';
 import { TimecodeConverter } from './TimecodeConverter';
+import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
 export class PremiereHostBridge {
   private static instance: PremiereHostBridge;
@@ -298,7 +299,24 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Gets the active project's parent directory, or defaults to ~/Documents/PrismexExports.
+   */
+  public async getProjectFolderPath(): Promise<string> {
+    if (this.isCEP) {
+      try {
+        await this.ensureCEPScriptLoaded();
+        const res = await this.evalScript('$._prismex.getProjectFolderPath()');
+        if (res && res !== 'EvalScript error.' && res !== 'undefined' && res.trim() !== '') {
+          return res.trim();
+        }
+      } catch (e) {}
+    }
+    return '';
+  }
+
+  /**
    * Automatically saves all 3 files (SRT, TXT, JSON) directly into the Premiere Pro project directory.
+   * Employs a robust 4-tier persistence waterfall: Node.js fs -> CEP fs -> Local Daemon API -> Browser Blob.
    */
   public async saveAllProjectFiles(
     baseFilename: string,
@@ -306,22 +324,128 @@ export class PremiereHostBridge {
     txtContent: string,
     jsonContent: string
   ): Promise<{ success: boolean; folder?: string; files?: string[]; error?: string }> {
-    if (this.isCEP) {
-      try {
-        const escapedBase = baseFilename.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const escapedSrt = encodeURIComponent(srtContent || '');
-        const escapedTxt = encodeURIComponent(txtContent || '');
-        const escapedJson = encodeURIComponent(jsonContent || '');
+    const safeBase = (baseFilename || 'captions').replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, '_');
+    let folder = await this.getProjectFolderPath();
 
-        const res = await this.evalScript(
-          `$._prismex.saveProjectFiles('${escapedBase}', decodeURIComponent('${escapedSrt}'), decodeURIComponent('${escapedTxt}'), decodeURIComponent('${escapedJson}'))`
-        );
-        return JSON.parse(res);
-      } catch (e: any) {
-        return { success: false, error: String(e) };
+    // TIER 1: Node.js fs inside CEP Panel (Instant direct disk write with zero size/character limits)
+    try {
+      const req = (window as any).require;
+      if (req) {
+        const fs = req('fs');
+        const path = req('path');
+        if (fs && path) {
+          if (!folder || folder === '/tmp') {
+            const home = (window as any).process?.env?.HOME || '/tmp';
+            folder = path.join(home, 'Documents', 'PrismexExports');
+          }
+          if (!fs.existsSync(folder)) {
+            fs.mkdirSync(folder, { recursive: true });
+          }
+
+          const srtPath = path.join(folder, `${safeBase}.srt`);
+          const txtPath = path.join(folder, `${safeBase}.txt`);
+          const jsonPath = path.join(folder, `${safeBase}.json`);
+
+          if (srtContent) fs.writeFileSync(srtPath, srtContent, 'utf8');
+          if (txtContent) fs.writeFileSync(txtPath, txtContent, 'utf8');
+          if (jsonContent) fs.writeFileSync(jsonPath, jsonContent, 'utf8');
+
+          return {
+            success: true,
+            folder,
+            files: [srtPath, txtPath, jsonPath]
+          };
+        }
       }
+    } catch (nodeErr) {
+      console.warn('[PremiereHostBridge] Tier 1 Node.js fs failed, falling back:', nodeErr);
     }
-    return { success: true, folder: 'Browser', files: [`${baseFilename}.srt`, `${baseFilename}.txt`, `${baseFilename}.json`] };
+
+    // TIER 2: Adobe CEP Built-in Filesystem (window.cep.fs)
+    try {
+      const cepFs = (window as any).cep?.fs;
+      if (cepFs && cepFs.writeFile) {
+        if (!folder || folder === '/tmp') folder = '/tmp/PrismexExports';
+        try { cepFs.makedir(folder); } catch (e) {}
+
+        const srtPath = `${folder}/${safeBase}.srt`;
+        const txtPath = `${folder}/${safeBase}.txt`;
+        const jsonPath = `${folder}/${safeBase}.json`;
+        const utf8 = (window as any).cep?.encoding?.UTF8 || 1;
+
+        let anySaved = false;
+        if (srtContent) {
+          const res = cepFs.writeFile(srtPath, srtContent, utf8);
+          if (res && res.err === 0) anySaved = true;
+        }
+        if (txtContent) {
+          const res = cepFs.writeFile(txtPath, txtContent, utf8);
+          if (res && res.err === 0) anySaved = true;
+        }
+        if (jsonContent) {
+          const res = cepFs.writeFile(jsonPath, jsonContent, utf8);
+          if (res && res.err === 0) anySaved = true;
+        }
+
+        if (anySaved) {
+          return {
+            success: true,
+            folder,
+            files: [srtPath, txtPath, jsonPath]
+          };
+        }
+      }
+    } catch (cepErr) {
+      console.warn('[PremiereHostBridge] Tier 2 CEP fs failed, falling back:', cepErr);
+    }
+
+    // TIER 3: Local Companion Daemon (Python FastApi on 127.0.0.1:49152)
+    try {
+      const client = PrismexDaemonClient.getInstance();
+      const daemonRes = await client.saveProjectFiles(folder, safeBase, srtContent, txtContent, jsonContent);
+      if (daemonRes && daemonRes.success) {
+        return daemonRes;
+      }
+    } catch (daemonErr) {
+      console.warn('[PremiereHostBridge] Tier 3 Local Daemon failed, falling back:', daemonErr);
+    }
+
+    // TIER 4: Browser Blob Fallback
+    try {
+      const triggerDownload = (filename: string, content: string) => {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      };
+
+      const savedNames: string[] = [];
+      if (srtContent) {
+        triggerDownload(`${safeBase}.srt`, srtContent);
+        savedNames.push(`${safeBase}.srt`);
+      }
+      if (txtContent) {
+        triggerDownload(`${safeBase}.txt`, txtContent);
+        savedNames.push(`${safeBase}.txt`);
+      }
+      if (jsonContent) {
+        triggerDownload(`${safeBase}.json`, jsonContent);
+        savedNames.push(`${safeBase}.json`);
+      }
+
+      return {
+        success: savedNames.length > 0,
+        folder: 'Downloads',
+        files: savedNames
+      };
+    } catch (browserErr: any) {
+      return { success: false, error: String(browserErr) };
+    }
   }
 
   /**
@@ -337,10 +461,22 @@ export class PremiereHostBridge {
       try {
         const dialogRes = cepFs.showSaveDialogEx('Export File', '', extensions, defaultFilename);
         if (dialogRes && dialogRes.err === 0 && dialogRes.data) {
-          const writeRes = cepFs.writeFile(dialogRes.data, content);
+          const utf8 = (window as any)?.cep?.encoding?.UTF8 || 1;
+          const writeRes = cepFs.writeFile(dialogRes.data, content, utf8);
           if (writeRes && writeRes.err === 0) {
             return { saved: true, path: dialogRes.data };
           }
+          // Try Node.js fs fallback if cepFs returned non-zero
+          try {
+            const req = (window as any).require;
+            if (req) {
+              const fs = req('fs');
+              if (fs) {
+                fs.writeFileSync(dialogRes.data, content, 'utf8');
+                return { saved: true, path: dialogRes.data };
+              }
+            }
+          } catch (ne) {}
           return { saved: false, error: `Write error: ${writeRes?.err}` };
         }
         return { saved: false };
@@ -348,6 +484,22 @@ export class PremiereHostBridge {
         return { saved: false, error: String(e) };
       }
     }
+
+    // Node.js direct fallback
+    try {
+      const req = (window as any).require;
+      if (req) {
+        const fs = req('fs');
+        const path = req('path');
+        if (fs && path) {
+          const exportDir = path.join(process.env.HOME || '/tmp', 'Documents', 'PrismexExports');
+          if (!fs.existsSync(exportDir)) fs.mkdirSync(exportDir, { recursive: true });
+          const filePath = path.join(exportDir, defaultFilename);
+          fs.writeFileSync(filePath, content, 'utf8');
+          return { saved: true, path: filePath };
+        }
+      }
+    } catch (ne) {}
 
     // Browser / Fallback
     try {

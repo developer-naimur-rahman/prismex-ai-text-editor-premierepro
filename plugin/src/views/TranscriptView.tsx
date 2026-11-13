@@ -602,10 +602,11 @@ export const TranscriptView: React.FC = () => {
     setExportStatus(language === 'bn' ? 'প্রজেক্ট ফোল্ডারে সেভ হচ্ছে...' : 'Saving to project folder...');
     const res = await hostBridge.saveAllProjectFiles(baseFilename, srt, txt, jsonStr);
     if (res.success) {
+      const folderName = res.folder ? res.folder.split('/').pop() || res.folder : '';
       setExportStatus(
         language === 'bn'
-          ? `৩টি ফাইল প্রজেক্টে সেভ হয়েছে! (.srt, .txt, .json)`
-          : `Saved 3 files to project directory! (.srt, .txt, .json)`
+          ? `৩টি ফাইল (${baseFilename}.srt, .txt, .json) সফলভাবে সেভ হয়েছে! [${folderName}]`
+          : `Saved 3 files (${baseFilename}.srt, .txt, .json) successfully! [${folderName}]`
       );
     } else {
       setExportStatus(res.error || 'Failed to save files');

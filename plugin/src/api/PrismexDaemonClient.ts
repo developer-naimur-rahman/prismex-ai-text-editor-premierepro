@@ -376,6 +376,37 @@ export class PrismexDaemonClient {
     }
   }
 
+  /**
+   * Saves SRT, TXT, and JSON files to project directory via the daemon backend.
+   */
+  public async saveProjectFiles(
+    folderPath: string,
+    baseFilename: string,
+    srtContent?: string,
+    txtContent?: string,
+    jsonContent?: string
+  ): Promise<{ success: boolean; folder?: string; files?: string[]; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/files/save-project-files`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath: folderPath || undefined,
+          baseFilename: baseFilename || 'captions',
+          srtContent: srtContent || '',
+          txtContent: txtContent || '',
+          jsonContent: jsonContent || ''
+        })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return { success: false, error: `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
   public connectWebSocket(onEvent: (event: any) => void): () => void {
     this.eventListeners.push(onEvent);
 

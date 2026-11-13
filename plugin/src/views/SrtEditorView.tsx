@@ -62,7 +62,7 @@ export const SrtEditorView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'CARDS' | 'RAW'>('CARDS');
 
-  const baseFilename = (sequenceManifest?.sequenceName || 'captions').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const baseFilename = (sequenceManifest?.sequenceName || 'captions').replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, '_');
 
   // Auto-generate cues if transcript words exist and cues are empty
   useEffect(() => {
@@ -230,18 +230,19 @@ export const SrtEditorView: React.FC = () => {
 
   // Master 1-Click Save All 3 (SRT, TXT, JSON) directly to project directory
   const handleSaveAll3ToProject = async () => {
-    setStatusMessage(language === 'bn' ? 'প্রজেক্ট ফোল্ডারে সেভ হচ্ছে...' : 'Saving to project folder...');
+    setStatusMessage(language === 'bn' ? 'ফাইলগুলো সেভ হচ্ছে...' : 'Saving files...');
     const res = await hostBridge.saveAllProjectFiles(baseFilename, rawSrtText, rawTxtText, rawJsonText);
     if (res.success) {
+      const folderName = res.folder ? res.folder.split('/').pop() || res.folder : '';
       setStatusMessage(
         language === 'bn'
-          ? `৩টি ফাইল প্রজেক্ট ফোল্ডারে সেভ হয়েছে! (${baseFilename}.srt, .txt, .json)`
-          : `Saved 3 files to project directory! (${baseFilename}.srt, .txt, .json)`
+          ? `৩টি ফাইলই (${baseFilename}.srt, .txt, .json) সফলভাবে সেভ হয়েছে! [${folderName}]`
+          : `Saved 3 files (${baseFilename}.srt, .txt, .json) successfully! [${folderName}]`
       );
     } else {
-      setStatusMessage(res.error || 'Failed to save files');
+      setStatusMessage(language === 'bn' ? `সেভ করতে সমস্যা: ${res.error}` : `Failed to save: ${res.error}`);
     }
-    setTimeout(() => setStatusMessage(null), 4000);
+    setTimeout(() => setStatusMessage(null), 5000);
   };
 
   const handleSendToPremiereCaptions = async () => {

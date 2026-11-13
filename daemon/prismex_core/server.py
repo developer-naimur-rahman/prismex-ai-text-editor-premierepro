@@ -9,6 +9,7 @@ import asyncio
 import json
 import uuid
 import time
+import re
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
@@ -531,6 +532,50 @@ def save_project_cache(payload: ProjectCachePayload):
         return {"saved": True, "key": key}
     except Exception as e:
         return {"saved": False, "error": str(e)}
+
+class SaveFilesRequest(BaseModel):
+    folderPath: Optional[str] = None
+    baseFilename: str
+    srtContent: Optional[str] = ""
+    txtContent: Optional[str] = ""
+    jsonContent: Optional[str] = ""
+
+@app.post("/api/v1/files/save-project-files")
+def save_project_files_api(req: SaveFilesRequest):
+    """Reliably saves SRT, TXT, and JSON files to project directory or default exports directory."""
+    try:
+        folder = None
+        if req.folderPath and req.folderPath.strip() and req.folderPath != "/tmp":
+            folder = Path(req.folderPath.strip())
+        else:
+            folder = Path.home() / "Documents" / "PrismexExports"
+
+        folder.mkdir(parents=True, exist_ok=True)
+        safe_base = re.sub(r'[^a-zA-Z0-9_\u0980-\u09FF-]', '_', req.baseFilename or 'captions')
+
+        saved_files = []
+        if req.srtContent:
+            srt_path = folder / f"{safe_base}.srt"
+            srt_path.write_text(req.srtContent, encoding="utf-8")
+            saved_files.append(str(srt_path))
+
+        if req.txtContent:
+            txt_path = folder / f"{safe_base}.txt"
+            txt_path.write_text(req.txtContent, encoding="utf-8")
+            saved_files.append(str(txt_path))
+
+        if req.jsonContent:
+            json_path = folder / f"{safe_base}.json"
+            json_path.write_text(req.jsonContent, encoding="utf-8")
+            saved_files.append(str(json_path))
+
+        return {
+            "success": len(saved_files) > 0,
+            "folder": str(folder),
+            "files": saved_files
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 # ----------------- WebSocket Endpoint -----------------
 
