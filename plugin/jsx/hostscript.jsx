@@ -135,7 +135,9 @@ $._prismex.cloneActiveSequence = function(suffix) {
 
         var origSeq = app.project.activeSequence;
         var origName = origSeq.name;
-        var targetName = origName + (suffix || "_PrismexRoughCut");
+        // Strip previous repetitive Prismex suffixes to prevent name stacking
+        var cleanBaseName = origName.replace(/(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+/g, "");
+        var targetName = cleanBaseName + (suffix || "_PrismexRoughCut");
 
         var cloned = origSeq.clone();
         if (!cloned) {

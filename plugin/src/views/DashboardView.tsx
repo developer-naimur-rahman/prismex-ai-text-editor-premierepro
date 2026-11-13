@@ -87,24 +87,34 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
         {sequenceManifest ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '10px' }}>
-            <div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '10px' }}>
+            <div style={{ minWidth: 0, overflow: 'hidden' }}>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Sequence Name</div>
-              <div style={{ fontWeight: 600, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div 
+                title={sequenceManifest.sequenceName}
+                style={{ 
+                  fontWeight: 600, 
+                  fontSize: '11px', 
+                  overflow: 'hidden', 
+                  textOverflow: 'ellipsis', 
+                  whiteSpace: 'nowrap',
+                  maxWidth: '100%' 
+                }}
+              >
                 {sequenceManifest.sequenceName}
               </div>
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Duration</div>
               <div style={{ fontWeight: 600, fontSize: '11px' }}>
                 {TimecodeConverter.formatTimecode(sequenceManifest.durationSeconds, sequenceManifest.fps)}
               </div>
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Framerate</div>
               <div style={{ fontWeight: 600, fontSize: '11px' }}>{sequenceManifest.fps} fps</div>
             </div>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Audio Tracks</div>
               <div style={{ fontWeight: 600, fontSize: '11px' }}>{sequenceManifest.sourceClips.length} dialogue track items</div>
             </div>
@@ -125,9 +135,21 @@ export const DashboardView: React.FC = () => {
           </div>
           
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '11px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Cloned Sequence:</span>
-              <span style={{ fontWeight: 600 }}>{lastReport.clonedSequenceName}</span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span style={{ color: 'var(--text-secondary)', flexShrink: 0 }}>Cloned Sequence:</span>
+              <span 
+                title={lastReport.clonedSequenceName}
+                style={{ 
+                  fontWeight: 600, 
+                  overflow: 'hidden', 
+                  textOverflow: 'ellipsis', 
+                  whiteSpace: 'nowrap',
+                  maxWidth: '65%',
+                  textAlign: 'right'
+                }}
+              >
+                {lastReport.clonedSequenceName}
+              </span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span style={{ color: 'var(--text-secondary)' }}>Time Saved:</span>
