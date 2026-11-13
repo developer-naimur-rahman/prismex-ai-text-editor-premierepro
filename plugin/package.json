@@ -6,7 +6,7 @@
   "main": "dist/index.html",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && cp -R dist/* \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/\" && cp -R dist/* \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/\" && cp jsx/hostscript.jsx \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/jsx/\" && cp jsx/hostscript.jsx \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/jsx/\"",
     "preview": "vite preview",
     "test": "node --test src/**/*.test.ts 2>/dev/null || true",
     "package": "node ../scripts/package-ccx.js"
