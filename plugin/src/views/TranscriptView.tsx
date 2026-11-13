@@ -158,6 +158,8 @@ export const TranscriptView: React.FC = () => {
   const [editingParaIdx, setEditingParaIdx] = useState<number | null>(null);
   const [editingParaText, setEditingParaText] = useState<string>('');
   const [copiedLineIdx, setCopiedLineIdx] = useState<number | null>(null);
+  const [copiedWord, setCopiedWord] = useState<string | null>(null);
+  const [isAnalyzingLineIdx, setIsAnalyzingLineIdx] = useState<number | null>(null);
   const [typographyCopiedIdx, setTypographyCopiedIdx] = useState<number | null>(null);
   const [hoveredWordIdx, setHoveredWordIdx] = useState<number | null>(null);
 
@@ -719,11 +721,130 @@ export const TranscriptView: React.FC = () => {
     }
   };
 
-  // Line-level Action Handlers: Copy, Edit, Typography
+  // Line-level Action Handlers: Copy, Edit, Typography & On-demand AI
   const handleCopyLine = async (paraIdx: number, text: string) => {
     await copyToClipboard(text);
     setCopiedLineIdx(paraIdx);
-    setTimeout(() => setCopiedLineIdx(null), 2000);
+    setExportStatus(language === 'bn' ? 'পুরো লাইন ক্লিপবোর্ডে কপি হয়েছে!' : 'Sentence copied to clipboard!');
+    setTimeout(() => {
+      setCopiedLineIdx(null);
+      setExportStatus(null);
+    }, 2500);
+  };
+
+  // Toggle existing AI Directive card or trigger immediate AI analysis for this line
+  const handleToggleOrAnalyzeLineAI = async (
+    paraStartIdx: number,
+    lineText: string,
+    startTime: number,
+    endTime: number
+  ) => {
+    const existing = scriptDirectives[paraStartIdx] || Object.values(scriptDirectives).find(
+      (d: any) => d.startSeconds <= endTime && d.endSeconds >= startTime
+    );
+
+    if (existing) {
+      setExpandedDirectiveIdx(expandedDirectiveIdx === paraStartIdx ? null : paraStartIdx);
+      return;
+    }
+
+    setIsAnalyzingLineIdx(paraStartIdx);
+    setExportStatus(language === 'bn' ? `AI দিয়ে "${lineText.slice(0, 24)}..." বিশ্লেষণ করা হচ্ছে...` : `AI Analyzing line...`);
+    try {
+      const sentenceWords = words.filter((w) => w.start >= startTime - 0.25 && w.end <= endTime + 0.25);
+      const res = await client.getScriptDirectives(
+        sentenceWords,
+        [{ text: lineText, startSeconds: startTime, endSeconds: endTime }],
+        `Analyze dialogue line: "${lineText}". Give clear visual direction (BROLL, PNG, TEXT_ANIMATION, or PUNCH), concise Bengali explanation, and keyword search.`
+      );
+
+      if (res && res.directives && res.directives.length > 0) {
+        const d = res.directives[0];
+        updateScriptDirective(paraStartIdx, {
+          ...d,
+          sentenceIndex: paraStartIdx,
+          startSeconds: startTime,
+          endSeconds: endTime
+        });
+        setExpandedDirectiveIdx(paraStartIdx);
+        setExportStatus(`AI বিশ্লেষণ সম্পন্ন: ${d.badgeLabel}`);
+      } else {
+        const cleanKw = lineText.split(/\s+/).slice(0, 3).join(' ');
+        updateScriptDirective(paraStartIdx, {
+          sentenceIndex: paraStartIdx,
+          startSeconds: startTime,
+          endSeconds: endTime,
+          visualType: 'PNG',
+          badgeLabel: '🖼️ PNG ছবি',
+          accentColor: '#a855f7',
+          explanationBn: `"${lineText}" লাইনটির জন্য প্রাসঙ্গিক স্বচ্ছ PNG গ্রাফিক্স বা ছবি দেখান।`,
+          directorAdvice: `On-screen graphic visual for "${cleanKw}"`,
+          primaryKeyword: cleanKw,
+          searchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(cleanKw + ' transparent png')}`,
+          platform: 'Google PNG'
+        });
+        setExpandedDirectiveIdx(paraStartIdx);
+        setExportStatus(language === 'bn' ? 'AI নির্দেশিকা তৈরি হয়েছে!' : 'AI visual directive created!');
+      }
+    } catch (e: any) {
+      console.warn('AI analysis error:', e);
+      setExportStatus(language === 'bn' ? 'AI বিশ্লেষণ ব্যর্থ হয়েছে' : 'Failed to analyze line');
+    } finally {
+      setIsAnalyzingLineIdx(null);
+      setTimeout(() => setExportStatus(null), 3500);
+    }
+  };
+
+  // AI Analysis for Single Word Popover
+  const handleAnalyzeWordAI = async (pWord: { wordIdx: number; word: string; start: number; end: number }) => {
+    const cleanWord = pWord.word.replace(/[^\w\s\u0980-\u09FF'-]/g, '').trim() || pWord.word.trim();
+    const p = paragraphs.find((pr) => pr.tokens.some((tok) => tok.globalIdx === pWord.wordIdx)) || paragraphs[0];
+    const paraIdx = p ? p.startIdx : pWord.wordIdx;
+    const startSec = p ? p.startTime : pWord.start;
+    const endSec = p ? p.tokens[p.tokens.length - 1].end : pWord.end;
+
+    setPopoverWord(null);
+    setExportStatus(language === 'bn' ? `AI "${cleanWord}" বিশ্লেষণ করছে...` : `AI analyzing "${cleanWord}"...`);
+    try {
+      const sentenceText = p ? p.tokens.map((t) => t.word).join(' ') : cleanWord;
+      const res = await client.getScriptDirectives(
+        p ? p.tokens.map((t) => ({ word: t.word, start: t.start, end: t.end, start_seconds: t.start, end_seconds: t.end })) : [],
+        [{ text: sentenceText, startSeconds: startSec, endSeconds: endSec }],
+        `Analyze focus word: "${cleanWord}" in sentence: "${sentenceText}". Decide visual direction (BROLL, PNG, TEXT_ANIMATION, or PUNCH).`
+      );
+
+      if (res && res.directives && res.directives.length > 0) {
+        const d = res.directives[0];
+        updateScriptDirective(paraIdx, {
+          ...d,
+          sentenceIndex: paraIdx,
+          startSeconds: startSec,
+          endSeconds: endSec
+        });
+        setExpandedDirectiveIdx(paraIdx);
+        setExportStatus(`AI বিশ্লেষণ সম্পন্ন: ${d.badgeLabel}`);
+      } else {
+        updateScriptDirective(paraIdx, {
+          sentenceIndex: paraIdx,
+          startSeconds: startSec,
+          endSeconds: endSec,
+          visualType: 'PNG',
+          badgeLabel: `🖼️ PNG: ${cleanWord}`,
+          accentColor: '#a855f7',
+          explanationBn: `"${cleanWord}" শব্দের জন্য স্ক্রিনে স্বচ্ছ PNG ছবি বা স্টিকার দেখান।`,
+          directorAdvice: `On-screen graphic pop for "${cleanWord}"`,
+          primaryKeyword: cleanWord,
+          searchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(cleanWord + ' transparent png')}`,
+          platform: 'Google PNG'
+        });
+        setExpandedDirectiveIdx(paraIdx);
+        setExportStatus(`"${cleanWord}" PNG হিসেবে চিহ্নিত হয়েছে!`);
+      }
+    } catch {
+      setExportStatus(`"${cleanWord}" AI বিশ্লেষণ করা সম্ভব হয়নি`);
+    } finally {
+      setTimeout(() => setExportStatus(null), 3500);
+    }
   };
 
   const handleStartEditLine = (paraIdx: number, paraTokens: any[]) => {
@@ -1369,7 +1490,33 @@ export const TranscriptView: React.FC = () => {
 
   // Post-Transcription State (Premiere Pro Text Panel Interface)
   return (
-    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden' }}>
+    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden', position: 'relative' }}>
+      {/* Floating Status Notification Toast */}
+      {exportStatus && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '44px',
+            right: '16px',
+            zIndex: 10002,
+            backgroundColor: '#064e3b',
+            color: '#6ee7b7',
+            border: '1px solid #059669',
+            borderRadius: '5px',
+            padding: '5px 10px',
+            fontSize: '11px',
+            fontWeight: 600,
+            boxShadow: '0 6px 20px rgba(0,0,0,0.85)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px'
+          }}
+        >
+          <Check size={13} />
+          <span>{exportStatus}</span>
+        </div>
+      )}
+
       {/* Top Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2775,12 +2922,16 @@ export const TranscriptView: React.FC = () => {
 
                   {/* ✨ AI Analysis & Explanation Toggle */}
                   <button
-                    onClick={() => setExpandedDirectiveIdx(expandedDirectiveIdx === para.startIdx ? null : para.startIdx)}
-                    title="AI বিশ্লেষণ: এই লাইনের বাংলা অর্থ, ব্যাখ্যা ও এডিটিং পরামর্শ দেখুন"
+                    onClick={() => handleToggleOrAnalyzeLineAI(para.startIdx, paraLineText, para.startTime, paraEnd)}
+                    title="AI বিশ্লেষণ: এই লাইনের ভিজ্যুয়াল ডিরেকশন ও পরামর্শ তৈরি / দেখুন"
                     style={{
-                      backgroundColor: expandedDirectiveIdx === para.startIdx ? 'rgba(168, 85, 247, 0.35)' : 'rgba(255,255,255,0.06)',
-                      border: expandedDirectiveIdx === para.startIdx ? '1px solid #a855f7' : '1px solid rgba(255,255,255,0.12)',
-                      color: expandedDirectiveIdx === para.startIdx ? '#d8b4fe' : '#c084fc',
+                      backgroundColor: isAnalyzingLineIdx === para.startIdx
+                        ? 'rgba(245, 158, 11, 0.35)'
+                        : (expandedDirectiveIdx === para.startIdx ? 'rgba(168, 85, 247, 0.35)' : 'rgba(255,255,255,0.06)'),
+                      border: isAnalyzingLineIdx === para.startIdx
+                        ? '1px solid #f59e0b'
+                        : (expandedDirectiveIdx === para.startIdx ? '1px solid #a855f7' : '1px solid rgba(255,255,255,0.12)'),
+                      color: isAnalyzingLineIdx === para.startIdx ? '#fbbf24' : (expandedDirectiveIdx === para.startIdx ? '#d8b4fe' : '#c084fc'),
                       borderRadius: '3px',
                       padding: '2px 4px',
                       cursor: 'pointer',
@@ -2789,7 +2940,11 @@ export const TranscriptView: React.FC = () => {
                       justifyContent: 'center'
                     }}
                   >
-                    <Sparkles size={10} />
+                    {isAnalyzingLineIdx === para.startIdx ? (
+                      <RefreshCw size={10} style={{ animation: 'spin 1s linear infinite' }} />
+                    ) : (
+                      <Sparkles size={10} />
+                    )}
                   </button>
                 </div>
 
@@ -3345,9 +3500,9 @@ export const TranscriptView: React.FC = () => {
             <Video size={12} />
           </button>
 
-          {/* ✨ Kinetic Typography / Text Animation */}
+          {/* ✨ AI Directive Analysis */}
           <button
-            onClick={() => handleAddIconForWord(popoverWord)}
+            onClick={() => handleAnalyzeWordAI(popoverWord)}
             style={{
               padding: '3px 5px',
               backgroundColor: 'rgba(245, 158, 11, 0.2)',
@@ -3359,7 +3514,7 @@ export const TranscriptView: React.FC = () => {
               alignItems: 'center',
               justifyContent: 'center'
             }}
-            title="কাইনেটিক টেক্সট অ্যানিমেশন / গ্রাফিক্স মার্কার"
+            title="AI দিয়ে এই শব্দ বিশ্লেষণ করুন (বি-রোল, পিএনজি বা টেক্সট সাজেশন তৈরি হবে)"
           >
             <Sparkles size={12} />
           </button>
@@ -3386,25 +3541,30 @@ export const TranscriptView: React.FC = () => {
           {/* 📋 Copy Word */}
           <button
             onClick={async () => {
-              const cleanWord = popoverWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF]/g, '').trim();
+              const cleanWord = popoverWord.word.replace(/[^\w\s\u0980-\u09FF'-]/g, '').trim() || popoverWord.word.trim();
               await copyToClipboard(cleanWord);
-              setCreativeStatus(`"${cleanWord}" কপি হয়েছে!`);
-              setTimeout(() => setCreativeStatus(null), 2500);
+              setCopiedWord(cleanWord);
+              setExportStatus(language === 'bn' ? `"${cleanWord}" কপি হয়েছে!` : `Copied "${cleanWord}"!`);
+              setTimeout(() => {
+                setCopiedWord(null);
+                setExportStatus(null);
+                setPopoverWord(null);
+              }, 700);
             }}
             style={{
               padding: '3px 5px',
-              backgroundColor: 'rgba(255,255,255,0.06)',
-              color: '#fff',
-              border: '1px solid rgba(255,255,255,0.15)',
+              backgroundColor: copiedWord === popoverWord.word ? 'rgba(16, 185, 129, 0.35)' : 'rgba(255,255,255,0.06)',
+              color: copiedWord === popoverWord.word ? '#34d399' : '#fff',
+              border: copiedWord === popoverWord.word ? '1px solid #10b981' : '1px solid rgba(255,255,255,0.15)',
               borderRadius: '3px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}
-            title="শব্দটি কপি করুন"
+            title="শব্দটি ক্লিপবোর্ডে কপি করুন"
           >
-            <Copy size={12} />
+            {copiedWord === popoverWord.word ? <Check size={12} /> : <Copy size={12} />}
           </button>
 
           {/* ✂️ Instant Ripple Cut Word */}

@@ -211,8 +211,17 @@ def set_system_clipboard(req: ClipboardRequest):
     """Sets system clipboard via macOS pbcopy for 100% reliable CEP extension clipboard copy."""
     try:
         import subprocess
-        proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE, text=True)
-        proc.communicate(input=req.text)
+        import sys
+        text_bytes = (req.text or "").encode("utf-8")
+        if sys.platform == "darwin":
+            proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+            proc.communicate(input=text_bytes)
+        elif sys.platform == "win32":
+            proc = subprocess.Popen(["clip"], stdin=subprocess.PIPE)
+            proc.communicate(input=text_bytes)
+        else:
+            proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+            proc.communicate(input=text_bytes)
         return {"success": True}
     except Exception as e:
         return {"success": False, "error": str(e)}
