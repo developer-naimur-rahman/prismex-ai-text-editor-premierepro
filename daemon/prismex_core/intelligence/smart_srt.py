@@ -23,10 +23,70 @@ HANGING_END_WORDS = {
     "am", "have", "has", "had", "do", "does", "did", "will", "would", "can",
     "could", "should", "shall", "may", "might", "must", "i'm", "you're", "we're",
     "they're", "it's", "that's", "there's", "don't", "didn't", "won't", "can't",
+    "not", "than", "over", "under", "between", "through", "during", "without",
     # Common Bengali connectors / determiners / postpositions
     "এবং", "ও", "আর", "কিন্তু", "তবে", "যদি", "যে", "যেন", "কারণ", "তাই",
     "এই", "ওই", "সেই", "একটা", "একটি", "একজন", "কোনো", "কিছু", "জন্য", "থেকে",
-    "দিয়ে", "দিয়ে", "সাথে", "মধ্যে", "উপর", "নিচে", "কাছে", "দিকে",
+    "দিয়ে", "দিয়ে", "সাথে", "মধ্যে", "উপর", "নিচে", "কাছে", "দিকে", "দ্বারা",
+}
+
+CLAUSE_STARTER_WORDS = {
+    # Coordinating conjunctions
+    "and", "but", "or", "nor", "so", "yet",
+    # Subordinating conjunctions & adverbial clause openers
+    "because", "although", "though", "even", "while", "whereas",
+    "whenever", "when", "wherever", "where", "if", "unless", "since",
+    "as", "after", "before", "until", "whether", "whilst",
+    # Relative pronouns & interrogative clause introducers
+    "that", "which", "who", "whom", "whose", "why", "how", "what",
+    "whatever", "whoever", "whichever",
+    # Discourse connectors / transitional adverbs
+    "however", "therefore", "meanwhile", "furthermore", "moreover",
+    "instead", "otherwise", "besides",
+    # Bengali clause openers & connectors
+    "এবং", "ও", "আর", "কিন্তু", "তবে", "যদি", "যদিও", "যেহেতু", "কারণ",
+    "তাই", "যেন", "যখন", "যেখানে", "যেভাবে", "যাতে", "তাহলে", "নতুবা",
+    "অথবা", "নইলে", "বরং", "এমনকি", "ফলে", "সুতরাং", "যে"
+}
+
+COMPOUND_WORD_PAIRS = {
+    # Geographic & proper compound nouns that must never be split across subtitle cues
+    ("washington", "state"),
+    ("new", "york"),
+    ("united", "states"),
+    ("los", "angeles"),
+    ("san", "francisco"),
+    ("san", "diego"),
+    ("san", "jose"),
+    ("north", "carolina"),
+    ("south", "carolina"),
+    ("north", "dakota"),
+    ("south", "dakota"),
+    ("west", "virginia"),
+    ("rhode", "island"),
+    ("new", "jersey"),
+    ("new", "mexico"),
+    ("new", "hampshire"),
+    ("great", "britain"),
+    ("hong", "kong"),
+    ("prime", "minister"),
+    ("high", "school"),
+    ("social", "media"),
+    ("real", "estate"),
+    ("artificial", "intelligence"),
+    ("machine", "learning"),
+    ("credit", "card"),
+    ("cell", "phone"),
+    ("apple", "silicon"),
+    ("premiere", "pro"),
+    ("যুক্ত", "রাষ্ট্র"),
+    ("উত্তর", "বঙ্গ"),
+    ("পশ্চিম", "বঙ্গ"),
+}
+
+SUBJECT_PRONOUNS = {
+    "i", "you", "he", "she", "we", "they", "it",
+    "আমি", "তুমি", "সে", "আমরা", "তারা", "আপনি", "তিনি"
 }
 
 
@@ -152,17 +212,23 @@ class SmartSRTSegmenter:
                 indexed_lines.append(f"{local_i}:{w.get('word', '')}{gap_hint}")
 
             prompt = (
-                "You are an expert video subtitle editor. Split these numbered words into meaningful, "
-                "high-impact subtitle cues that fit cleanly inside a video frame.\n"
-                f"- Soft target words per cue: ~{target_words} (flexible range: {min_words} to {max_words} words).\n"
-                f"- Soft target characters per cue: ~{target_chars} (max {max_chars} chars so text fits on screen).\n"
-                "- IMPORTANT: Keep meaningful phrases and impactful expressions together! "
-                "Never leave a hanging preposition/article/conjunction ('the', 'a', 'to', 'of', 'and', 'but', 'that', etc.) "
-                "at the end of a cue if including or moving it makes the line more natural.\n"
-                "- Prefer breaking at punctuation or [pause:...] markers.\n"
-                f"- Every word index from 0 to {len(batch) - 1} must be covered contiguously with no gaps or overlaps.\n"
-                "Return ONLY valid JSON: a list of objects like "
-                '[{"s": 0, "e": 2, "r": "AI Phrase"}, {"s": 3, "e": 6, "r": "AI Impact"}].'
+                "You are an expert video subtitle editor and linguistic phrasing specialist. "
+                "Split these numbered words into meaningful, natural syntactic subtitle cues that fit cleanly inside a video frame.\n\n"
+                f"- Soft target pacing: ~{target_words} words per cue (flexible range: {min_words} to {max_words} words).\n"
+                f"- Maximum line length: ~{target_chars} chars (strict ceiling: {max_chars} chars).\n\n"
+                "MANDATORY SYNTACTIC & CLAUSE PHRASING RULES:\n"
+                "1. Break strictly at NATURAL CLAUSE BOUNDARIES. Never split a tight subject-verb-object phrase if it fits in one cue.\n"
+                "   CORRECT: ['Why we left California'] -> complete clause!\n"
+                "   INCORRECT: ['Why we left'] + ['California and moved'] -> TERRIBLE: breaks the object from its verb!\n"
+                "2. Coordinated clauses starting with conjunctions ('and', 'but', 'so', 'because', 'whenever', 'if', 'when', 'or') MUST START on a new cue:\n"
+                "   CORRECT: ['and moved back to Washington state'] or ['and moved back'] + ['to Washington state']\n"
+                "   CORRECT: ['Whenever you tell someone'] + ['you love California']\n"
+                "3. Never break compound proper nouns or geographic entities across lines (e.g., 'Washington state', 'New York', 'San Francisco').\n"
+                "4. NEVER leave hanging articles, prepositions, or conjunctions ('a', 'an', 'the', 'to', 'of', 'in', 'on', 'with', 'for', 'and', 'but', 'that') at the end of a cue.\n"
+                "5. Prefer breaking where punctuation (. , ? ! :) or [pause:...] markers occur.\n"
+                f"6. Contiguous coverage: Every word index from 0 to {len(batch) - 1} must be covered contiguously with no gaps or overlaps.\n\n"
+                "Return ONLY valid JSON: an array of cue range objects with reason 'r':\n"
+                '[{"s": 0, "e": 3, "r": "Clause End"}, {"s": 4, "e": 9, "r": "Coordinated Clause"}].'
             )
             payload_text = prompt + "\n\nWords:\n" + " ".join(indexed_lines)
 
@@ -265,7 +331,7 @@ class SmartSRTSegmenter:
             best_score = -1e9
             best_reason = "Balanced Phrase"
 
-            max_candidate = min(n - 1, i + max_words - 1)
+            max_candidate = min(n - 1, i + max_words + (1 if flexible else 0))
             min_candidate = min(n - 1, i + min_words - 1)
 
             # Allow breaking at 1 word if it's sentence-ending or followed by a long pause
@@ -293,42 +359,74 @@ class SmartSRTSegmenter:
                 score = 0.0
                 reason = "Balanced Phrase"
 
-                # Closeness to target_words and target_chars
-                score -= abs(word_count - target_words) * 2.2
-                score -= abs(char_count - target_chars) * 0.25
+                # Closeness to target_words and target_chars (soft guidance, never rigid)
+                score -= abs(word_count - target_words) * 1.8
+                score -= abs(char_count - target_chars) * 0.20
 
                 last_word_raw = str(chunk_words[-1].get("word", "")).strip()
                 last_word_clean = _clean_token(last_word_raw)
+                first_word_clean = _clean_token(str(chunk_words[0].get("word", "")))
 
                 # Strong bonus for ending on punctuation
                 if _has_strong_punct(last_word_raw):
-                    score += 9.0
+                    score += 10.0
                     reason = "Sentence End"
                 elif _has_clause_punct(last_word_raw):
-                    score += 5.5
+                    score += 6.5
                     reason = "Clause Break"
 
-                # Strong bonus for natural acoustic pause after this word
+                # Check relationship with next word if not at sequence end
                 if end + 1 < n:
+                    next_word_raw = str(words[end + 1].get("word", "")).strip()
+                    next_word_clean = _clean_token(next_word_raw)
+
+                    # 1. CLAUSE STARTER BONUS:
+                    # Breaking right before a conjunction or clause opener word
+                    # (e.g. "Why we left California" | "and moved back...")
+                    if next_word_clean in CLAUSE_STARTER_WORDS:
+                        score += 9.5
+                        reason = "Clause Boundary"
+
+                    # 2. COMPOUND WORD PAIR PROTECTION:
+                    # Never split compound nouns across cues (e.g. "Washington" + "state")
+                    if (last_word_clean, next_word_clean) in COMPOUND_WORD_PAIRS:
+                        score -= 16.0
+
+                    # 3. EMBEDDED SUBJECT-VERB CLAUSE BREAK:
+                    # Breaking before a subject pronoun that starts a fresh predicate clause
+                    # (e.g. "Whenever you tell someone" | "you love California")
+                    if next_word_clean in SUBJECT_PRONOUNS and word_count >= 2:
+                        if end + 2 < n:
+                            following_clean = _clean_token(str(words[end + 2].get("word", "")))
+                            if following_clean in {"love", "like", "know", "think", "said", "say", "want", "went", "is", "are", "was", "were", "can", "will", "did", "have"}:
+                                score += 7.0
+                                reason = "Subordinate Clause"
+
+                    # 4. ACOUSTIC MICRO-PAUSE BONUS
                     gap = float(words[end + 1].get("start_seconds", 0.0)) - float(chunk_words[-1].get("end_seconds", 0.0))
-                    if gap >= 0.45:
-                        score += 7.5
+                    if gap >= 0.40:
+                        score += 8.5
                         reason = "Natural Pause"
-                    elif gap >= 0.22:
-                        score += 3.0
+                    elif gap >= 0.18:
+                        score += 4.5
+                        reason = "Micro Pause"
 
-                    # Penalize breaking right BEFORE a short punctuation-less dependent word if we can avoid it
-                    next_clean = _clean_token(str(words[end + 1].get("word", "")))
-                    if next_clean in {"n't", "'s", "'re", "'ve", "'ll"}:
-                        score -= 8.0
+                    # Penalize breaking right BEFORE an enclitic contraction
+                    if next_word_clean in {"n't", "'s", "'re", "'ve", "'ll"}:
+                        score -= 10.0
 
-                # Penalize leaving a hanging connector/article/preposition at the end of a cue
+                # If candidate chunk started with a clause starter, bonus for reaching a non-hanging termination
+                if first_word_clean in CLAUSE_STARTER_WORDS and word_count >= 3:
+                    if last_word_clean not in HANGING_END_WORDS:
+                        score += 2.0
+
+                # Strict penalty for leaving a hanging connector/article/preposition at the end of a cue
                 if last_word_clean in HANGING_END_WORDS and end < n - 1:
-                    score -= 6.5
+                    score -= 9.0
 
                 # Slight penalty if approaching max_chars tightly
                 if char_count > target_chars:
-                    score -= (char_count - target_chars) * 0.4
+                    score -= (char_count - target_chars) * 0.35
 
                 if score > best_score:
                     best_score = score
