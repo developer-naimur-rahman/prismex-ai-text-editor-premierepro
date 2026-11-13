@@ -193,20 +193,73 @@ $._prismex.undoLastCut = function() {
     }
 };
 
-$._prismex.togglePlayback = function() {
+$._prismex._getQESequence = function() {
     try {
         app.enableQE();
+        if (typeof qe === "undefined" || !qe || !qe.project) return null;
         var qeSeq = qe.project.getActiveSequence();
+        if (qeSeq && qeSeq.player) return qeSeq;
+        
+        if (app.project && app.project.activeSequence) {
+            var activeName = app.project.activeSequence.name;
+            var activeId = app.project.activeSequence.sequenceID;
+            for (var s = 0; s < qe.project.numSequences; s++) {
+                var cand = qe.project.getSequenceAt(s);
+                if (cand && (cand.name == activeName || cand.guid == activeId)) {
+                    return cand;
+                }
+            }
+        }
+        if (qe.project.numSequences > 0) {
+            return qe.project.getSequenceAt(0);
+        }
+    } catch (e) {}
+    return null;
+};
+
+$._prismex.togglePlayback = function() {
+    try {
+        var qeSeq = $._prismex._getQESequence();
         if (qeSeq && qeSeq.player) {
             if (qeSeq.player.isPlaying) {
                 qeSeq.player.stop();
+                return JSON.stringify({ success: true, playing: false });
             } else {
                 qeSeq.player.play(1);
+                return JSON.stringify({ success: true, playing: true });
             }
-            return JSON.stringify({ success: true });
         }
-    } catch (e) {}
-    return JSON.stringify({ success: false });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+    return JSON.stringify({ success: false, error: "QE player not found" });
+};
+
+$._prismex.startPlayback = function(speed) {
+    try {
+        var qeSeq = $._prismex._getQESequence();
+        if (qeSeq && qeSeq.player) {
+            var playSpeed = speed ? parseFloat(speed) : 1;
+            qeSeq.player.play(playSpeed);
+            return JSON.stringify({ success: true, playing: true });
+        }
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+    return JSON.stringify({ success: false, error: "QE player not found" });
+};
+
+$._prismex.stopPlayback = function() {
+    try {
+        var qeSeq = $._prismex._getQESequence();
+        if (qeSeq && qeSeq.player) {
+            qeSeq.player.stop();
+            return JSON.stringify({ success: true, playing: false });
+        }
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+    return JSON.stringify({ success: false, error: "QE player not found" });
 };
 
 $._prismex.addTimelineMarkers = function(markersJson) {

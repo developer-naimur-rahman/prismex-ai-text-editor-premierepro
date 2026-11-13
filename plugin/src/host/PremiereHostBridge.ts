@@ -36,6 +36,15 @@ export class PremiereHostBridge {
       if ((window as any).CSInterface) {
         this.csInterface = new (window as any).CSInterface();
         this.ensureCEPScriptLoaded();
+        try {
+          const keyEvents = JSON.stringify([
+            { keyCode: 32 }, // Space
+            { keyCode: 46 }, // Delete
+            { keyCode: 8 },  // Backspace
+            { keyCode: 88 }  // X
+          ]);
+          this.csInterface.registerKeyEventsInterest(keyEvents);
+        } catch (e) {}
       }
       return;
     }
@@ -262,6 +271,34 @@ export class PremiereHostBridge {
     if (!this.isCEP) return false;
     try {
       const res = await this.evalScript('$._prismex.togglePlayback()');
+      const data = JSON.parse(res);
+      return !!data.success;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Starts playback on the active Premiere Pro sequence player.
+   */
+  public async startPlayback(speed: number = 1): Promise<boolean> {
+    if (!this.isCEP) return false;
+    try {
+      const res = await this.evalScript(`$._prismex.startPlayback(${speed})`);
+      const data = JSON.parse(res);
+      return !!data.success;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Stops playback on the active Premiere Pro sequence player.
+   */
+  public async stopPlayback(): Promise<boolean> {
+    if (!this.isCEP) return false;
+    try {
+      const res = await this.evalScript('$._prismex.stopPlayback()');
       const data = JSON.parse(res);
       return !!data.success;
     } catch {

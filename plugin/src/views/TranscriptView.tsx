@@ -34,7 +34,9 @@ import {
   Check,
   Pencil,
   X,
-  AlignLeft
+  AlignLeft,
+  Eye,
+  Play
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
@@ -150,6 +152,16 @@ export const TranscriptView: React.FC = () => {
   const [typographyCopiedIdx, setTypographyCopiedIdx] = useState<number | null>(null);
   const [hoveredWordIdx, setHoveredWordIdx] = useState<number | null>(null);
 
+  // Auto-play on seek/jump preference & Repeated Take comparison modal
+  const [autoPlayOnJump, setAutoPlayOnJump] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('prismex_auto_play_on_jump') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const [compareTakesItem, setCompareTakesItem] = useState<any | null>(null);
+
   const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
@@ -232,10 +244,18 @@ export const TranscriptView: React.FC = () => {
     return map;
   }, [aiMarkersList, words]);
 
+  const seekAndAutoPlay = useCallback((timeSec: number) => {
+    hostBridge.setPlayheadPosition(timeSec);
+    setPlayheadSec(timeSec);
+    if (autoPlayOnJump) {
+      hostBridge.startPlayback(1);
+    }
+  }, [autoPlayOnJump, hostBridge]);
+
   const handleWordClick = (idx: number, e: React.MouseEvent) => {
     const token = words[idx];
     if (!token) return;
-    hostBridge.setPlayheadPosition(token.start);
+    seekAndAutoPlay(token.start);
 
     if (e.shiftKey && selStartIdx !== null) {
       setSelEndIdx(idx);
@@ -515,8 +535,9 @@ export const TranscriptView: React.FC = () => {
       const isInput = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || (activeEl as HTMLElement)?.isContentEditable;
       if (isInput) return;
 
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.key === ' ' || e.keyCode === 32) {
         e.preventDefault();
+        e.stopPropagation();
         hostBridge.togglePlayback();
       } else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === 'x' || e.key === 'X') {
         if (hasSelection) {
@@ -525,8 +546,12 @@ export const TranscriptView: React.FC = () => {
         }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('keydown', handleKeyDown, true);
+    };
   }, [hasSelection, selectionStartSec, selectionEndSec]);
 
   const baseFilename = (sequenceManifest?.sequenceName || 'transcript').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -2083,6 +2108,33 @@ export const TranscriptView: React.FC = () => {
         >
           {t.doubleLines} ({repeatedTakes.length})
         </button>
+
+        <button
+          onClick={() => {
+            const nextVal = !autoPlayOnJump;
+            setAutoPlayOnJump(nextVal);
+            try {
+              localStorage.setItem('prismex_auto_play_on_jump', String(nextVal));
+            } catch {}
+          }}
+          title="জাম্প বা শব্দে ক্লিক করলেই সরাসরি ভিডিও প্লে হবে (অন/অফ করুন)"
+          style={{
+            marginLeft: 'auto',
+            padding: '4px 8px',
+            fontSize: '10px',
+            borderRadius: 'var(--radius-sm)',
+            border: autoPlayOnJump ? '1px solid #10b981' : '1px solid var(--border-subtle)',
+            backgroundColor: autoPlayOnJump ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-tertiary)',
+            color: autoPlayOnJump ? '#34d399' : 'var(--text-muted)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          <Zap size={10} />
+          <span>{autoPlayOnJump ? (language === 'bn' ? '⚡ জাম্পে অটো-প্লে: চালু' : '⚡ Auto-Play: ON') : (language === 'bn' ? '⚡ জাম্পে অটো-প্লে: বন্ধ' : '⚡ Auto-Play: OFF')}</span>
+        </button>
       </div>
 
       {/* Text-Based Cut Bar (when words are selected) */}
@@ -2252,7 +2304,7 @@ export const TranscriptView: React.FC = () => {
               {/* Left Column: Timecode & Discreet Action Icons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '76px', flexShrink: 0 }}>
                 <div
-                  onClick={() => hostBridge.setPlayheadPosition(para.startTime)}
+                  onClick={() => seekAndAutoPlay(para.startTime)}
                   title="Click to jump playhead to paragraph start"
                   style={{
                     fontFamily: 'monospace',
@@ -2327,25 +2379,48 @@ export const TranscriptView: React.FC = () => {
                 </div>
 
                 {matchingTake && (
-                  <button
-                    onClick={() => deleteTranscriptRange(matchingTake.startSeconds, matchingTake.endSeconds)}
-                    title={matchingTake.reason}
-                    style={{
-                      backgroundColor: 'rgba(139, 92, 246, 0.2)',
-                      border: '1px solid rgba(139, 92, 246, 0.45)',
-                      borderRadius: '3px',
-                      color: '#ddd6fe',
-                      fontSize: '9px',
-                      padding: '2px 4px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '2px'
-                    }}
-                  >
-                    <Scissors size={9} />
-                    <span>{t.doubleLines}</span>
-                  </button>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px', marginTop: '2px' }}>
+                    <button
+                      onClick={() => setCompareTakesItem(matchingTake)}
+                      title="উভয় টেক তুলনা করুন এবং কোনটি রাখবেন সিদ্ধান্ত নিন"
+                      style={{
+                        backgroundColor: 'rgba(139, 92, 246, 0.25)',
+                        border: '1px solid rgba(139, 92, 246, 0.5)',
+                        borderRadius: '3px',
+                        color: '#ddd6fe',
+                        fontSize: '9px',
+                        padding: '2px 4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '2px'
+                      }}
+                    >
+                      <Eye size={9} />
+                      <span>টেক তুলনা</span>
+                    </button>
+                    {matchingTake.takeDetails?.matched_take && (
+                      <button
+                        onClick={() => seekAndAutoPlay(matchingTake.takeDetails?.matched_take.start_seconds)}
+                        title={`বিকল্প টেকটিতে সরাসরি জাম্প করুন (${TimecodeConverter.formatTimecode(matchingTake.takeDetails.matched_take.start_seconds, fps)})`}
+                        style={{
+                          backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                          border: '1px solid rgba(16, 185, 129, 0.4)',
+                          borderRadius: '3px',
+                          color: '#6ee7b7',
+                          fontSize: '8.5px',
+                          padding: '1px 3px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '2px'
+                        }}
+                      >
+                        <Play size={8} />
+                        <span>টেক {matchingTake.takeDetails.matched_take.candidate_index || 2} শুনুন</span>
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -2818,6 +2893,198 @@ export const TranscriptView: React.FC = () => {
                 <span>{copiedChapters ? 'কপি হয়েছে!' : '📋 কপি ইউটিউব চ্যাপ্টারস'}</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== REPEATED TAKE COMPARISON MODAL ===================== */}
+      {compareTakesItem && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '520px',
+              backgroundColor: '#18181b',
+              border: '1px solid rgba(139, 92, 246, 0.4)',
+              borderRadius: '8px',
+              padding: '16px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              boxShadow: '0 12px 36px rgba(0,0,0,0.85)'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '13px', fontWeight: 600, color: '#ddd6fe', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Eye size={14} color="#a78bfa" />
+                <span>ডাবল লাইন / রিটেক তুলনা ও কাট সিদ্ধান্ত</span>
+              </span>
+              <button
+                onClick={() => setCompareTakesItem(null)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              নিচে উভয় টেকের সংলাপ দেওয়া হলো। আপনি শুনে সিদ্ধান্ত নিতে পারেন কোনটি রাখবেন এবং কোনটি কাটবেন:
+            </div>
+
+            {/* Take Cards */}
+            {(() => {
+              const tDetails = (compareTakesItem as any)?.takeDetails || (compareTakesItem as any)?.take_details;
+              const matched = tDetails?.matched_take || tDetails?.matchedTake;
+              const candIdx = tDetails?.candidateIndex || tDetails?.candidate_index || 1;
+              const matchedIdx = matched?.candidate_index || matched?.candidateIndex || 2;
+              const matchedStart = matched?.start_seconds || matched?.startSeconds || 0;
+              const matchedEnd = matched?.end_seconds || matched?.endSeconds || 0;
+              const matchedDur = matched?.duration_seconds || matched?.durationSeconds || Math.max(0.5, matchedEnd - matchedStart);
+              const matchedSentence = matched?.sentence || '';
+
+              return (
+                <>
+                  {/* Take 1 Card */}
+                  <div
+                    style={{
+                      padding: '10px',
+                      borderRadius: '6px',
+                      backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                      border: '1px solid rgba(239, 68, 68, 0.35)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#f87171' }}>
+                        ❌ টেক {candIdx} (কাটার প্রস্তাবিত)
+                      </span>
+                      <span style={{ fontFamily: 'monospace', fontSize: '10px', color: '#fca5a5' }}>
+                        {TimecodeConverter.formatTimecode(compareTakesItem.startSeconds, fps)} (~{compareTakesItem.durationSeconds.toFixed(1)}s)
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '12px', color: '#fff', fontStyle: 'italic', lineHeight: 1.5 }}>
+                      "{compareTakesItem.transcriptSnippet}"
+                    </div>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                      <button
+                        onClick={() => seekAndAutoPlay(compareTakesItem.startSeconds)}
+                        style={{
+                          backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                          border: '1px solid rgba(239, 68, 68, 0.4)',
+                          color: '#f87171',
+                          borderRadius: '3px',
+                          padding: '3px 8px',
+                          fontSize: '10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <Play size={10} />
+                        <span>▶ এই টেকটি শুনুন</span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          await deleteTranscriptRange(compareTakesItem.startSeconds, compareTakesItem.endSeconds);
+                          setCompareTakesItem(null);
+                        }}
+                        style={{
+                          backgroundColor: '#ef4444',
+                          border: 'none',
+                          color: '#fff',
+                          borderRadius: '3px',
+                          padding: '3px 10px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ✂️ টেক {candIdx} কাটুন
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Take 2 Card (Recommended Matched Take) */}
+                  {matched && (
+                    <div
+                      style={{
+                        padding: '10px',
+                        borderRadius: '6px',
+                        backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                        border: '1px solid rgba(16, 185, 129, 0.35)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px'
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 600, color: '#34d399' }}>
+                          ✅ টেক {matchedIdx} (রাখার প্রস্তাবিত)
+                        </span>
+                        <span style={{ fontFamily: 'monospace', fontSize: '10px', color: '#6ee7b7' }}>
+                          {TimecodeConverter.formatTimecode(matchedStart, fps)} (~{matchedDur.toFixed(1)}s)
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#fff', fontStyle: 'italic', lineHeight: 1.5 }}>
+                        "{matchedSentence}"
+                      </div>
+                      <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                        <button
+                          onClick={() => seekAndAutoPlay(matchedStart)}
+                          style={{
+                            backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                            border: '1px solid rgba(16, 185, 129, 0.4)',
+                            color: '#34d399',
+                            borderRadius: '3px',
+                            padding: '3px 8px',
+                            fontSize: '10px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Play size={10} />
+                          <span>▶ এই টেকটি শুনুন</span>
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await deleteTranscriptRange(matchedStart, matchedEnd);
+                            setCompareTakesItem(null);
+                          }}
+                          style={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                            border: '1px solid rgba(255, 255, 255, 0.2)',
+                            color: '#fff',
+                            borderRadius: '3px',
+                            padding: '3px 10px',
+                            fontSize: '10px',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          ⇄ টেক {candIdx} রাখুন (টেক {matchedIdx} কাটুন)
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
         </div>
       )}

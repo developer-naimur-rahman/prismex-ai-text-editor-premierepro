@@ -162,6 +162,9 @@ class TakeDetector:
                 )
                 best_idx = sorted_by_score[0]["candidate_index"]
 
+            best_item = next((it for it in scored_candidates if it["candidate_index"] == best_idx), scored_candidates[-1])
+            best_sent = best_item["sentence"]
+
             # Generate prune suggestions for all non-recommended takes
             for item in scored_candidates:
                 c_idx = item["candidate_index"]
@@ -184,7 +187,24 @@ class TakeDetector:
                             "candidate_index": c_idx,
                             "total_candidates": total_candidates,
                             "is_recommended": False,
-                            "fluency_score": item["fluency_score"]
+                            "fluency_score": item["fluency_score"],
+                            "matched_take": {
+                                "candidate_index": best_idx,
+                                "start_seconds": best_sent["start_seconds"],
+                                "end_seconds": best_sent["end_seconds"],
+                                "duration_seconds": round(best_sent["end_seconds"] - best_sent["start_seconds"], 3),
+                                "sentence": best_sent["sentence"]
+                            },
+                            "all_takes": [
+                                {
+                                    "candidate_index": it["candidate_index"],
+                                    "start_seconds": it["sentence"]["start_seconds"],
+                                    "end_seconds": it["sentence"]["end_seconds"],
+                                    "sentence": it["sentence"]["sentence"],
+                                    "is_recommended": (it["candidate_index"] == best_idx)
+                                }
+                                for it in scored_candidates
+                            ]
                         }
                     })
 

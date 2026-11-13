@@ -75,6 +75,10 @@ export interface TakeDetails {
   totalCandidates: number;
   isRecommended: boolean;
   fluencyScore?: number;
+  matched_take?: any;
+  matchedTake?: any;
+  all_takes?: any[];
+  allTakes?: any[];
 }
 
 export interface ReviewQueueItem {
