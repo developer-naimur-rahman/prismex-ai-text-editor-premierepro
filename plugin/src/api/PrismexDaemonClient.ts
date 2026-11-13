@@ -299,6 +299,49 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async generateViralShorts(
+    words: any[],
+    sentences: any[],
+    targetCount: number = 5,
+    customPrompt?: string,
+    fps: number = 24.0
+  ): Promise<any[]> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-viral-shorts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, sentences, targetCount, customPrompt, fps })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  public async refineViralShort(
+    short: any,
+    instruction: string,
+    words: any[],
+    fps: number = 24.0
+  ): Promise<any | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-viral-shorts/refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ short, instruction, words, fps })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public async getProjectCache(projectId: string, sequenceName: string): Promise<any | null> {
     try {
       const p = encodeURIComponent(projectId || 'default_project');

@@ -438,6 +438,32 @@ export class PremiereHostBridge {
     }
   }
 
+  /**
+   * Clones active sequence, converts to 9:16 vertical (1080x1920), moves to bin,
+   * trims to short duration, and places AI timeline markers.
+   */
+  public async createVerticalShortSequence(
+    title: string,
+    startSeconds: number,
+    endSeconds: number,
+    markers?: any[]
+  ): Promise<{ success: boolean; sequenceName?: string; bin?: string; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, sequenceName: `${title}_9x16`, bin: '_Prismex_Viral_Shorts' };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const safeTitle = (title || 'Short').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const markersJson = markers ? JSON.stringify(markers).replace(/"/g, '\\"') : '""';
+      const res = await this.evalScript(
+        `$._prismex.createVerticalShortSequence("${safeTitle}", ${startSeconds}, ${endSeconds}, "${markersJson}")`
+      );
+      return JSON.parse(res || '{"success":false}');
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
   private getMockSequenceManifest(): SequenceManifest {
     return {
       premiereProjectId: "mock_project_001",

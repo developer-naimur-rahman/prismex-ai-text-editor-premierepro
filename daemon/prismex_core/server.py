@@ -112,6 +112,13 @@ class ViralShortsRequest(BaseModel):
     sentences: List[Dict[str, Any]] = []
     targetCount: int = 5
     fps: float = 24.0
+    customPrompt: Optional[str] = None
+
+class ShortRefineRequest(BaseModel):
+    short: Dict[str, Any]
+    instruction: str
+    words: List[Dict[str, Any]] = []
+    fps: float = 24.0
 
 class MarkerAnalysisRequest(BaseModel):
     words: List[Dict[str, Any]] = []
@@ -469,8 +476,13 @@ def ai_spell_check(req: SpellCheckRequest):
 
 @app.post("/api/v1/transcript/ai-viral-shorts")
 def ai_viral_shorts(req: ViralShortsRequest):
-    """Generates 3-5 high-engagement viral vertical shorts from the transcript."""
-    return CreativeAI.detect_viral_shorts(req.words, req.sentences, req.targetCount, req.fps)
+    """Generates 3-10 high-engagement viral vertical shorts from the transcript."""
+    return CreativeAI.detect_viral_shorts(req.words, req.sentences, req.targetCount, req.fps, req.customPrompt)
+
+@app.post("/api/v1/transcript/ai-viral-shorts/refine")
+def ai_refine_viral_short(req: ShortRefineRequest):
+    """Interactively refines a short candidate via user instruction."""
+    return CreativeAI.refine_short(req.short, req.instruction, req.words, req.fps)
 
 @app.post("/api/v1/transcript/ai-markers")
 def ai_markers(req: MarkerAnalysisRequest):

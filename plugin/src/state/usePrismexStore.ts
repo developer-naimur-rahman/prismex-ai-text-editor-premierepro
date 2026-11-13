@@ -26,6 +26,7 @@ export type ActiveTab =
   | 'takes' 
   | 'review-queue' 
   | 'srt-editor'
+  | 'viral-shorts'
   | 'dashboard' 
   | 'providers' 
   | 'profiles' 

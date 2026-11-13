@@ -643,3 +643,128 @@ $._prismex.loadProjectCache = function(cacheKey) {
         return JSON.stringify({ found: false, error: String(e) });
     }
 };
+
+$._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endSeconds, markersJson) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
+        }
+
+        var origSeq = app.project.activeSequence;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var zeroTicks = parseFloat(origSeq.zeroPoint || 0) || 0;
+        var initialTicks = Math.max(0, parseFloat(origSeq.end || 0) - zeroTicks);
+        var initialSec = initialTicks / TICKS;
+
+        var sSec = Math.max(0, parseFloat(startSeconds) || 0);
+        var eSec = Math.min(initialSec, parseFloat(endSeconds) || (sSec + 45));
+        if (eSec <= sSec) eSec = Math.min(initialSec, sSec + 30);
+
+        // 1. Clone sequence to preserve 100% of cuts, transitions, effects & audio tracks
+        var cloned = origSeq.clone();
+        if (!cloned) {
+            return JSON.stringify({ success: false, error: "Sequence clone failed" });
+        }
+
+        var numSeq = app.project.sequences.numSequences;
+        var newSeq = app.project.sequences[numSeq - 1];
+        if (!newSeq) {
+            return JSON.stringify({ success: false, error: "Could not retrieve cloned sequence" });
+        }
+
+        // Clean title
+        var cleanTitle = (shortTitle || "ViralShort").replace(/[^a-zA-Z0-9_-]/g, "_");
+        var finalName = cleanTitle + "_9x16";
+        newSeq.name = finalName;
+
+        // 2. Open new cloned sequence and make active
+        try {
+            app.project.openSequence(newSeq.sequenceID);
+            app.project.activeSequence = newSeq;
+        } catch (openErr) {}
+
+        // 3. Set resolution to 1080x1920 (9:16 Vertical)
+        try {
+            var settings = newSeq.getSettings();
+            if (settings) {
+                settings.videoFrameWidth = 1080;
+                settings.videoFrameHeight = 1920;
+                newSeq.setSettings(settings);
+            }
+        } catch (settErr) {}
+
+        // 4. Organize in Project Bin: _Prismex_Viral_Shorts
+        try {
+            var root = app.project.rootItem;
+            var binName = "_Prismex_Viral_Shorts";
+            var targetBin = null;
+            for (var b = 0; b < root.children.numItems; b++) {
+                var child = root.children[b];
+                if (child.type === 2 && child.name === binName) {
+                    targetBin = child;
+                    break;
+                }
+            }
+            if (!targetBin) {
+                targetBin = root.createBin(binName);
+            }
+            if (newSeq.projectItem && targetBin) {
+                newSeq.projectItem.moveBin(targetBin);
+            }
+        } catch (binErr) {}
+
+        // 5. Trim to the short's exact range by ripple-deleting the outside regions
+        var cuts = [];
+        if (eSec < initialSec - 0.05) {
+            cuts.push({
+                startSeconds: eSec,
+                endSeconds: initialSec + 5.0,
+                durationSeconds: (initialSec + 5.0) - eSec
+            });
+        }
+        if (sSec > 0.05) {
+            cuts.push({
+                startSeconds: 0.0,
+                endSeconds: sSec,
+                durationSeconds: sSec
+            });
+        }
+
+        if (cuts.length > 0) {
+            $._prismex.executeCuts(JSON.stringify(cuts));
+        }
+
+        // 6. Add Visual Guidance Timeline Markers (relative to Short start!)
+        if (markersJson) {
+            try {
+                var markers = JSON.parse(markersJson);
+                var seqMarkers = newSeq.markers;
+                for (var m = 0; m < markers.length; m++) {
+                    var mk = markers[m];
+                    var relativeSec = Math.max(0, mk.seconds - sSec);
+                    var mTicks = Math.round(relativeSec * TICKS);
+                    var newMarker = seqMarkers.createMarker(mTicks);
+                    newMarker.name = mk.name || "AI Marker";
+                    newMarker.comments = mk.comment || "";
+                    if (mk.type === "BROLL") newMarker.setColorIndex(0); // Green
+                    else if (mk.type === "EMPHASIS") newMarker.setColorIndex(1); // Red
+                    else newMarker.setColorIndex(6); // Blue
+                }
+            } catch (markerErr) {}
+        }
+
+        try {
+            app.project.openSequence(newSeq.sequenceID);
+        } catch (e) {}
+
+        return JSON.stringify({
+            success: true,
+            sequenceName: finalName,
+            sequenceId: newSeq.sequenceID,
+            durationSeconds: Math.round((eSec - sSec) * 100) / 100,
+            bin: "_Prismex_Viral_Shorts"
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
