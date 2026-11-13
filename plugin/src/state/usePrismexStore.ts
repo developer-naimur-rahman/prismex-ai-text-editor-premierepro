@@ -67,6 +67,26 @@ interface PrismexState {
   acceptAllReviewItems: () => void;
   rejectAllReviewItems: () => void;
 
+  // Script Visual Directives & Custom Annotations
+  scriptDirectives: Record<number, any>;
+  setScriptDirectives: (directives: Record<number, any> | ((prev: Record<number, any>) => Record<number, any>)) => void;
+  updateScriptDirective: (idx: number, patch: any) => void;
+  customMarkers: any[];
+  setCustomMarkers: (markers: any[]) => void;
+
+  // AI Viral Shorts State
+  viralTopics: any[];
+  setViralTopics: (topics: any[]) => void;
+  viralShorts: any[];
+  setViralShorts: (shorts: any[] | ((prev: any[]) => any[])) => void;
+
+  // SRT / Captions Cues State
+  srtCues: any[];
+  setSrtCues: (cues: any[] | ((prev: any[]) => any[])) => void;
+
+  // Global Project Persistence
+  saveCurrentProjectState: () => Promise<void>;
+
   // Silence Detection Config
   silenceSettings: {
     thresholdDbfs: number;
@@ -133,9 +153,21 @@ export function rippleShiftWords(words: any[], cuts: { startSeconds: number; end
     });
 }
 
+export interface PrismexProjectSavePayload {
+  words: any[];
+  sentences?: any[];
+  silences?: any[];
+  reviewItems?: any[];
+  scriptDirectives?: Record<number, any>;
+  customMarkers?: any[];
+  viralTopics?: any[];
+  viralShorts?: any[];
+  srtCues?: any[];
+}
+
 export async function persistProjectData(
   manifest: any,
-  data: { words: any[]; sentences?: any[]; silences?: any[]; reviewItems?: any[] }
+  data: PrismexProjectSavePayload
 ) {
   if (!manifest) return;
   const cleanKey = getCleanSequenceKey(manifest.cleanSequenceName || manifest.sequenceName);
@@ -169,13 +201,18 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
   try {
     const extRes = await hostBridge.loadProjectCache(cleanKey);
     if (extRes.found && extRes.content) {
-      const parsed = JSON.parse(extRes.content);
+      const parsed: PrismexProjectSavePayload = JSON.parse(extRes.content);
       if (parsed.words && parsed.words.length > 0) {
         usePrismexStore.setState({
           transcriptWords: parsed.words,
           transcriptSentences: parsed.sentences || [],
           detectedSilences: parsed.silences || [],
           reviewItems: parsed.reviewItems || [],
+          scriptDirectives: parsed.scriptDirectives || {},
+          customMarkers: parsed.customMarkers || [],
+          viralTopics: parsed.viralTopics || [],
+          viralShorts: parsed.viralShorts || [],
+          srtCues: parsed.srtCues || [],
           jobStatus: 'COMPLETE',
           jobProgress: 100,
           jobMessage: 'Loaded from project cache'
@@ -196,6 +233,11 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
         transcriptSentences: daemonData.sentences || [],
         detectedSilences: daemonData.silences || [],
         reviewItems: daemonData.reviewItems || [],
+        scriptDirectives: daemonData.scriptDirectives || {},
+        customMarkers: daemonData.customMarkers || [],
+        viralTopics: daemonData.viralTopics || [],
+        viralShorts: daemonData.viralShorts || [],
+        srtCues: daemonData.srtCues || [],
         jobStatus: 'COMPLETE',
         jobProgress: 100,
         jobMessage: 'Loaded from daemon project cache'
@@ -211,13 +253,18 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
     try {
       const localStr = localStorage.getItem(`prismex_proj_${cleanKey}`);
       if (localStr) {
-        const parsed = JSON.parse(localStr);
+        const parsed: PrismexProjectSavePayload = JSON.parse(localStr);
         if (parsed.words && parsed.words.length > 0) {
           usePrismexStore.setState({
             transcriptWords: parsed.words,
             transcriptSentences: parsed.sentences || [],
             detectedSilences: parsed.silences || [],
             reviewItems: parsed.reviewItems || [],
+            scriptDirectives: parsed.scriptDirectives || {},
+            customMarkers: parsed.customMarkers || [],
+            viralTopics: parsed.viralTopics || [],
+            viralShorts: parsed.viralShorts || [],
+            srtCues: parsed.srtCues || [],
             jobStatus: 'COMPLETE',
             jobProgress: 100
           });
@@ -297,6 +344,124 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     set((state) => ({
       reviewItems: state.reviewItems.map((item) => ({ ...item, status: 'REJECTED' }))
     }));
+  },
+
+  scriptDirectives: {},
+  setScriptDirectives: (directives) => {
+    set((state) => {
+      const next = typeof directives === 'function' ? directives(state.scriptDirectives) : directives;
+      const seq = state.sequenceManifest;
+      if (seq) {
+        persistProjectData(seq, {
+          words: state.transcriptWords,
+          sentences: state.transcriptSentences,
+          silences: state.detectedSilences,
+          reviewItems: state.reviewItems,
+          scriptDirectives: next,
+          customMarkers: state.customMarkers,
+          viralTopics: state.viralTopics,
+          viralShorts: state.viralShorts,
+          srtCues: state.srtCues
+        });
+      }
+      return { scriptDirectives: next };
+    });
+  },
+  updateScriptDirective: (idx, patch) => {
+    set((state) => {
+      const existing = state.scriptDirectives[idx] || {};
+      const next = {
+        ...state.scriptDirectives,
+        [idx]: { ...existing, ...patch }
+      };
+      const seq = state.sequenceManifest;
+      if (seq) {
+        persistProjectData(seq, {
+          words: state.transcriptWords,
+          sentences: state.transcriptSentences,
+          silences: state.detectedSilences,
+          reviewItems: state.reviewItems,
+          scriptDirectives: next,
+          customMarkers: state.customMarkers,
+          viralTopics: state.viralTopics,
+          viralShorts: state.viralShorts,
+          srtCues: state.srtCues
+        });
+      }
+      return { scriptDirectives: next };
+    });
+  },
+
+  customMarkers: [],
+  setCustomMarkers: (markers) => {
+    set({ customMarkers: markers });
+    get().saveCurrentProjectState();
+  },
+
+  viralTopics: [],
+  setViralTopics: (topics) => {
+    set({ viralTopics: topics });
+    get().saveCurrentProjectState();
+  },
+
+  viralShorts: [],
+  setViralShorts: (shorts) => {
+    set((state) => {
+      const next = typeof shorts === 'function' ? shorts(state.viralShorts) : shorts;
+      const seq = state.sequenceManifest;
+      if (seq) {
+        persistProjectData(seq, {
+          words: state.transcriptWords,
+          sentences: state.transcriptSentences,
+          silences: state.detectedSilences,
+          reviewItems: state.reviewItems,
+          scriptDirectives: state.scriptDirectives,
+          customMarkers: state.customMarkers,
+          viralTopics: state.viralTopics,
+          viralShorts: next,
+          srtCues: state.srtCues
+        });
+      }
+      return { viralShorts: next };
+    });
+  },
+
+  srtCues: [],
+  setSrtCues: (cues) => {
+    set((state) => {
+      const next = typeof cues === 'function' ? cues(state.srtCues) : cues;
+      const seq = state.sequenceManifest;
+      if (seq) {
+        persistProjectData(seq, {
+          words: state.transcriptWords,
+          sentences: state.transcriptSentences,
+          silences: state.detectedSilences,
+          reviewItems: state.reviewItems,
+          scriptDirectives: state.scriptDirectives,
+          customMarkers: state.customMarkers,
+          viralTopics: state.viralTopics,
+          viralShorts: state.viralShorts,
+          srtCues: next
+        });
+      }
+      return { srtCues: next };
+    });
+  },
+
+  saveCurrentProjectState: async () => {
+    const s = get();
+    if (!s.sequenceManifest) return;
+    await persistProjectData(s.sequenceManifest, {
+      words: s.transcriptWords,
+      sentences: s.transcriptSentences,
+      silences: s.detectedSilences,
+      reviewItems: s.reviewItems,
+      scriptDirectives: s.scriptDirectives,
+      customMarkers: s.customMarkers,
+      viralTopics: s.viralTopics,
+      viralShorts: s.viralShorts,
+      srtCues: s.srtCues
+    });
   },
 
   silenceSettings: {

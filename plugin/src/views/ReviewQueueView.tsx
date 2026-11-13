@@ -104,6 +104,7 @@ export const ReviewQueueView: React.FC = () => {
                 className="card"
                 style={{ 
                   flexShrink: 0,
+                  minHeight: 'fit-content',
                   display: 'flex', 
                   flexDirection: 'column', 
                   gap: '6px',

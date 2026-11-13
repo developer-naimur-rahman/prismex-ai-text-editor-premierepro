@@ -41,7 +41,9 @@ export const SrtEditorView: React.FC = () => {
     sequenceManifest,
     transcriptWords,
     transcriptSentences,
-    language
+    language,
+    srtCues,
+    setSrtCues
   } = usePrismexStore();
 
   const t = translations[language];
@@ -56,7 +58,9 @@ export const SrtEditorView: React.FC = () => {
   const [maxChars, setMaxChars] = useState(26);
   const [showSliders, setShowSliders] = useState(false);
 
-  const [cues, setCues] = useState<any[]>([]);
+  // Mapped to persistent Zustand store
+  const cues = srtCues;
+  const setCues = setSrtCues;
   const [isGenerating, setIsGenerating] = useState(false);
   const [engineUsed, setEngineUsed] = useState('');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -305,15 +309,18 @@ export const SrtEditorView: React.FC = () => {
   const handleExportSingleFile = async (type: 'SRT' | 'TXT' | 'JSON') => {
     if (type === 'SRT') {
       const res = await hostBridge.saveFileWithDialog(`${baseFilename}.srt`, rawSrtText, ['srt']);
-      if (res.saved) setStatusMessage('Saved SRT!');
+      if (res.saved) setStatusMessage(res.path ? `SRT সেভ হয়েছে: ${res.path}` : (language === 'bn' ? 'SRT সেভ হয়েছে!' : 'Saved SRT!'));
+      else if (res.error) setStatusMessage(language === 'bn' ? `SRT সেভ করতে ব্যর্থ: ${res.error}` : `Failed to save SRT: ${res.error}`);
     } else if (type === 'TXT') {
       const res = await hostBridge.saveFileWithDialog(`${baseFilename}.txt`, rawTxtText, ['txt']);
-      if (res.saved) setStatusMessage('Saved TXT!');
+      if (res.saved) setStatusMessage(res.path ? `TXT সেভ হয়েছে: ${res.path}` : (language === 'bn' ? 'TXT সেভ হয়েছে!' : 'Saved TXT!'));
+      else if (res.error) setStatusMessage(language === 'bn' ? `TXT সেভ করতে ব্যর্থ: ${res.error}` : `Failed to save TXT: ${res.error}`);
     } else if (type === 'JSON') {
       const res = await hostBridge.saveFileWithDialog(`${baseFilename}_captions.json`, rawJsonText, ['json']);
-      if (res.saved) setStatusMessage('Saved JSON!');
+      if (res.saved) setStatusMessage(res.path ? `JSON সেভ হয়েছে: ${res.path}` : (language === 'bn' ? 'JSON সেভ হয়েছে!' : 'Saved JSON!'));
+      else if (res.error) setStatusMessage(language === 'bn' ? `JSON সেভ করতে ব্যর্থ: ${res.error}` : `Failed to save JSON: ${res.error}`);
     }
-    setTimeout(() => setStatusMessage(null), 3000);
+    setTimeout(() => setStatusMessage(null), 4000);
   };
 
   const handlePunctuationTransform = (type: 'COMMAS' | 'PERIODS' | 'ALL' | 'UPPER' | 'TITLE') => {

@@ -142,7 +142,8 @@ button:focus-visible {
   padding: 12px;
   max-width: 100%;
   box-sizing: border-box;
-  overflow: hidden;
+  flex-shrink: 0;
+  min-height: fit-content;
   word-break: break-word;
 }
 

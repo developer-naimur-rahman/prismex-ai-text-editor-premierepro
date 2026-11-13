@@ -632,6 +632,24 @@ export class PremiereHostBridge {
       }
     } catch (ne) {}
 
+    // Tier 3: Local Companion Daemon (Python FastAPI fallback with full OS disk permissions)
+    try {
+      const client = PrismexDaemonClient.getInstance();
+      const ext = (extensions[0] || 'txt').toLowerCase();
+      const daemonRes = await client.saveProjectFiles(
+        '',
+        defaultFilename.replace(/\.[^.]+$/, ''),
+        ext === 'srt' ? content : undefined,
+        ext === 'txt' ? content : undefined,
+        ext === 'json' ? content : undefined
+      );
+      if (daemonRes && daemonRes.success && daemonRes.files && daemonRes.files.length > 0) {
+        return { saved: true, path: daemonRes.files[0] };
+      }
+    } catch (daemonErr) {
+      console.warn('[PremiereHostBridge] Daemon fallback failed:', daemonErr);
+    }
+
     // Browser / Fallback
     try {
       const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });

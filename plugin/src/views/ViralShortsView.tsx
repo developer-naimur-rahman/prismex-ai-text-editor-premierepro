@@ -26,7 +26,8 @@ import {
   MessageSquare,
   HelpCircle,
   TrendingUp,
-  Zap
+  Zap,
+  Film
 } from 'lucide-react';
 
 interface ShortBlock {
@@ -94,7 +95,11 @@ export const ViralShortsView: React.FC = () => {
     sequenceManifest,
     transcriptWords,
     transcriptSentences,
-    language
+    language,
+    viralTopics,
+    setViralTopics,
+    viralShorts,
+    setViralShorts
   } = usePrismexStore();
 
   const hostBridge = PremiereHostBridge.getInstance();
@@ -104,13 +109,15 @@ export const ViralShortsView: React.FC = () => {
   // Sub-tabs: 'TOPICS' | 'STUDIO' | 'CLIENT_SCRIPT'
   const [subTab, setSubTab] = useState<'TOPICS' | 'STUDIO' | 'CLIENT_SCRIPT'>('TOPICS');
 
-  // Topic discovery state
-  const [topics, setTopics] = useState<TopicItem[]>([]);
+  // Topic discovery state - mapped to persistent store
+  const topics = viralTopics;
+  const setTopics = setViralTopics;
   const [isDiscoveringTopics, setIsDiscoveringTopics] = useState<boolean>(false);
   const [topicPrompt, setTopicPrompt] = useState<string>('');
 
-  // Active Shorts state
-  const [shorts, setShorts] = useState<ViralShortItem[]>([]);
+  // Active Shorts state - mapped to persistent store
+  const shorts = viralShorts;
+  const setShorts = setViralShorts;
   const [targetCount, setTargetCount] = useState<number>(5);
   const [customGoal, setCustomGoal] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -131,12 +138,12 @@ export const ViralShortsView: React.FC = () => {
   const [matchedClientShort, setMatchedClientShort] = useState<ViralShortItem | null>(null);
   const [isMatchingScript, setIsMatchingScript] = useState<boolean>(false);
 
-  // Auto-discover topics on first load if transcript exists
+  // Auto-discover topics on first load only if transcript exists and persistent topics are empty
   useEffect(() => {
-    if (transcriptWords.length > 0 && topics.length === 0) {
+    if (transcriptWords.length > 0 && viralTopics.length === 0) {
       handleDiscoverTopics();
     }
-  }, [transcriptWords.length]);
+  }, [transcriptWords.length, viralTopics.length]);
 
   // Discover High-Potential Topics
   const handleDiscoverTopics = async (promptOverride?: string) => {
@@ -200,6 +207,28 @@ export const ViralShortsView: React.FC = () => {
     }
   };
 
+  // Directly build short and generate 9:16 vertical sequence in Premiere Pro from topic
+  const handleDirectCreateSequenceFromTopic = async (topic: TopicItem) => {
+    setIsGenerating(true);
+    setStatusMessage(language === 'bn' ? `"${topic.topicTitle}" থেকে ৯:১৬ সিকোয়েন্স প্রস্তুত হচ্ছে...` : `Creating 9:16 sequence for "${topic.topicTitle}"...`);
+    try {
+      const res = await client.generateViralShorts(
+        transcriptWords,
+        transcriptSentences,
+        1,
+        `Topic: ${topic.topicTitle}. Key details: ${topic.topicSummaryBn}. Focus between ${topic.startSeconds}s and ${topic.endSeconds}s`,
+        fps
+      );
+      if (res && res.length > 0) {
+        const newShort = res[0];
+        setShorts(prev => [newShort, ...prev.filter(s => s.id !== newShort.id)]);
+        await handleCreateSequence(newShort);
+      }
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
   // Batch generate all shorts from custom prompt
   const handleGenerateAllShorts = async () => {
     if (transcriptWords.length === 0) return;
@@ -259,7 +288,7 @@ export const ViralShortsView: React.FC = () => {
         durationSeconds: opt.durationSeconds || (opt.endSeconds - opt.startSeconds)
       };
 
-      const segs = s.segments ? s.segments.map(sg => sg.role === 'HOOK' ? { ...sg, text: opt.text, startSeconds: opt.startSeconds, endSeconds: opt.endSeconds } : sg) : undefined;
+      const segs = s.segments ? s.segments.map((sg: any) => sg.role === 'HOOK' ? { ...sg, text: opt.text, startSeconds: opt.startSeconds, endSeconds: opt.endSeconds } : sg) : undefined;
 
       return {
         ...s,
@@ -303,7 +332,7 @@ export const ViralShortsView: React.FC = () => {
         durationSeconds: opt.durationSeconds || (opt.endSeconds - opt.startSeconds)
       };
 
-      const segs = s.segments ? s.segments.map(sg => sg.role === 'CTA' ? { ...sg, text: opt.text, startSeconds: opt.startSeconds, endSeconds: opt.endSeconds } : sg) : undefined;
+      const segs = s.segments ? s.segments.map((sg: any) => sg.role === 'CTA' ? { ...sg, text: opt.text, startSeconds: opt.startSeconds, endSeconds: opt.endSeconds } : sg) : undefined;
 
       return {
         ...s,
@@ -613,6 +642,9 @@ export const ViralShortsView: React.FC = () => {
                   key={topic.id}
                   className="card"
                   style={{
+                    flexShrink: 0,
+                    minHeight: 'fit-content',
+                    boxSizing: 'border-box',
                     padding: '10px 12px',
                     display: 'flex',
                     flexDirection: 'column',
@@ -665,7 +697,7 @@ export const ViralShortsView: React.FC = () => {
                         {language === 'bn' ? 'আলোচিত মূল পয়েন্টসমূহ:' : 'Key Points Discussed:'}
                       </span>
                       <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-                        {topic.keyPoints.map((kp, kIdx) => (
+                        {topic.keyPoints.map((kp: string, kIdx: number) => (
                           <span
                             key={`kp_${kIdx}`}
                             style={{
@@ -684,38 +716,68 @@ export const ViralShortsView: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Actions Bar */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', paddingTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                  {/* Responsive Actions Bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', marginTop: '4px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                     <button
-                      onClick={() => hostBridge.setPlayheadPosition(topic.startSeconds)}
+                      onClick={() => {
+                        hostBridge.setPlayheadPosition(topic.startSeconds);
+                        hostBridge.startPlayback(1);
+                      }}
                       className="btn-secondary"
-                      style={{ padding: '3px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
+                      style={{ padding: '4px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                      title="ভিডিও প্লেহেড নিয়ে শুনুন"
                     >
                       <Play size={10} />
-                      <span>{language === 'bn' ? 'ভিডিওতে শুনুন' : 'Seek Timeline'}</span>
+                      <span>{language === 'bn' ? 'শুনুন' : 'Audition'}</span>
                     </button>
 
-                    <button
-                      onClick={() => handleSelectTopicToShort(topic)}
-                      disabled={isGenerating}
-                      className="btn-primary"
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: '10.5px',
-                        fontWeight: 600,
-                        backgroundColor: '#ea580c',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
-                      }}
-                    >
-                      <CheckCircle2 size={11} />
-                      <span>{language === 'bn' ? '✓ এই টপিক দিয়ে শর্টস বানান' : '✓ Build Short from this Topic'}</span>
-                    </button>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button
+                        onClick={() => handleSelectTopicToShort(topic)}
+                        disabled={isGenerating}
+                        className="btn-secondary"
+                        style={{
+                          padding: '4px 8px',
+                          fontSize: '10px',
+                          fontWeight: 500,
+                          backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                          color: '#60a5fa',
+                          border: '1px solid rgba(59, 130, 246, 0.3)',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                        title="হুক, বডি ও সিটিএ স্ক্রিপ্ট দেখুন এবং এডিট করুন"
+                      >
+                        <FileText size={11} />
+                        <span>{language === 'bn' ? '📝 স্ক্রিপ্ট দেখুন / এডিট' : '📝 View Script'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleDirectCreateSequenceFromTopic(topic)}
+                        disabled={isGenerating}
+                        className="btn-primary"
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '10px',
+                          fontWeight: 600,
+                          backgroundColor: '#ea580c',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                        title="সরাসরি প্রিমিয়ার প্রোতে ৯:১৬ সিকোয়েন্স ও কাট তৈরি করুন"
+                      >
+                        <Film size={11} />
+                        <span>{language === 'bn' ? '🎬 ৯:১৬ সিকোয়েন্স বানান' : '🎬 Create 9:16'}</span>
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))
@@ -807,6 +869,9 @@ export const ViralShortsView: React.FC = () => {
                     key={item.id}
                     className="card"
                     style={{
+                      flexShrink: 0,
+                      minHeight: 'fit-content',
+                      boxSizing: 'border-box',
                       padding: '10px 12px',
                       display: 'flex',
                       flexDirection: 'column',
@@ -933,7 +998,7 @@ export const ViralShortsView: React.FC = () => {
                             {loadingAlternatives[`hook_${item.id}`] ? (
                               <div style={{ fontSize: '10px', color: '#fef08a', padding: '4px' }}>{language === 'bn' ? 'বিকল্প হুক খোঁজা হচ্ছে...' : 'Searching alternative hooks...'}</div>
                             ) : (
-                              item.alternativeHooks?.map((alt, aIdx) => (
+                              item.alternativeHooks?.map((alt: any, aIdx: number) => (
                                 <div
                                   key={`h_alt_${aIdx}`}
                                   onClick={() => handleApplyAlternativeHook(item.id, alt)}
@@ -1044,7 +1109,7 @@ export const ViralShortsView: React.FC = () => {
                             {loadingAlternatives[`cta_${item.id}`] ? (
                               <div style={{ fontSize: '10px', color: '#fae8ff', padding: '4px' }}>{language === 'bn' ? 'বিকল্প সিটিএ খোঁজা হচ্ছে...' : 'Searching alternative CTAs...'}</div>
                             ) : (
-                              item.alternativeCtas?.map((alt, cIdx) => (
+                              item.alternativeCtas?.map((alt: any, cIdx: number) => (
                                 <div
                                   key={`c_alt_${cIdx}`}
                                   onClick={() => handleApplyAlternativeCta(item.id, alt)}

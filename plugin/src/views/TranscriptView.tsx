@@ -96,7 +96,12 @@ export const TranscriptView: React.FC = () => {
     jobStatus,
     jobProgress,
     jobMessage,
-    language
+    language,
+    scriptDirectives,
+    setScriptDirectives,
+    updateScriptDirective,
+    customMarkers,
+    setCustomMarkers
   } = usePrismexStore();
 
   const t = translations[language];
@@ -167,7 +172,6 @@ export const TranscriptView: React.FC = () => {
   const [compareTakesItem, setCompareTakesItem] = useState<any | null>(null);
 
   // Full Script Contextual AI Directives (B-Roll, PNG, Typography, Punch & Bengali Explanations)
-  const [scriptDirectives, setScriptDirectives] = useState<Record<number, any>>({});
   const [isAnalyzingScript, setIsAnalyzingScript] = useState<boolean>(false);
   const [expandedDirectiveIdx, setExpandedDirectiveIdx] = useState<number | null>(null);
 
@@ -274,6 +278,7 @@ export const TranscriptView: React.FC = () => {
   const [floatingSelection, setFloatingSelection] = useState<{
     text: string;
     cleanQuery: string;
+    paraStartIdx: number | null;
     x: number;
     y: number;
   } | null>(null);
@@ -343,16 +348,127 @@ export const TranscriptView: React.FC = () => {
       const range = sel.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       const clean = text.replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s\u0980-\u09FF'-]/g, '').trim();
+
+      // Detect nearest paragraph container from DOM node
+      let container: HTMLElement | null = range.commonAncestorContainer as HTMLElement;
+      if (container && container.nodeType === 3) container = container.parentElement;
+      const paraEl = container?.closest('[id^="para-"]');
+      let paraStartIdx: number | null = null;
+      if (paraEl && paraEl.id) {
+        const idNum = parseInt(paraEl.id.replace('para-', ''), 10);
+        if (!isNaN(idNum)) paraStartIdx = idNum;
+      }
+
       setFloatingSelection({
         text,
         cleanQuery: clean || text,
-        x: Math.max(8, Math.min(window.innerWidth - 180, rect.left + rect.width / 2 - 80)),
-        y: Math.max(8, rect.top - 42)
+        paraStartIdx,
+        x: Math.max(8, Math.min(window.innerWidth - 240, rect.left + rect.width / 2 - 120)),
+        y: Math.max(8, rect.top - 46)
       });
     } catch {
       setFloatingSelection(null);
     }
   }, []);
+
+  // Manual Visual Directive Marker on Selected Text
+  const handleMarkSelectionDirective = (
+    type: 'BROLL' | 'PNG' | 'TEXT_ANIMATION' | 'PUNCH',
+    customQuery?: string
+  ) => {
+    if (!floatingSelection) return;
+    const cleanKw = customQuery || floatingSelection.cleanQuery;
+    const p = paragraphs.find((pr) => pr.startIdx === floatingSelection.paraStartIdx);
+    const startSec = p?.startTime ?? playheadSec;
+    const endSec = p ? p.tokens[p.tokens.length - 1].end : startSec + 4;
+    const directiveKey = floatingSelection.paraStartIdx ?? Math.round(startSec * 10);
+
+    let badgeLabel = `🎥 B-Roll: ${cleanKw.slice(0, 16)}`;
+    let accentColor = '#06b6d4';
+    let explanationBn = `"${cleanKw}" অংশের জন্য B-Roll ভিজ্যুয়াল ফুটেজ ব্যবহার করুন।`;
+    let directorAdvice = `Relevant stock or B-Roll cutaway for "${cleanKw}"`;
+    let searchUrl = `https://www.pexels.com/search/videos/${encodeURIComponent(cleanKw)}/`;
+    let platform = 'Pexels';
+
+    if (type === 'PNG') {
+      badgeLabel = `🖼️ PNG: ${cleanKw.slice(0, 16)}`;
+      accentColor = '#a855f7';
+      explanationBn = `"${cleanKw}" অংশের জন্য স্ক্রিনে স্বচ্ছ PNG ছবি বা স্টিকার পপ করুন।`;
+      directorAdvice = `On-screen transparent PNG graphic pop for "${cleanKw}"`;
+      searchUrl = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(cleanKw + ' transparent png')}`;
+      platform = 'Google PNG';
+    } else if (type === 'TEXT_ANIMATION') {
+      badgeLabel = `✨ টেক্সট: ${cleanKw.slice(0, 16)}`;
+      accentColor = '#f59e0b';
+      explanationBn = `"${cleanKw}" কথাটি স্ক্রিনে কাইনেটিক টাইপোগ্রাফি বা অ্যানিমেটেড টেক্সট হিসেবে দেখান।`;
+      directorAdvice = `Animated kinetic typography on screen for "${cleanKw}"`;
+      searchUrl = `https://www.google.com/search?q=${encodeURIComponent(cleanKw)}`;
+      platform = 'Google';
+    } else if (type === 'PUNCH') {
+      badgeLabel = `⚡ পাঞ্চ কাট: ${cleanKw.slice(0, 16)}`;
+      accentColor = '#ef4444';
+      explanationBn = `"${cleanKw}" মুহূর্তে পাঞ্চ জুম (১১০% স্কেল) বা জাম্প কাটের মাধ্যমে দৃষ্টি আকর্ষণ করুন।`;
+      directorAdvice = `Punch Zoom cut-in (1.1x scale) at "${cleanKw}"`;
+      searchUrl = '';
+      platform = 'Timeline';
+    }
+
+    updateScriptDirective(directiveKey, {
+      sentenceIndex: floatingSelection.paraStartIdx ?? 0,
+      startSeconds: startSec,
+      endSeconds: endSec,
+      visualType: type,
+      badgeLabel,
+      accentColor,
+      explanationBn,
+      directorAdvice,
+      primaryKeyword: cleanKw,
+      searchUrl,
+      platform
+    });
+
+    setCreativeStatus(`"${cleanKw}" সফলভাবে ${type} হিসেবে চিহ্নিত হয়েছে!`);
+    setFloatingSelection(null);
+    setTimeout(() => setCreativeStatus(null), 2500);
+  };
+
+  // AI-Powered Directive Analysis on Selected Text
+  const handleAnalyzeSelectionAI = async () => {
+    if (!floatingSelection) return;
+    const cleanKw = floatingSelection.cleanQuery;
+    const p = paragraphs.find((pr) => pr.startIdx === floatingSelection.paraStartIdx);
+    const startSec = p?.startTime ?? playheadSec;
+    const endSec = p ? p.tokens[p.tokens.length - 1].end : startSec + 4;
+    const directiveKey = floatingSelection.paraStartIdx ?? Math.round(startSec * 10);
+
+    setCreativeStatus(`AI "${cleanKw}" বিশ্লেষণ করছে...`);
+    try {
+      const sentenceText = p ? p.tokens.map((t) => t.word).join(' ') : floatingSelection.text;
+      const res = await client.getScriptDirectives(
+        p ? p.tokens.map((t) => ({ word: t.word, start: t.start, end: t.end, start_seconds: t.start, end_seconds: t.end })) : [],
+        [{ text: sentenceText, startSeconds: startSec, endSeconds: endSec }],
+        `Analyze specifically this user selection: "${cleanKw}" in sentence: "${sentenceText}". Decide if it should be BROLL, PNG, TEXT_ANIMATION, or PUNCH.`
+      );
+
+      if (res && res.directives && res.directives.length > 0) {
+        const d = res.directives[0];
+        updateScriptDirective(directiveKey, {
+          ...d,
+          sentenceIndex: floatingSelection.paraStartIdx ?? 0,
+          startSeconds: startSec,
+          endSeconds: endSec
+        });
+        setCreativeStatus(`AI টিউন সম্পন্ন: ${d.badgeLabel}`);
+      } else {
+        handleMarkSelectionDirective('PNG', cleanKw);
+      }
+    } catch {
+      handleMarkSelectionDirective('PNG', cleanKw);
+    } finally {
+      setFloatingSelection(null);
+      setTimeout(() => setCreativeStatus(null), 3000);
+    }
+  };
 
   const handleAnalyzeScriptDirectives = useCallback(async () => {
     if (words.length === 0) return;
@@ -970,18 +1086,22 @@ export const TranscriptView: React.FC = () => {
       .join('\n\n');
     const res = await hostBridge.saveFileWithDialog(`${baseFilename}.txt`, txt, ['txt']);
     if (res.saved) {
-      setExportStatus(`Saved TXT!`);
-      setTimeout(() => setExportStatus(null), 2500);
+      setExportStatus(res.path ? `TXT সেভ হয়েছে: ${res.path}` : `Saved TXT!`);
+    } else if (res.error) {
+      setExportStatus(`TXT সেভ ব্যর্থ: ${res.error}`);
     }
+    setTimeout(() => setExportStatus(null), 3500);
   };
 
   const handleExportSrt = async () => {
     const srt = buildSrtContent();
     const res = await hostBridge.saveFileWithDialog(`${baseFilename}.srt`, srt, ['srt']);
     if (res.saved) {
-      setExportStatus(`Saved SRT (${fps} fps)!`);
-      setTimeout(() => setExportStatus(null), 2500);
+      setExportStatus(res.path ? `SRT সেভ হয়েছে: ${res.path}` : `Saved SRT (${fps} fps)!`);
+    } else if (res.error) {
+      setExportStatus(`SRT সেভ ব্যর্থ: ${res.error}`);
     }
+    setTimeout(() => setExportStatus(null), 3500);
   };
 
   const handleExportJson = async () => {
@@ -1026,9 +1146,11 @@ export const TranscriptView: React.FC = () => {
     };
     const res = await hostBridge.saveFileWithDialog(`${baseFilename}_transcript.json`, JSON.stringify(payload, null, 2), ['json']);
     if (res.saved) {
-      setExportStatus(`Saved JSON (${fps} fps)!`);
-      setTimeout(() => setExportStatus(null), 2500);
+      setExportStatus(res.path ? `JSON সেভ হয়েছে: ${res.path}` : `Saved JSON (${fps} fps)!`);
+    } else if (res.error) {
+      setExportStatus(`JSON সেভ ব্যর্থ: ${res.error}`);
     }
+    setTimeout(() => setExportStatus(null), 3500);
   };
 
   const handleSendToPremiereCaptions = async () => {
@@ -3314,17 +3436,18 @@ export const TranscriptView: React.FC = () => {
           style={{
             position: 'fixed',
             top: `${floatingSelection.y}px`,
-            left: `${Math.max(8, Math.min(window.innerWidth - 180, floatingSelection.x))}px`,
+            left: `${Math.max(8, Math.min(window.innerWidth - 240, floatingSelection.x))}px`,
             zIndex: 10000,
             backgroundColor: '#18181b',
             border: '1px solid rgba(255,255,255,0.25)',
-            borderRadius: '5px',
+            borderRadius: '6px',
             padding: '3px 5px',
-            boxShadow: '0 8px 26px rgba(0,0,0,0.9)',
+            boxShadow: '0 8px 28px rgba(0,0,0,0.95)',
             display: 'flex',
             alignItems: 'center',
             gap: '3px',
-            fontFamily: 'inherit'
+            fontFamily: 'inherit',
+            flexWrap: 'nowrap'
           }}
         >
           {/* 📋 Copy */}
@@ -3336,11 +3459,11 @@ export const TranscriptView: React.FC = () => {
             }}
             title="সিলেক্টেড টেক্সট কপি করুন"
             style={{
-              padding: '3px 5px',
+              padding: '4px 6px',
               backgroundColor: 'rgba(255, 255, 255, 0.08)',
               color: '#ffffff',
               border: '1px solid rgba(255, 255, 255, 0.18)',
-              borderRadius: '3px',
+              borderRadius: '4px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -3350,98 +3473,76 @@ export const TranscriptView: React.FC = () => {
             <Copy size={12} />
           </button>
 
-          {/* 🖼️ Google Images (PNG) */}
+          {/* 🎥 Mark as B-Roll (Cyan) */}
           <button
-            onClick={() => {
-              const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(floatingSelection.cleanQuery + ' transparent png')}`;
-              hostBridge.openURLInDefaultBrowser(url);
-            }}
-            title="সিলেক্টেড অংশের স্বচ্ছ PNG ছবি গুগলে খুঁজুন"
+            onClick={() => handleMarkSelectionDirective('BROLL')}
+            title="🎥 B-Roll হিসেবে চিহ্নিত করুন (সায়ান কালার ও Pexels লিংক তৈরি হবে)"
             style={{
-              padding: '3px 5px',
-              backgroundColor: 'rgba(168, 85, 247, 0.25)',
-              color: '#d8b4fe',
-              border: '1px solid rgba(168, 85, 247, 0.5)',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-          >
-            <Image size={12} />
-          </button>
-
-          {/* 🎥 Pexels Video */}
-          <button
-            onClick={() => {
-              const url = `https://www.pexels.com/search/videos/${encodeURIComponent(floatingSelection.cleanQuery)}/`;
-              hostBridge.openURLInDefaultBrowser(url);
-            }}
-            title="সিলেক্টেড অংশের B-Roll ভিডিও Pexels-এ খুঁজুন"
-            style={{
-              padding: '3px 5px',
-              backgroundColor: 'rgba(6, 182, 212, 0.25)',
+              padding: '4px 6px',
+              backgroundColor: 'rgba(6, 182, 212, 0.22)',
               color: '#67e8f9',
-              border: '1px solid rgba(6, 182, 212, 0.5)',
-              borderRadius: '3px',
+              border: '1px solid rgba(6, 182, 212, 0.55)',
+              borderRadius: '4px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center'
+              gap: '2px',
+              fontSize: '10px',
+              fontWeight: 600
             }}
           >
             <Video size={12} />
+            <span>B-Roll</span>
           </button>
 
-          {/* 🔍 Google Web Search */}
+          {/* 🖼️ Mark as PNG (Purple) */}
           <button
-            onClick={() => {
-              const url = `https://www.google.com/search?q=${encodeURIComponent(floatingSelection.cleanQuery)}`;
-              hostBridge.openURLInDefaultBrowser(url);
-            }}
-            title="সরাসরি গুগলে সার্চ করুন"
+            onClick={() => handleMarkSelectionDirective('PNG')}
+            title="🖼️ স্বচ্ছ PNG ছবি হিসেবে চিহ্নিত করুন (পার্পল কালার ও গুগল PNG ইমেজ সার্চ লিংক তৈরি হবে)"
             style={{
-              padding: '3px 5px',
-              backgroundColor: 'rgba(59, 130, 246, 0.25)',
-              color: '#93c5fd',
-              border: '1px solid rgba(59, 130, 246, 0.5)',
-              borderRadius: '3px',
+              padding: '4px 6px',
+              backgroundColor: 'rgba(168, 85, 247, 0.22)',
+              color: '#d8b4fe',
+              border: '1px solid rgba(168, 85, 247, 0.55)',
+              borderRadius: '4px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center'
+              gap: '2px',
+              fontSize: '10px',
+              fontWeight: 600
             }}
           >
-            <Search size={12} />
+            <Image size={12} />
+            <span>PNG</span>
           </button>
 
-          {/* ✨ Text Animation / Typography */}
+          {/* ✨ Mark as Text Animation / Typography (Amber) */}
           <button
-            onClick={async () => {
-              await copyToClipboard(floatingSelection.cleanQuery);
-              setExportStatus(`"${floatingSelection.cleanQuery}" টাইপোগ্রাফি কি-ওয়ার্ড কপি হয়েছে!`);
-              setTimeout(() => setExportStatus(null), 2500);
-            }}
-            title="টাইপোগ্রাফি / টেক্সট অ্যানিমেশনের জন্য কপি করুন"
+            onClick={() => handleMarkSelectionDirective('TEXT_ANIMATION')}
+            title="✨ টেক্সট অ্যানিমেশন / টাইপোগ্রাফি হিসেবে চিহ্নিত করুন"
             style={{
-              padding: '3px 5px',
-              backgroundColor: 'rgba(245, 158, 11, 0.25)',
-              color: '#fbbf24',
-              border: '1px solid rgba(245, 158, 11, 0.5)',
-              borderRadius: '3px',
+              padding: '4px 6px',
+              backgroundColor: 'rgba(245, 158, 11, 0.22)',
+              color: '#fde68a',
+              border: '1px solid rgba(245, 158, 11, 0.55)',
+              borderRadius: '4px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center'
+              gap: '2px',
+              fontSize: '10px',
+              fontWeight: 600
             }}
           >
             <Sparkles size={12} />
+            <span>টেক্সট</span>
           </button>
 
-          {/* ⚡ Punch Zoom Marker */}
+          {/* ⚡ Mark as Punch Cut Zoom (Red) */}
           <button
             onClick={async () => {
+              handleMarkSelectionDirective('PUNCH');
               await hostBridge.addTimelineMarkers([{
                 type: 'EMPHASIS' as any,
                 name: `Punch: ${floatingSelection.cleanQuery.slice(0, 16)}`,
@@ -3450,24 +3551,68 @@ export const TranscriptView: React.FC = () => {
                 durationSeconds: 1.5,
                 color: 'RED' as any
               }]);
-              setCreativeStatus(`টাইমলাইনে পাঞ্চ জুম মার্কার যুক্ত হয়েছে!`);
-              setFloatingSelection(null);
-              setTimeout(() => setCreativeStatus(null), 2500);
             }}
-            title="টাইমলাইনে পাঞ্চ জুম মার্কার প্রয়োগ করুন"
+            title="⚡ পাঞ্চ জুম কাট হিসেবে চিহ্নিত করুন এবং টাইমলাইনে মার্কার দিন"
             style={{
-              padding: '3px 5px',
-              backgroundColor: 'rgba(239, 68, 68, 0.25)',
-              color: '#f87171',
-              border: '1px solid rgba(239, 68, 68, 0.45)',
-              borderRadius: '3px',
+              padding: '4px 6px',
+              backgroundColor: 'rgba(239, 68, 68, 0.22)',
+              color: '#fca5a5',
+              border: '1px solid rgba(239, 68, 68, 0.55)',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '2px',
+              fontSize: '10px',
+              fontWeight: 600
+            }}
+          >
+            <Zap size={12} />
+            <span>পাঞ্চ</span>
+          </button>
+
+          {/* 🤖 AI Analyze this Selection */}
+          <button
+            onClick={handleAnalyzeSelectionAI}
+            title="🤖 AI দিয়ে এই অংশ বিশ্লেষণ করুন (বি-রোল, পিএনজি নাকি টেক্সট হবে তা এআই ঠিক করবে)"
+            style={{
+              padding: '4px 7px',
+              background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.3), rgba(168, 85, 247, 0.3))',
+              color: '#ffffff',
+              border: '1px solid rgba(168, 85, 247, 0.6)',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              fontSize: '10px',
+              fontWeight: 700
+            }}
+          >
+            <Bot size={12} />
+            <span>AI টিউন</span>
+          </button>
+
+          {/* 🔍 Direct Google Images Browser Open */}
+          <button
+            onClick={() => {
+              const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(floatingSelection.cleanQuery + ' transparent png')}`;
+              hostBridge.openURLInDefaultBrowser(url);
+            }}
+            title="সরাসরি ব্রাউজারে গুগল PNG ইমেজ সার্চ পেজ খুলুন"
+            style={{
+              padding: '4px 5px',
+              backgroundColor: 'rgba(255, 255, 255, 0.06)',
+              color: '#94a3b8',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              borderRadius: '4px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center'
             }}
           >
-            <Zap size={12} />
+            <ExternalLink size={11} />
           </button>
 
           {/* ✕ Close */}
