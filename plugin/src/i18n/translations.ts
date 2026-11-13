@@ -2,16 +2,16 @@ export type AppLanguage = 'en' | 'bn';
 
 export const translations = {
   en: {
-    // Tabs
-    tabTranscript: 'Text Panel',
-    tabDashboard: 'Dashboard',
-    tabMagicCut: 'Magic Cut',
-    tabReviewQueue: 'Review Queue',
-    tabTakes: 'Takes',
-    tabSilence: 'Silence',
-    tabProviders: 'AI & API',
+    // Workflow Order Tabs
+    tabTranscript: '1. Text & Speech',
+    tabMagicCut: '2. Auto Cut',
+    tabSilence: '3. Silence Cut',
+    tabTakes: '4. Double Lines',
+    tabReviewQueue: '5. Review Queue',
+    tabDashboard: '6. Dashboard',
+    tabProviders: '7. AI & API',
+    tabSettings: '8. Settings',
     tabProfiles: 'Profiles',
-    tabSettings: 'Settings',
     tabHistory: 'History',
 
     // Status
@@ -96,16 +96,16 @@ export const translations = {
     zeroFrameSync: '100% 0-Frame Drift'
   },
   bn: {
-    // Tabs
-    tabTranscript: 'টেক্সট প্যানেল',
-    tabDashboard: 'ড্যাশবোর্ড',
-    tabMagicCut: 'ম্যাজিক কাট',
-    tabReviewQueue: 'রিভিউ কিউ',
-    tabTakes: 'টেকস',
-    tabSilence: 'সাইলেন্স',
-    tabProviders: 'AI ও API',
+    // Workflow Order Tabs
+    tabTranscript: '১. টেক্সট প্যানেল',
+    tabMagicCut: '২. অটো কাট',
+    tabSilence: '৩. সাইলেন্স কাট',
+    tabTakes: '৪. ডাবল লাইন',
+    tabReviewQueue: '৫. রিভিউ কিউ',
+    tabDashboard: '৬. ড্যাশবোর্ড',
+    tabProviders: '৭. AI ও API',
+    tabSettings: '৮. সেটিংস',
     tabProfiles: 'প্রোফাইল',
-    tabSettings: 'সেটিংস',
     tabHistory: 'হিস্ট্রি',
 
     // Status

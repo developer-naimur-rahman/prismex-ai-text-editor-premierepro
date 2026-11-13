@@ -33,16 +33,15 @@ export const NavigationHeader: React.FC = () => {
   const pendingReviewCount = reviewItems.filter(i => i.status === 'PENDING').length;
 
   const tabs: Array<{ id: ActiveTab; label: string; icon: React.ReactNode; badge?: number }> = [
-    { id: 'transcript', label: t.tabTranscript, icon: <FileText size={13} /> },
-    { id: 'dashboard', label: t.tabDashboard, icon: <LayoutDashboard size={13} /> },
-    { id: 'magic-cut', label: t.tabMagicCut, icon: <Sparkles size={13} /> },
-    { id: 'review-queue', label: t.tabReviewQueue, icon: <CheckSquare size={13} />, badge: pendingReviewCount },
-    { id: 'silence', label: t.tabSilence, icon: <Sliders size={13} /> },
-    { id: 'providers', label: t.tabProviders, icon: <Cpu size={13} /> },
-    { id: 'settings', label: t.tabSettings, icon: <Settings size={13} /> },
-    { id: 'takes', label: t.tabTakes, icon: <Layers size={13} /> },
-    { id: 'profiles', label: t.tabProfiles, icon: <Bookmark size={13} /> },
-    { id: 'history', label: t.tabHistory, icon: <History size={13} /> }
+    { id: 'transcript', label: t.tabTranscript, icon: <FileText size={12} /> },
+    { id: 'magic-cut', label: t.tabMagicCut, icon: <Sparkles size={12} /> },
+    { id: 'silence', label: t.tabSilence, icon: <Sliders size={12} /> },
+    { id: 'takes', label: t.tabTakes, icon: <Layers size={12} /> },
+    { id: 'review-queue', label: t.tabReviewQueue, icon: <CheckSquare size={12} />, badge: pendingReviewCount },
+    { id: 'dashboard', label: t.tabDashboard, icon: <LayoutDashboard size={12} /> },
+    { id: 'providers', label: t.tabProviders, icon: <Cpu size={12} /> },
+    { id: 'settings', label: t.tabSettings, icon: <Settings size={12} /> },
+    { id: 'history', label: t.tabHistory, icon: <History size={12} /> }
   ];
 
   return (
@@ -162,13 +161,15 @@ export const NavigationHeader: React.FC = () => {
         </div>
       </div>
 
-      {/* Tabs */}
+      {/* Workflow Ordered Tabs */}
       <nav style={{ 
         display: 'flex', 
-        gap: '2px', 
+        gap: '4px', 
         overflowX: 'auto', 
-        padding: '2px 6px',
-        backgroundColor: 'var(--bg-primary)'
+        padding: '3px 6px',
+        backgroundColor: 'var(--bg-primary)',
+        scrollbarWidth: 'none',
+        alignItems: 'center'
       }}>
         {tabs.map((tab) => {
           const isActive = activeTab === tab.id;
@@ -177,25 +178,30 @@ export const NavigationHeader: React.FC = () => {
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               style={{
-                backgroundColor: isActive ? 'var(--bg-card)' : 'transparent',
-                color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                borderBottom: isActive ? '2px solid var(--accent-color)' : '2px solid transparent',
-                borderRadius: '4px 4px 0 0',
-                padding: '5px 8px',
-                fontSize: '10.5px',
+                backgroundColor: isActive ? 'var(--accent-color)' : 'var(--bg-tertiary)',
+                color: isActive ? '#ffffff' : 'var(--text-secondary)',
+                borderRadius: '4px',
+                padding: '3px 7px',
+                fontSize: '9.5px',
+                fontWeight: isActive ? 600 : 500,
                 position: 'relative',
-                whiteSpace: 'nowrap'
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                border: isActive ? '1px solid var(--accent-hover)' : '1px solid var(--border-subtle)',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '3px'
               }}
             >
               {tab.icon}
               <span>{tab.label}</span>
               {Boolean(tab.badge && tab.badge > 0) && (
                 <span style={{
-                  backgroundColor: 'var(--accent-color)',
+                  backgroundColor: isActive ? '#ef4444' : 'var(--accent-color)',
                   color: '#fff',
                   borderRadius: '8px',
-                  padding: '1px 5px',
-                  fontSize: '9px',
+                  padding: '0 4px',
+                  fontSize: '8.5px',
                   fontWeight: 700,
                   marginLeft: '2px'
                 }}>
