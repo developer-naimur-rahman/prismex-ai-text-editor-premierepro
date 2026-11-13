@@ -16,22 +16,31 @@ class CreativeAI:
         api_key = KeychainVault.get_api_key("google-gemini")
         if not api_key:
             return None
-        try:
-            import requests
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-            resp = requests.post(
-                url,
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
-                },
-                timeout=25,
-            )
-            if resp.status_code == 200:
-                raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(raw)
-        except Exception as e:
-            print(f"[CreativeAI] Gemini failed: {e}")
+        import requests
+        candidate_models = [
+            "gemini-flash-lite-latest",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.7-flash"
+        ]
+        for m in candidate_models:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+                resp = requests.post(
+                    url,
+                    json={
+                        "contents": [{"parts": [{"text": prompt}]}],
+                        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+                    },
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    return json.loads(raw)
+                else:
+                    print(f"[CreativeAI] Gemini model {m} returned status {resp.status_code}")
+            except Exception as e:
+                print(f"[CreativeAI] Gemini model {m} failed: {e}")
         return None
 
     @classmethod
@@ -822,46 +831,47 @@ class CreativeAI:
         if isinstance(ai_res, list) and len(ai_res) > 0:
             return ai_res
 
-        # Local Offline Fallback: Extract semantic clusters of sentences
-        sent_list = sentences if sentences else []
-        n_sent = len(sent_list)
-        if n_sent == 0:
+        # Local Offline Fallback: Extract meaningful story clusters from words & sentences
+        if not words:
             return []
 
-        chunk_size = max(3, min(8, n_sent // max(1, target_count)))
+        total_word_count = len(words)
+        chunk_word_size = max(20, min(80, total_word_count // max(1, target_count)))
         topics = []
-        curr_idx = 0
-        t_idx = 1
-        while curr_idx < n_sent and len(topics) < target_count:
-            end_idx = min(n_sent, curr_idx + chunk_size)
-            chunk = sent_list[curr_idx:end_idx]
-            if not chunk:
+
+        for t_idx in range(1, target_count + 1):
+            w_start_idx = (t_idx - 1) * chunk_word_size
+            w_end_idx = min(total_word_count, t_idx * chunk_word_size)
+            if w_start_idx >= total_word_count:
                 break
 
-            s_sec = round(float(chunk[0].get("start_seconds", 0.0)), 2)
-            e_sec = round(float(chunk[-1].get("end_seconds", 0.0)), 2)
-            c_texts = [str(s.get("text", "")).strip() for s in chunk if s.get("text")]
-            snippet = " ".join(c_texts)
+            chunk_w = words[w_start_idx:w_end_idx]
+            if not chunk_w:
+                break
 
-            first_words = snippet.split()[:6]
-            title = " ".join(first_words) if first_words else f"টপিক #{t_idx}"
+            s_sec = round(float(chunk_w[0].get("start_seconds", chunk_w[0].get("start", 0.0))), 2)
+            e_sec = round(float(chunk_w[-1].get("end_seconds", chunk_w[-1].get("end", 0.0))), 2)
+            snippet = " ".join(str(w.get("word", "")).strip() for w in chunk_w if w.get("word"))
+
+            words_in_snippet = snippet.split()
+            title = " ".join(words_in_snippet[:6]) if words_in_snippet else f"টপিক #{t_idx}"
+            summary = snippet[:180] + ("..." if len(snippet) > 180 else "")
+
+            p1 = " ".join(words_in_snippet[:6]) if len(words_in_snippet) >= 6 else "সূচনা ও মূল কথা"
+            mid = len(words_in_snippet) // 2
+            p2 = " ".join(words_in_snippet[mid : mid + 6]) if len(words_in_snippet) >= 12 else "মূল বর্ণনা ও ঘটনা"
+            p3 = " ".join(words_in_snippet[-6:]) if len(words_in_snippet) >= 6 else "উপসংহার ও শেষ কথা"
 
             topics.append({
                 "id": f"topic_{t_idx}_{int(s_sec)}",
-                "topicTitle": f"টপিক #{t_idx}: {title}",
-                "topicSummaryBn": f"এই অংশের সারমর্ম: {snippet[:140]}... এটি দর্শকদের জন্য একটি অর্থপূর্ণ শর্টস হিসেবে প্রযোজ্য।",
-                "keyPoints": [
-                    c_texts[0][:50] if len(c_texts) > 0 else "মূল আকর্ষণ ও সূচনা",
-                    c_texts[1][:50] if len(c_texts) > 1 else "ব্যাখ্যা ও ঘটনা",
-                    c_texts[-1][:50] if len(c_texts) > 2 else "উপসংহার ও শিক্ষা"
-                ],
+                "topicTitle": title,
+                "topicSummaryBn": summary,
+                "keyPoints": [p1, p2, p3],
                 "viralityScore": max(75, 96 - (t_idx * 3)),
                 "estimatedDurationSeconds": min(60, max(25, int(e_sec - s_sec))),
                 "startSeconds": s_sec,
                 "endSeconds": e_sec
             })
-            curr_idx = end_idx
-            t_idx += 1
 
         return topics
 

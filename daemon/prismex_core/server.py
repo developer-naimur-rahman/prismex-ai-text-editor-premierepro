@@ -434,32 +434,34 @@ def ai_analyze_transcript(req: TranscriptAIAnalyzeRequest):
     # Check if Google Gemini API key is configured in macOS Keychain
     gemini_key = KeychainVault.get_api_key("google-gemini")
     if gemini_key:
-        try:
-            import requests
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}"
-            resp = requests.post(
-                url,
-                json={
-                    "contents": [{
-                        "parts": [{
-                            "text": f"{req.prompt}\n\nTranscript ({total_words} words, {wpm} WPM):\n{full_text[:12000]}"
+        import requests
+        candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
+        for m in candidate_models:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={gemini_key}"
+                resp = requests.post(
+                    url,
+                    json={
+                        "contents": [{
+                            "parts": [{
+                                "text": f"{req.prompt}\n\nTranscript ({total_words} words, {wpm} WPM):\n{full_text[:12000]}"
+                            }]
                         }]
-                    }]
-                },
-                timeout=20
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                text_out = data["candidates"][0]["content"]["parts"][0]["text"]
-                return {
-                    "summary": text_out,
-                    "engine": "Google Gemini 2.0 Flash",
-                    "wpm": wpm,
-                    "totalWords": total_words,
-                    "fillerCount": filler_count
-                }
-        except Exception as e:
-            print(f"[AI Analyze] Gemini fallback to local: {e}")
+                    },
+                    timeout=20
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text_out = data["candidates"][0]["content"]["parts"][0]["text"]
+                    return {
+                        "summary": text_out,
+                        "engine": f"Google Gemini ({m})",
+                        "wpm": wpm,
+                        "totalWords": total_words,
+                        "fillerCount": filler_count
+                    }
+            except Exception as e:
+                print(f"[AI Analyze] Gemini model {m} failed: {e}")
 
     # Local AI Summary & Pacing Analysis (Zero-Subscription Offline Fallback)
     sentences = [s.strip() for s in full_text.replace("?", ".").replace("!", ".").split(".") if len(s.strip()) > 3]

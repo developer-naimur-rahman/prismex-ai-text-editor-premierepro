@@ -252,23 +252,25 @@ class SmartSRTSegmenter:
 
     @staticmethod
     def _call_gemini_json(api_key: str, prompt_text: str) -> Optional[List[Dict[str, Any]]]:
-        try:
-            import requests
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
-            resp = requests.post(
-                url,
-                json={
-                    "contents": [{"parts": [{"text": prompt_text}]}],
-                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
-                },
-                timeout=20,
-            )
-            if resp.status_code != 200:
-                return None
-            raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return json.loads(raw)
-        except Exception:
-            return None
+        import requests
+        candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
+        for m in candidate_models:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+                resp = requests.post(
+                    url,
+                    json={
+                        "contents": [{"parts": [{"text": prompt_text}]}],
+                        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
+                    },
+                    timeout=20,
+                )
+                if resp.status_code == 200:
+                    raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    return json.loads(raw)
+            except Exception:
+                continue
+        return None
 
     @staticmethod
     def _call_groq_json(api_key: str, prompt_text: str) -> Optional[List[Dict[str, Any]]]:
