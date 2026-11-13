@@ -719,6 +719,19 @@ def save_project_files_api(req: SaveFilesRequest):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+class OpenUrlRequest(BaseModel):
+    url: str
+
+@app.post("/api/v1/system/open-url")
+def open_url_api(req: OpenUrlRequest):
+    """Reliably opens a URL in default browser on host OS (macOS/Windows)."""
+    try:
+        import webbrowser
+        webbrowser.open(req.url)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 # ----------------- WebSocket Endpoint -----------------
 
 @app.websocket("/ws/events")

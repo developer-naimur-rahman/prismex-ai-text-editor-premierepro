@@ -350,13 +350,24 @@ export const TranscriptView: React.FC = () => {
       const clean = text.replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s\u0980-\u09FF'-]/g, '').trim();
 
       // Detect nearest paragraph container from DOM node
-      let container: HTMLElement | null = range.commonAncestorContainer as HTMLElement;
-      if (container && container.nodeType === 3) container = container.parentElement;
-      const paraEl = container?.closest('[id^="para-"]');
       let paraStartIdx: number | null = null;
+      let startNode: HTMLElement | null = range.startContainer as HTMLElement;
+      if (startNode && startNode.nodeType === 3) startNode = startNode.parentElement;
+      let paraEl = startNode?.closest('[id^="para-"]');
+      if (!paraEl) {
+        let ancestor: HTMLElement | null = range.commonAncestorContainer as HTMLElement;
+        if (ancestor && ancestor.nodeType === 3) ancestor = ancestor.parentElement;
+        paraEl = ancestor?.closest('[id^="para-"]');
+      }
       if (paraEl && paraEl.id) {
         const idNum = parseInt(paraEl.id.replace('para-', ''), 10);
         if (!isNaN(idNum)) paraStartIdx = idNum;
+      }
+      if (paraStartIdx === null) {
+        const matched = paragraphs.find((p) =>
+          p.tokens.some((tok) => text.toLowerCase().includes(tok.word.toLowerCase()) || tok.word.toLowerCase().includes(text.toLowerCase()))
+        );
+        if (matched) paraStartIdx = matched.startIdx;
       }
 
       setFloatingSelection({
@@ -369,7 +380,7 @@ export const TranscriptView: React.FC = () => {
     } catch {
       setFloatingSelection(null);
     }
-  }, []);
+  }, [paragraphs]);
 
   // Manual Visual Directive Marker on Selected Text
   const handleMarkSelectionDirective = (
@@ -378,10 +389,12 @@ export const TranscriptView: React.FC = () => {
   ) => {
     if (!floatingSelection) return;
     const cleanKw = customQuery || floatingSelection.cleanQuery;
-    const p = paragraphs.find((pr) => pr.startIdx === floatingSelection.paraStartIdx);
-    const startSec = p?.startTime ?? playheadSec;
+    const p = paragraphs.find((pr) => pr.startIdx === floatingSelection.paraStartIdx) ||
+              paragraphs.find((pr) => pr.tokens.some((tok) => floatingSelection.text.includes(tok.word))) ||
+              paragraphs[0];
+    const startSec = p ? p.startTime : playheadSec;
     const endSec = p ? p.tokens[p.tokens.length - 1].end : startSec + 4;
-    const directiveKey = floatingSelection.paraStartIdx ?? Math.round(startSec * 10);
+    const directiveKey = p ? p.startIdx : (floatingSelection.paraStartIdx ?? Math.round(startSec * 10));
 
     let badgeLabel = `🎥 B-Roll: ${cleanKw.slice(0, 16)}`;
     let accentColor = '#06b6d4';
@@ -3262,6 +3275,10 @@ export const TranscriptView: React.FC = () => {
       {/* ===================== FLOATING WORD-LEVEL AI POPOVER (COMPACT & RESPONSIVE) ===================== */}
       {popoverWord && (
         <div
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
           style={{
             position: 'fixed',
             top: `${Math.max(8, popoverWord.y - 38)}px`,
@@ -3433,6 +3450,10 @@ export const TranscriptView: React.FC = () => {
       {/* ===================== FLOATING TEXT DRAG SELECTION TOOLBAR (COMPACT & RESPONSIVE) ===================== */}
       {floatingSelection && (
         <div
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+          }}
           style={{
             position: 'fixed',
             top: `${floatingSelection.y}px`,

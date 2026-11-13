@@ -56,10 +56,21 @@ export class TimelineEditingEngine {
     // If running under CEP in Premiere Pro
     if (this.hostBridge.isRunningInCEP()) {
       try {
+        const sanitizedCuts = sortedCuts.map((c) => ({
+          startSeconds: Number(c.startSeconds) || 0,
+          endSeconds: Number(c.endSeconds) || 0,
+          durationSeconds: Number((c.endSeconds - c.startSeconds).toFixed(4))
+        }));
+        const jsonSafe = JSON.stringify(sanitizedCuts).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
         const res = await this.hostBridge.evalScript(
-          `$._prismex.executeNativeRippleCuts('${JSON.stringify(sortedCuts)}')`
+          `$._prismex.executeNativeRippleCuts('${jsonSafe}')`
         );
-        const data = JSON.parse(res);
+        let data: any = {};
+        try {
+          data = JSON.parse(res);
+        } catch {
+          data = { success: typeof res === 'string' && res.indexOf('"success":true') !== -1 };
+        }
         return {
           success: !!data.success,
           cutsExecuted: data.cutsExecuted || sortedCuts.length,

@@ -86,6 +86,29 @@ export class PremiereHostBridge {
     } catch (e) {
       console.warn('[PremiereHostBridge] Failed to open URL via CEP:', e);
     }
+
+    // Node.js direct shell fallback
+    try {
+      const req = (window as any).require;
+      if (req) {
+        const cp = req('child_process');
+        if (cp && typeof cp.exec === 'function') {
+          cp.exec(`open "${url.replace(/"/g, '\\"')}"`);
+          return;
+        }
+      }
+    } catch (ne) {}
+
+    // Companion daemon native OS opener fallback
+    try {
+      fetch('http://127.0.0.1:49152/api/v1/system/open-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      }).catch(() => {});
+    } catch (de) {}
+
+    // Browser fallback
     try {
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (e) {
@@ -94,12 +117,12 @@ export class PremiereHostBridge {
   }
 
   private async ensureCEPScriptLoaded(): Promise<void> {
-    if (!this.csInterface || this.cepScriptLoaded) return;
+    if (!this.csInterface) return;
     try {
       const extPath = this.csInterface.getSystemPath('extension');
       if (extPath) {
         const cleanPath = extPath.replace(/\\/g, '/');
-        await this.evalScript(`if (typeof $._prismex === "undefined") { $.evalFile("${cleanPath}/jsx/hostscript.jsx"); }`);
+        await this.evalScript(`$.evalFile("${cleanPath}/jsx/hostscript.jsx");`);
         this.cepScriptLoaded = true;
       }
     } catch (e) {
