@@ -166,6 +166,11 @@ export const TranscriptView: React.FC = () => {
   });
   const [compareTakesItem, setCompareTakesItem] = useState<any | null>(null);
 
+  // Full Script Contextual AI Directives (B-Roll, PNG, Typography, Punch & Bengali Explanations)
+  const [scriptDirectives, setScriptDirectives] = useState<Record<number, any>>({});
+  const [isAnalyzingScript, setIsAnalyzingScript] = useState<boolean>(false);
+  const [expandedDirectiveIdx, setExpandedDirectiveIdx] = useState<number | null>(null);
+
   const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
@@ -301,19 +306,51 @@ export const TranscriptView: React.FC = () => {
       setFloatingSelection({
         text,
         cleanQuery: clean || text,
-        x: Math.max(10, Math.min(window.innerWidth - 380, rect.left + rect.width / 2 - 160)),
-        y: Math.max(10, rect.top - 46)
+        x: Math.max(8, Math.min(window.innerWidth - 180, rect.left + rect.width / 2 - 80)),
+        y: Math.max(8, rect.top - 42)
       });
     } catch {
       setFloatingSelection(null);
     }
   }, []);
 
+  const handleAnalyzeScriptDirectives = useCallback(async () => {
+    if (words.length === 0) return;
+    setIsAnalyzingScript(true);
+    setCreativeStatus('AI দিয়ে পুরো স্ক্রিপ্ট বিশ্লেষণ করা হচ্ছে...');
+    try {
+      const res = await client.getScriptDirectives(transcriptWords, transcriptSentences);
+      if (res && res.directives) {
+        const dMap: Record<number, any> = {};
+        for (const d of res.directives) {
+          dMap[d.sentenceIndex] = d;
+        }
+        setScriptDirectives(dMap);
+        setCreativeStatus(`স্ক্রিপ্ট টিউন সম্পন্ন! ${res.totalDirectives}টি ভিজ্যুয়াল ডিরেকশন তৈরি হয়েছে (${res.engine})।`);
+        setTimeout(() => setCreativeStatus(null), 3500);
+      }
+    } catch (err) {
+      console.error('Failed to get script directives:', err);
+      setCreativeStatus('ডিরেকশন লোড করতে ব্যর্থ হয়েছে');
+      setTimeout(() => setCreativeStatus(null), 2500);
+    } finally {
+      setIsAnalyzingScript(false);
+    }
+  }, [words.length, transcriptWords, transcriptSentences, client]);
+
+  useEffect(() => {
+    if (words.length > 0 && Object.keys(scriptDirectives).length === 0 && !isAnalyzingScript) {
+      handleAnalyzeScriptDirectives();
+    }
+  }, [words.length]);
+
   const seekAndAutoPlay = useCallback((timeSec: number) => {
     hostBridge.setPlayheadPosition(timeSec);
     setPlayheadSec(timeSec);
     if (autoPlayOnJump) {
-      hostBridge.startPlayback(1);
+      setTimeout(() => {
+        hostBridge.startPlayback(1);
+      }, 60);
     }
   }, [autoPlayOnJump, hostBridge]);
 
@@ -2188,6 +2225,28 @@ export const TranscriptView: React.FC = () => {
         </button>
 
         <button
+          onClick={handleAnalyzeScriptDirectives}
+          disabled={isAnalyzingScript || words.length === 0}
+          title="AI দিয়ে পুরো স্ক্রিপ্ট বিশ্লেষণ করে ঘন ঘন B-Roll, PNG, এবং টেক্সট অ্যানিমেশন টিউন করুন"
+          style={{
+            padding: '5px 8px',
+            fontSize: '10px',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid rgba(168, 85, 247, 0.45)',
+            backgroundColor: isAnalyzingScript ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.15)',
+            color: '#d8b4fe',
+            cursor: isAnalyzingScript ? 'wait' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontWeight: 600
+          }}
+        >
+          <Sparkles size={11} />
+          <span>{isAnalyzingScript ? 'এনালাইজ হচ্ছে...' : '✨ AI টিউন'}</span>
+        </button>
+
+        <button
           onClick={() => {
             const nextVal = !autoPlayOnJump;
             setAutoPlayOnJump(nextVal);
@@ -2413,19 +2472,43 @@ export const TranscriptView: React.FC = () => {
             const paraLineText = para.tokens.map((tok) => tok.word).join(' ');
             const isEditingThis = editingParaIdx === para.startIdx;
 
+            const directive = scriptDirectives[para.startIdx] || Object.values(scriptDirectives).find(
+              (d: any) => d.startSeconds <= paraEnd && d.endSeconds >= para.startTime
+            );
+
+            let cardBg = matchingTake ? 'rgba(139, 92, 246, 0.08)' : 'transparent';
+            let cardBorderLeft = matchingTake ? '2px solid #a78bfa' : 'none';
+
+            if (directive && directive.visualType !== 'NONE') {
+              if (directive.visualType === 'BROLL') {
+                cardBg = 'rgba(6, 182, 212, 0.07)';
+                cardBorderLeft = '3px solid #06b6d4';
+              } else if (directive.visualType === 'PNG') {
+                cardBg = 'rgba(168, 85, 247, 0.07)';
+                cardBorderLeft = '3px solid #a855f7';
+              } else if (directive.visualType === 'TEXT_ANIMATION') {
+                cardBg = 'rgba(245, 158, 11, 0.07)';
+                cardBorderLeft = '3px solid #f59e0b';
+              } else if (directive.visualType === 'PUNCH') {
+                cardBg = 'rgba(239, 68, 68, 0.07)';
+                cardBorderLeft = '3px solid #ef4444';
+              }
+            }
+
             return (
             <div
               key={para.startIdx}
               style={{
                 display: 'flex',
-                gap: '12px',
-                alignItems: 'flex-start',
-                padding: matchingTake ? '6px' : '4px 0',
-                borderRadius: matchingTake ? '4px' : '0',
-                backgroundColor: matchingTake ? 'rgba(139, 92, 246, 0.08)' : 'transparent',
-                borderLeft: matchingTake ? '2px solid #a78bfa' : 'none'
+                flexDirection: 'column',
+                gap: '4px',
+                padding: matchingTake || (directive && directive.visualType !== 'NONE') ? '6px 8px' : '4px 0',
+                borderRadius: matchingTake || (directive && directive.visualType !== 'NONE') ? '4px' : '0',
+                backgroundColor: cardBg,
+                borderLeft: cardBorderLeft
               }}
             >
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
               {/* Left Column: Timecode & Discreet Action Icons */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '76px', flexShrink: 0 }}>
                 <div
@@ -2483,14 +2566,14 @@ export const TranscriptView: React.FC = () => {
                     <Pencil size={10} />
                   </button>
 
-                  {/* ✨ Typography Keyword Copy */}
+                  {/* ✨ AI Analysis & Explanation Toggle */}
                   <button
-                    onClick={() => handleCopyTypography(para.startIdx, paraLineText)}
-                    title="টাইপোগ্রাফির জন্য গুরুত্বপূর্ণ কি-ওয়ার্ডগুলো কপি করুন (টেক্সট অপরিবর্তিত থাকবে)"
+                    onClick={() => setExpandedDirectiveIdx(expandedDirectiveIdx === para.startIdx ? null : para.startIdx)}
+                    title="AI বিশ্লেষণ: এই লাইনের বাংলা অর্থ, ব্যাখ্যা ও এডিটিং পরামর্শ দেখুন"
                     style={{
-                      backgroundColor: typographyCopiedIdx === para.startIdx ? 'rgba(234, 179, 8, 0.3)' : 'rgba(255,255,255,0.06)',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      color: typographyCopiedIdx === para.startIdx ? '#facc15' : '#c084fc',
+                      backgroundColor: expandedDirectiveIdx === para.startIdx ? 'rgba(168, 85, 247, 0.35)' : 'rgba(255,255,255,0.06)',
+                      border: expandedDirectiveIdx === para.startIdx ? '1px solid #a855f7' : '1px solid rgba(255,255,255,0.12)',
+                      color: expandedDirectiveIdx === para.startIdx ? '#d8b4fe' : '#c084fc',
                       borderRadius: '3px',
                       padding: '2px 4px',
                       cursor: 'pointer',
@@ -2607,6 +2690,32 @@ export const TranscriptView: React.FC = () => {
                 </div>
               ) : (
                 <div style={{ flex: 1, lineHeight: 1.85, userSelect: 'text' }}>
+                  {directive && directive.visualType !== 'NONE' && (
+                    <span
+                      onClick={() => setExpandedDirectiveIdx(expandedDirectiveIdx === para.startIdx ? null : para.startIdx)}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '3px',
+                        marginRight: '6px',
+                        padding: '1px 6px',
+                        fontSize: '9.5px',
+                        fontWeight: 600,
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        backgroundColor: directive.visualType === 'BROLL' ? 'rgba(6, 182, 212, 0.22)' :
+                                         directive.visualType === 'PNG' ? 'rgba(168, 85, 247, 0.22)' :
+                                         directive.visualType === 'TEXT_ANIMATION' ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)',
+                        color: directive.visualType === 'BROLL' ? '#67e8f9' :
+                               directive.visualType === 'PNG' ? '#d8b4fe' :
+                               directive.visualType === 'TEXT_ANIMATION' ? '#fbbf24' : '#fca5a5',
+                        border: `1px solid ${directive.accentColor || '#666'}`
+                      }}
+                      title="ক্লিক করে এই লাইনের বাংলা ব্যাখ্যা ও এডিটিং পরামর্শ দেখুন"
+                    >
+                      {directive.badgeLabel}
+                    </span>
+                  )}
                   {para.tokens.map((item) => {
                     if (filterMode === 'FILLERS' && !item.isFiller) return null;
                     const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
@@ -2652,6 +2761,8 @@ export const TranscriptView: React.FC = () => {
                       wordBg = 'rgba(239, 68, 68, 0.18)';
                       wordColor = '#fee2e2';
                       wordBorderBottom = '2.5px solid #ef4444';
+                    } else if (directive && directive.visualType !== 'NONE') {
+                      wordBorderBottom = `1px dotted ${directive.accentColor || '#666'}`;
                     }
 
                     return (
@@ -2804,6 +2915,149 @@ export const TranscriptView: React.FC = () => {
                   })}
                 </div>
               )}
+              </div>
+
+              {/* Expandable Inline AI Directive Card (Explanation & Editing Suggestions) */}
+              {expandedDirectiveIdx === para.startIdx && directive && (
+                <div
+                  style={{
+                    marginTop: '4px',
+                    padding: '8px 10px',
+                    borderRadius: '4px',
+                    backgroundColor: '#18181b',
+                    border: `1px solid ${directive.accentColor || 'rgba(255,255,255,0.2)'}`,
+                    boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                    fontSize: '11px'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span
+                        style={{
+                          padding: '1px 6px',
+                          borderRadius: '3px',
+                          fontSize: '9px',
+                          fontWeight: 700,
+                          backgroundColor: `${directive.accentColor}25`,
+                          color: directive.accentColor,
+                          border: `1px solid ${directive.accentColor}`
+                        }}
+                      >
+                        {directive.badgeLabel}
+                      </span>
+                      <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>
+                        সাজেশন: {directive.query}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setExpandedDirectiveIdx(null)}
+                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  <div style={{ color: '#e4e4e7', lineHeight: 1.5 }}>
+                    <span style={{ color: '#38bdf8', fontWeight: 600 }}>📖 বাংলা অর্থ: </span>
+                    {directive.banglaExplanation || 'এই বাক্যে মূল আলোচনা উপস্থাপন করা হয়েছে।'}
+                  </div>
+
+                  <div style={{ color: '#fef08a', lineHeight: 1.5 }}>
+                    <span style={{ color: '#facc15', fontWeight: 600 }}>🎬 এডিটিং সাজেশন: </span>
+                    {directive.editingSuggestion || 'বক্তব্যের সাথে সামঞ্জস্যপূর্ণ বি-রোল বা টেক্সট ব্যবহার করুন।'}
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={() => hostBridge.openURLInDefaultBrowser(directive.googleImagesUrl)}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        backgroundColor: 'rgba(168, 85, 247, 0.2)',
+                        color: '#d8b4fe',
+                        border: '1px solid rgba(168, 85, 247, 0.4)',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px'
+                      }}
+                    >
+                      <Image size={10} />
+                      <span>গুগলে PNG খুঁজুন</span>
+                    </button>
+
+                    <button
+                      onClick={() => hostBridge.openURLInDefaultBrowser(directive.pexelsUrl)}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        backgroundColor: 'rgba(6, 182, 212, 0.2)',
+                        color: '#67e8f9',
+                        border: '1px solid rgba(6, 182, 212, 0.4)',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px'
+                      }}
+                    >
+                      <Video size={10} />
+                      <span>Pexels B-Roll</span>
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        const kwStr = directive.keyWords ? directive.keyWords.join(' ') : directive.query;
+                        await copyToClipboard(kwStr);
+                        setCreativeStatus(`"${kwStr}" টাইপোগ্রাফি কপি হয়েছে!`);
+                        setTimeout(() => setCreativeStatus(null), 2500);
+                      }}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        backgroundColor: 'rgba(245, 158, 11, 0.2)',
+                        color: '#fbbf24',
+                        border: '1px solid rgba(245, 158, 11, 0.4)',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px'
+                      }}
+                    >
+                      <Sparkles size={10} />
+                      <span>কাইনেটিক কি-ওয়ার্ড কপি</span>
+                    </button>
+
+                    <button
+                      onClick={async () => {
+                        await copyToClipboard(paraLineText);
+                        setCopiedLineIdx(para.startIdx);
+                        setTimeout(() => setCopiedLineIdx(null), 2000);
+                      }}
+                      style={{
+                        padding: '2px 6px',
+                        fontSize: '10px',
+                        backgroundColor: 'rgba(255,255,255,0.06)',
+                        color: '#fff',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px'
+                      }}
+                    >
+                      <Copy size={10} />
+                      <span>বাক্য কপি</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             );
           })}
@@ -2811,22 +3065,22 @@ export const TranscriptView: React.FC = () => {
       </div>
       )}
 
-      {/* ===================== FLOATING WORD-LEVEL AI POPOVER ===================== */}
+      {/* ===================== FLOATING WORD-LEVEL AI POPOVER (COMPACT & RESPONSIVE) ===================== */}
       {popoverWord && (
         <div
           style={{
             position: 'fixed',
-            top: `${Math.max(10, popoverWord.y - 44)}px`,
-            left: `${Math.min(window.innerWidth - 380, Math.max(10, popoverWord.x - 160))}px`,
+            top: `${Math.max(8, popoverWord.y - 38)}px`,
+            left: `${Math.max(8, Math.min(window.innerWidth - 180, popoverWord.x - 85))}px`,
             zIndex: 9999,
             backgroundColor: '#18181b',
-            border: '1px solid rgba(255,255,255,0.25)',
-            borderRadius: '6px',
-            padding: '4px 6px',
+            border: '1px solid rgba(255,255,255,0.22)',
+            borderRadius: '5px',
+            padding: '3px 5px',
             boxShadow: '0 8px 24px rgba(0,0,0,0.85)',
             display: 'flex',
             alignItems: 'center',
-            gap: '4px',
+            gap: '3px',
             fontFamily: 'inherit'
           }}
         >
@@ -2840,8 +3094,7 @@ export const TranscriptView: React.FC = () => {
               setPopoverWord(null);
             }}
             style={{
-              padding: '3px 7px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(168, 85, 247, 0.2)',
               color: '#d8b4fe',
               border: '1px solid rgba(168, 85, 247, 0.45)',
@@ -2849,12 +3102,11 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px'
+              justifyContent: 'center'
             }}
-            title="গুগল ইমেজ সার্চে এই শব্দের পিএনজি / ছবি সরাসরি ব্রাউজারে খুঁজুন"
+            title="গুগল ইমেজ সার্চে এই শব্দের স্বচ্ছ PNG ছবি খুঁজুন"
           >
-            <Image size={10} />
-            <span>+ PNG ছবি</span>
+            <Image size={12} />
           </button>
 
           {/* 🎥 Pexels Video */}
@@ -2867,8 +3119,7 @@ export const TranscriptView: React.FC = () => {
               handleOpenBrollForWord(popoverWord);
             }}
             style={{
-              padding: '3px 7px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(6, 182, 212, 0.2)',
               color: '#67e8f9',
               border: '1px solid rgba(6, 182, 212, 0.45)',
@@ -2876,41 +3127,18 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px'
+              justifyContent: 'center'
             }}
             title="Pexels.com ভিডিও সার্চ ওপেন করুন ও B-Roll খুঁজুন"
           >
-            <Video size={10} />
-            <span>+ B-Roll (Pexels)</span>
+            <Video size={12} />
           </button>
 
-          {/* ⚡ Punch Zoom */}
-          <button
-            onClick={() => handleAddPunchForWord(popoverWord)}
-            style={{
-              padding: '3px 7px',
-              fontSize: '10px',
-              backgroundColor: 'rgba(239, 68, 68, 0.2)',
-              color: '#f87171',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-            title="পাঞ্চ কি-ওয়ার্ড মার্ক করুন এবং ১১৪% জুম প্রয়োগ করুন"
-          >
-            <Zap size={10} />
-            <span>+ Punch</span>
-          </button>
-
-          {/* 🎨 Icon */}
+          {/* ✨ Kinetic Typography / Text Animation */}
           <button
             onClick={() => handleAddIconForWord(popoverWord)}
             style={{
-              padding: '3px 7px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(245, 158, 11, 0.2)',
               color: '#fbbf24',
               border: '1px solid rgba(245, 158, 11, 0.4)',
@@ -2918,12 +3146,30 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px'
+              justifyContent: 'center'
             }}
-            title="PNG আইকন/গ্রাফিক্স সাজেশন ও মার্কার"
+            title="কাইনেটিক টেক্সট অ্যানিমেশন / গ্রাফিক্স মার্কার"
           >
-            <Sparkles size={10} />
-            <span>+ Icon</span>
+            <Sparkles size={12} />
+          </button>
+
+          {/* ⚡ Punch Zoom */}
+          <button
+            onClick={() => handleAddPunchForWord(popoverWord)}
+            style={{
+              padding: '3px 5px',
+              backgroundColor: 'rgba(239, 68, 68, 0.2)',
+              color: '#f87171',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="পাঞ্চ কি-ওয়ার্ড মার্ক করুন এবং ১১৪% জুম প্রয়োগ করুন"
+          >
+            <Zap size={12} />
           </button>
 
           {/* 📋 Copy Word */}
@@ -2935,8 +3181,7 @@ export const TranscriptView: React.FC = () => {
               setTimeout(() => setCreativeStatus(null), 2500);
             }}
             style={{
-              padding: '3px 6px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(255,255,255,0.06)',
               color: '#fff',
               border: '1px solid rgba(255,255,255,0.15)',
@@ -2944,66 +3189,69 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px'
+              justifyContent: 'center'
             }}
             title="শব্দটি কপি করুন"
           >
-            <Copy size={10} />
+            <Copy size={12} />
           </button>
 
-          {/* ✂️ Cut Word */}
+          {/* ✂️ Instant Ripple Cut Word */}
           <button
             onClick={() => {
               deleteTranscriptRange(popoverWord.start, popoverWord.end);
               setPopoverWord(null);
             }}
             style={{
-              padding: '3px 6px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(239, 68, 68, 0.1)',
               color: '#fca5a5',
               border: '1px solid rgba(239, 68, 68, 0.25)',
               borderRadius: '3px',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
-            title="এই শব্দটি টাইমলাইন থেকে ডিলিট করুন"
+            title="ইনস্ট্যান্ট নেটিভ রিপল কাট (Shift+Delete-এর মতো সাথে সাথে মুছুন)"
           >
-            <Scissors size={10} />
+            <Scissors size={12} />
           </button>
 
           {/* Close */}
           <button
             onClick={() => setPopoverWord(null)}
             style={{
-              padding: '2px 5px',
+              padding: '2px 4px',
               fontSize: '10px',
               backgroundColor: 'transparent',
               color: 'var(--text-muted)',
               border: 'none',
               cursor: 'pointer'
             }}
+            title="পপ-আপ বন্ধ করুন"
           >
             ✕
           </button>
         </div>
       )}
 
-      {/* ===================== FLOATING TEXT DRAG SELECTION TOOLBAR ===================== */}
+      {/* ===================== FLOATING TEXT DRAG SELECTION TOOLBAR (COMPACT & RESPONSIVE) ===================== */}
       {floatingSelection && (
         <div
           style={{
             position: 'fixed',
             top: `${floatingSelection.y}px`,
-            left: `${floatingSelection.x}px`,
+            left: `${Math.max(8, Math.min(window.innerWidth - 180, floatingSelection.x))}px`,
             zIndex: 10000,
             backgroundColor: '#18181b',
-            border: '1px solid rgba(255,255,255,0.28)',
-            borderRadius: '6px',
-            padding: '4px 7px',
-            boxShadow: '0 8px 28px rgba(0,0,0,0.9)',
+            border: '1px solid rgba(255,255,255,0.25)',
+            borderRadius: '5px',
+            padding: '3px 5px',
+            boxShadow: '0 8px 26px rgba(0,0,0,0.9)',
             display: 'flex',
             alignItems: 'center',
-            gap: '4px',
+            gap: '3px',
             fontFamily: 'inherit'
           }}
         >
@@ -3016,8 +3264,7 @@ export const TranscriptView: React.FC = () => {
             }}
             title="সিলেক্টেড টেক্সট কপি করুন"
             style={{
-              padding: '3px 7px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(255, 255, 255, 0.08)',
               color: '#ffffff',
               border: '1px solid rgba(255, 255, 255, 0.18)',
@@ -3025,12 +3272,10 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
-              fontWeight: 600
+              justifyContent: 'center'
             }}
           >
-            <Copy size={10} />
-            <span>কপি</span>
+            <Copy size={12} />
           </button>
 
           {/* 🖼️ Google Images (PNG) */}
@@ -3039,10 +3284,9 @@ export const TranscriptView: React.FC = () => {
               const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(floatingSelection.cleanQuery + ' transparent png')}`;
               hostBridge.openURLInDefaultBrowser(url);
             }}
-            title="সিলেক্টেড অংশের পিএনজি / ছবি সরাসরি গুগল ইমেজে খুঁজুন"
+            title="সিলেক্টেড অংশের স্বচ্ছ PNG ছবি গুগলে খুঁজুন"
             style={{
-              padding: '3px 7px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(168, 85, 247, 0.25)',
               color: '#d8b4fe',
               border: '1px solid rgba(168, 85, 247, 0.5)',
@@ -3050,24 +3294,21 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
-              fontWeight: 600
+              justifyContent: 'center'
             }}
           >
-            <Image size={10} />
-            <span>গুগল ইমেজ (PNG)</span>
+            <Image size={12} />
           </button>
 
-          {/* 🎥 Pexels Video Search */}
+          {/* 🎥 Pexels Video */}
           <button
             onClick={() => {
               const url = `https://www.pexels.com/search/videos/${encodeURIComponent(floatingSelection.cleanQuery)}/`;
               hostBridge.openURLInDefaultBrowser(url);
             }}
-            title="সিলেক্টেড বিষয়ের বি-রোল ফুটেজ Pexels.com-এ খুঁজুন"
+            title="সিলেক্টেড অংশের B-Roll ভিডিও Pexels-এ খুঁজুন"
             style={{
-              padding: '3px 7px',
-              fontSize: '10px',
+              padding: '3px 5px',
               backgroundColor: 'rgba(6, 182, 212, 0.25)',
               color: '#67e8f9',
               border: '1px solid rgba(6, 182, 212, 0.5)',
@@ -3075,12 +3316,10 @@ export const TranscriptView: React.FC = () => {
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px',
-              fontWeight: 600
+              justifyContent: 'center'
             }}
           >
-            <Video size={10} />
-            <span>Pexels ভিডিও</span>
+            <Video size={12} />
           </button>
 
           {/* 🔍 Google Web Search */}
@@ -3089,96 +3328,90 @@ export const TranscriptView: React.FC = () => {
               const url = `https://www.google.com/search?q=${encodeURIComponent(floatingSelection.cleanQuery)}`;
               hostBridge.openURLInDefaultBrowser(url);
             }}
-            title="গুগল সার্চ"
+            title="সরাসরি গুগলে সার্চ করুন"
             style={{
-              padding: '3px 6px',
-              fontSize: '10px',
-              backgroundColor: 'rgba(255, 255, 255, 0.05)',
-              color: 'var(--text-muted)',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
+              padding: '3px 5px',
+              backgroundColor: 'rgba(59, 130, 246, 0.25)',
+              color: '#93c5fd',
+              border: '1px solid rgba(59, 130, 246, 0.5)',
               borderRadius: '3px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '2px'
+              justifyContent: 'center'
             }}
           >
-            <Search size={10} />
-            <span>গুগল</span>
+            <Search size={12} />
           </button>
 
-          {/* 📍 Add Purple PNG Marker */}
+          {/* ✨ Text Animation / Typography */}
+          <button
+            onClick={async () => {
+              await copyToClipboard(floatingSelection.cleanQuery);
+              setExportStatus(`"${floatingSelection.cleanQuery}" টাইপোগ্রাফি কি-ওয়ার্ড কপি হয়েছে!`);
+              setTimeout(() => setExportStatus(null), 2500);
+            }}
+            title="টাইপোগ্রাফি / টেক্সট অ্যানিমেশনের জন্য কপি করুন"
+            style={{
+              padding: '3px 5px',
+              backgroundColor: 'rgba(245, 158, 11, 0.25)',
+              color: '#fbbf24',
+              border: '1px solid rgba(245, 158, 11, 0.5)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+          >
+            <Sparkles size={12} />
+          </button>
+
+          {/* ⚡ Punch Zoom Marker */}
           <button
             onClick={async () => {
               await hostBridge.addTimelineMarkers([{
-                type: 'PNG' as any,
-                name: `PNG: ${floatingSelection.cleanQuery.slice(0, 20)}`,
-                comment: `Overlay PNG picture for '${floatingSelection.cleanQuery}'`,
+                type: 'EMPHASIS' as any,
+                name: `Punch: ${floatingSelection.cleanQuery.slice(0, 16)}`,
+                comment: `Punch Zoom at '${floatingSelection.cleanQuery}'`,
                 startSeconds: playheadSec,
-                durationSeconds: 2.0,
-                color: 'PURPLE' as any
+                durationSeconds: 1.5,
+                color: 'RED' as any
               }]);
-              setCreativeStatus(`টাইমলাইনে পার্পল PNG মার্কার যুক্ত হয়েছে!`);
+              setCreativeStatus(`টাইমলাইনে পাঞ্চ জুম মার্কার যুক্ত হয়েছে!`);
               setFloatingSelection(null);
               setTimeout(() => setCreativeStatus(null), 2500);
             }}
-            title="টাইমলাইনে পার্পল কালার পিএনজি মার্কার দিন"
+            title="টাইমলাইনে পাঞ্চ জুম মার্কার প্রয়োগ করুন"
             style={{
-              padding: '3px 6px',
-              fontSize: '9.5px',
-              backgroundColor: 'rgba(168, 85, 247, 0.18)',
-              color: '#c084fc',
-              border: '1px solid rgba(168, 85, 247, 0.35)',
+              padding: '3px 5px',
+              backgroundColor: 'rgba(239, 68, 68, 0.25)',
+              color: '#f87171',
+              border: '1px solid rgba(239, 68, 68, 0.45)',
               borderRadius: '3px',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
             }}
           >
-            +PNG মার্কার
+            <Zap size={12} />
           </button>
 
-          {/* 📍 Add Cyan B-Roll Marker */}
-          <button
-            onClick={async () => {
-              await hostBridge.addTimelineMarkers([{
-                type: 'BROLL' as any,
-                name: `B-Roll: ${floatingSelection.cleanQuery.slice(0, 20)}`,
-                comment: `Overlay B-Roll footage for '${floatingSelection.cleanQuery}'`,
-                startSeconds: playheadSec,
-                durationSeconds: 2.5,
-                color: 'CYAN' as any
-              }]);
-              setCreativeStatus(`টাইমলাইনে সায়ান B-Roll মার্কার যুক্ত হয়েছে!`);
-              setFloatingSelection(null);
-              setTimeout(() => setCreativeStatus(null), 2500);
-            }}
-            title="টাইমলাইনে সায়ান কালার বি-রোল মার্কার দিন"
-            style={{
-              padding: '3px 6px',
-              fontSize: '9.5px',
-              backgroundColor: 'rgba(6, 182, 212, 0.18)',
-              color: '#22d3ee',
-              border: '1px solid rgba(6, 182, 212, 0.35)',
-              borderRadius: '3px',
-              cursor: 'pointer'
-            }}
-          >
-            +B-Roll মার্কার
-          </button>
-
-          {/* Close */}
+          {/* ✕ Close */}
           <button
             onClick={() => setFloatingSelection(null)}
+            title="টুলবার বন্ধ করুন"
             style={{
-              background: 'none',
-              border: 'none',
+              padding: '2px 4px',
+              fontSize: '10px',
+              backgroundColor: 'transparent',
               color: 'var(--text-muted)',
-              cursor: 'pointer',
-              padding: '2px',
-              display: 'flex',
-              alignItems: 'center'
+              border: 'none',
+              cursor: 'pointer'
             }}
           >
-            <X size={11} />
+            ✕
           </button>
         </div>
       )}

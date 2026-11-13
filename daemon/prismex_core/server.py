@@ -585,6 +585,22 @@ def ai_markers(req: MarkerAnalysisRequest):
     """Classifies emphasis keywords (RED), B-Roll visual cues (GREEN), and icons/graphics (BLUE)."""
     return CreativeAI.analyze_markers(req.words)
 
+class ScriptDirectivesRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    language: Optional[str] = "bn"
+    userPrompt: Optional[str] = None
+
+@app.post("/api/v1/transcript/script-directives")
+def script_directives_endpoint(req: ScriptDirectivesRequest):
+    """Generates engaging visual directives (B-Roll, PNG, Typography, Punch) & explanations for all sentences."""
+    return CreativeAI.analyze_script_visual_directives(
+        words=req.words,
+        sentences=req.sentences,
+        language=req.language or "bn",
+        user_prompt=req.userPrompt
+    )
+
 @app.post("/api/v1/transcript/ae-typography")
 def format_ae_typography(req: TypographyRequest):
     """Formats text into multi-line kinetic typography layout with ready-to-paste AE ExtendScript."""

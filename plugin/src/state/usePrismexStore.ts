@@ -603,10 +603,9 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       }));
     }
 
-    // Clone sequence
+    // Apply cuts directly to active timeline via instant native ripple delete
     const seq = get().sequenceManifest;
-    const cloneRes = await hostBridge.cloneActiveSequence('_ApprovedCuts');
-    const clonedName = cloneRes?.clonedSequenceName || `${seq?.sequenceName}_ApprovedCuts`;
+    const currentName = seq?.sequenceName || 'ActiveSequence';
 
     // Apply cuts
     const execResult = await timelineEngine.executeCuts(cutIntervals);
@@ -625,8 +624,8 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
     const report: RoughCutSummaryReport = {
       jobId: jobId || `local_${Date.now()}`,
-      originalSequenceName: seq?.sequenceName || 'Original',
-      clonedSequenceName: clonedName,
+      originalSequenceName: currentName,
+      clonedSequenceName: currentName,
       originalDurationSeconds: seq?.durationSeconds || 0,
       roughCutDurationSeconds: execResult.finalDurationSeconds,
       timeSavedSeconds: execResult.timeSavedSeconds,

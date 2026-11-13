@@ -57,7 +57,7 @@ export class TimelineEditingEngine {
     if (this.hostBridge.isRunningInCEP()) {
       try {
         const res = await this.hostBridge.evalScript(
-          `$._prismex.executeCuts('${JSON.stringify(sortedCuts)}')`
+          `$._prismex.executeNativeRippleCuts('${JSON.stringify(sortedCuts)}')`
         );
         const data = JSON.parse(res);
         return {

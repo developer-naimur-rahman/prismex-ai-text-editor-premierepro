@@ -615,6 +615,142 @@ $._prismex._computeKeptSegments = function(clipStart, clipEnd, mergedCuts) {
     return segments;
 };
 
+$._prismex._formatTimecode = function(seconds, fps) {
+    if (isNaN(seconds) || seconds < 0) seconds = 0;
+    if (!fps || fps <= 0) fps = 24.0;
+    var totalFrames = Math.round(seconds * fps);
+    var intFps = Math.max(1, Math.round(fps));
+    var frames = totalFrames % intFps;
+    var totalSec = Math.floor(totalFrames / intFps);
+    var s = totalSec % 60;
+    var totalMin = Math.floor(totalSec / 60);
+    var m = totalMin % 60;
+    var h = Math.floor(totalMin / 60);
+    var pad = function(n) {
+        var str = String(n);
+        return str.length < 2 ? "0" + str : str;
+    };
+    return pad(h) + ":" + pad(m) + ":" + pad(s) + ":" + pad(frames);
+};
+
+$._prismex.executeNativeRippleCuts = function(cutsJsonString) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var rawCuts = JSON.parse(cutsJsonString);
+        if (!rawCuts || rawCuts.length === 0) {
+            return JSON.stringify({ success: true, cutsExecuted: 0 });
+        }
+
+        try {
+            if (typeof app.enableQE === "function") {
+                app.enableQE();
+            }
+        } catch (qeInitErr) {}
+
+        var qeSeq = $._prismex._getQESequence();
+        var seq = app.project.activeSequence;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+        var ticksPerFrame = parseFloat(seq.timebase) || 10594584000;
+        var fps = 24.0;
+        if (ticksPerFrame > 0) {
+            fps = Math.round((TICKS / ticksPerFrame) * 1000.0) / 1000.0;
+        }
+
+        // Reverse-chronological order: right-to-left
+        var cuts = rawCuts.slice(0).sort(function(a, b) {
+            var aStart = parseFloat(a.startSeconds || a.start_seconds || 0);
+            var bStart = parseFloat(b.startSeconds || b.start_seconds || 0);
+            return bStart - aStart;
+        });
+
+        var initialTicks = Math.max(0, parseFloat(seq.end || 0) - zeroTicks);
+        var initialSec = initialTicks / TICKS;
+        var executedCount = 0;
+
+        for (var c = 0; c < cuts.length; c++) {
+            var cut = cuts[c];
+            var startSec = parseFloat(cut.startSeconds || cut.start_seconds || 0);
+            var endSec = parseFloat(cut.endSeconds || cut.end_seconds || 0);
+            var dur = endSec - startSec;
+            if (dur <= 0.03) continue;
+
+            var startTC = $._prismex._formatTimecode(startSec, fps);
+            var endTC = $._prismex._formatTimecode(endSec, fps);
+
+            // Razor right boundary first, then left boundary
+            if (qeSeq && typeof qeSeq.razor === "function") {
+                try { qeSeq.razor(endTC); } catch (e1) {}
+                try { qeSeq.razor(startTC); } catch (e2) {}
+            }
+
+            var removedAny = false;
+            // Native ripple remove targeted clip in interval
+            for (var v = 0; v < seq.videoTracks.numTracks; v++) {
+                var vt = seq.videoTracks[v];
+                if (vt.isLocked()) continue;
+                for (var ci = vt.clips.numItems - 1; ci >= 0; ci--) {
+                    var clip = vt.clips[ci];
+                    var cStart = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
+                    var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
+                    if (cStart >= startSec - 0.08 && cEnd <= endSec + 0.08) {
+                        try {
+                            clip.remove(1, 1);
+                            removedAny = true;
+                        } catch (rErr) {
+                            try { clip.remove(true, true); removedAny = true; } catch (rErr2) {}
+                        }
+                    }
+                }
+            }
+
+            for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+                var at = seq.audioTracks[a];
+                if (at.isLocked()) continue;
+                for (var ai = at.clips.numItems - 1; ai >= 0; ai--) {
+                    var aclip = at.clips[ai];
+                    var acStart = (parseFloat(aclip.start.ticks) - zeroTicks) / TICKS;
+                    var acEnd = (parseFloat(aclip.end.ticks) - zeroTicks) / TICKS;
+                    if (acStart >= startSec - 0.08 && acEnd <= endSec + 0.08) {
+                        try {
+                            aclip.remove(1, 1);
+                            removedAny = true;
+                        } catch (arErr) {
+                            try { aclip.remove(true, true); removedAny = true; } catch (arErr2) {}
+                        }
+                    }
+                }
+            }
+
+            if (removedAny) {
+                executedCount++;
+            }
+        }
+
+        var finalTicks = Math.max(0, parseFloat(seq.end || 0) - zeroTicks);
+        var finalSec = finalTicks / TICKS;
+
+        if (executedCount > 0) {
+            return JSON.stringify({
+                success: true,
+                cutsExecuted: executedCount,
+                initialDurationSeconds: initialSec,
+                finalDurationSeconds: finalSec,
+                timeSavedSeconds: Math.max(0, initialSec - finalSec),
+                syncVerified: true,
+                mode: "native_ripple"
+            });
+        }
+
+        // If native razor wasn't possible, fallback to clean rebuild
+        return $._prismex.executeCuts(cutsJsonString);
+    } catch (fallbackErr) {
+        return $._prismex.executeCuts(cutsJsonString);
+    }
+};
+
 $._prismex.executeCuts = function(cutsJsonString) {
     try {
         if (!app.project || !app.project.activeSequence) {

@@ -1270,3 +1270,247 @@ class CreativeAI:
                 {"seconds": max(0.0, total_d - 4.0), "type": "SFX", "name": "CTA", "comment": "CTA"}
             ]
         }
+
+    @classmethod
+    def analyze_script_visual_directives(
+        cls,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        language: str = "bn",
+        user_prompt: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Deep contextual AI script analysis for modern high-retention video editing.
+        Generates engaging directives every 2-3 sentences:
+        - BROLL: Cinematic footage query & Pexels URL
+        - PNG: Transparent picture, cutout, gadget, logo & Google Images PNG URL
+        - TEXT_ANIMATION: Kinetic typography keywords & phrases for on-screen impact
+        - PUNCH: Camera punch zoom
+        And for EVERY sentence:
+        - bangla_explanation: Clear Bengali explanation of what is being spoken
+        - editing_suggestion: Specific, actionable director's advice for the editor
+        """
+        # 1. Normalize sentences
+        norm_sentences: List[Dict[str, Any]] = []
+        if sentences and len(sentences) > 0:
+            for idx, s in enumerate(sentences):
+                norm_sentences.append({
+                    "sentenceIndex": idx,
+                    "text": str(s.get("text", "")).strip(),
+                    "startSeconds": round(float(s.get("start_seconds", s.get("startSeconds", 0.0))), 2),
+                    "endSeconds": round(float(s.get("end_seconds", s.get("endSeconds", 0.0))), 2)
+                })
+        elif words and len(words) > 0:
+            # Chunk words into pseudo-sentences by punctuation or 12-word boundaries
+            curr_chunk: List[str] = []
+            chunk_start = float(words[0].get("start_seconds", 0.0))
+            chunk_end = chunk_start
+            s_idx = 0
+            for i, w in enumerate(words):
+                raw = str(w.get("word", "")).strip()
+                curr_chunk.append(raw)
+                chunk_end = float(w.get("end_seconds", chunk_end))
+                is_terminal = bool(re.search(r'[.!?।\n]$', raw)) or len(curr_chunk) >= 12 or i == len(words) - 1
+                if is_terminal and curr_chunk:
+                    norm_sentences.append({
+                        "sentenceIndex": s_idx,
+                        "text": " ".join(curr_chunk),
+                        "startSeconds": round(chunk_start, 2),
+                        "endSeconds": round(chunk_end, 2)
+                    })
+                    curr_chunk = []
+                    s_idx += 1
+                    if i + 1 < len(words):
+                        chunk_start = float(words[i + 1].get("start_seconds", chunk_end))
+
+        if not norm_sentences:
+            return {"directives": [], "totalDirectives": 0, "engine": "none"}
+
+        # 2. Try LLM Call (Gemini / OpenRouter / OpenAI)
+        script_snippet = "\n".join(
+            f"[{s['sentenceIndex']}] ({s['startSeconds']}s-{s['endSeconds']}s): {s['text']}"
+            for s in norm_sentences[:40]
+        )
+
+        prompt = (
+            "You are an Elite Video Director and YouTube Editor analyzing a video transcript.\n"
+            "Goal: Maximize viewer retention by suggesting frequent visual elements (every 2-3 sentences)!\n"
+            "Visual Cue Types:\n"
+            "- 'BROLL': Cinematic footage, action, scenery, environment, or real-world example.\n"
+            "- 'PNG': Transparent image, gadget, logo, brand, app, dollar/cash, chart, or cutout picture.\n"
+            "- 'TEXT_ANIMATION': Kinetic typography, statistics, numbers, or powerful memorable punchlines.\n"
+            "- 'PUNCH': 114% camera snap zoom for dramatic emphasis.\n"
+            "- 'NONE': Keep focus on speaker without overlay.\n\n"
+            f"User Instruction (if any): {user_prompt or 'Analyze for high engagement'}\n\n"
+            f"Transcript Sentences:\n{script_snippet}\n\n"
+            "Return a strictly valid JSON array of objects with keys:\n"
+            "[\n"
+            "  {\n"
+            '    "sentenceIndex": 0,\n'
+            '    "visualType": "BROLL" | "PNG" | "TEXT_ANIMATION" | "PUNCH" | "NONE",\n'
+            '    "query": "concise search query in English for stock or PNG",\n'
+            '    "keyWords": ["2-3", "impactful", "words"],\n'
+            '    "banglaExplanation": "এই লাইনের সহজ বাংলা অর্থ ও প্রেক্ষাপট",\n'
+            '    "editingSuggestion": "এডিটর হিসেবে এখানে কী ভিজ্যুয়াল বা অ্যানিমেশন ব্যবহার করবেন তার বাংলা পরামর্শ"\n'
+            "  }\n"
+            "]"
+        )
+
+        ai_res = cls._call_gemini_json(prompt)
+        llm_map: Dict[int, Dict[str, Any]] = {}
+        if isinstance(ai_res, list) and len(ai_res) > 0:
+            for item in ai_res:
+                if isinstance(item, dict) and "sentenceIndex" in item:
+                    try:
+                        idx = int(item["sentenceIndex"])
+                        llm_map[idx] = item
+                    except Exception:
+                        pass
+
+        # 3. Build Final Directives with Comprehensive Heuristic Support
+        directives: List[Dict[str, Any]] = []
+        timeline_markers: List[Dict[str, Any]] = []
+
+        # Common entity dictionaries for smart detection
+        png_keywords = set([
+            "apple", "google", "youtube", "facebook", "instagram", "tiktok", "twitter", "x",
+            "iphone", "android", "macbook", "laptop", "pc", "computer", "camera", "sony", "mic",
+            "money", "dollar", "cash", "crypto", "bitcoin", "card", "bank", "tax", "taxes", "cost",
+            "price", "chart", "graph", "house", "car", "tesla", "california", "texas", "florida",
+            "টাকা", "ডলার", "ব্যাংক", "গ্রাফ", "চার্ট", "ল্যাপটপ", "ক্যামেরা", "ইউটিউব", "গুগল",
+            "ফোন", "মোবাইল", "ছবি", "পিকচার", "লোগো", "অ্যাপ", "বাড়ি", "গাড়ি"
+        ])
+
+        broll_keywords = set([
+            "look", "see", "moving", "road", "drive", "travel", "city", "street", "traffic", "fly",
+            "nature", "ocean", "office", "working", "people", "crowd", "sunset", "night", "building",
+            "ফুটেজ", "সিনেমাটিক", "রাস্তা", "শহর", "প্রকৃতি", "অফিস", "মানুষ", "ভিডিও", "দৃশ্য"
+        ])
+
+        punch_keywords = set([
+            "insane", "never", "always", "secret", "best", "worst", "shocking", "huge", "crazy",
+            "সবচেয়ে", "সেরা", "বিশাল", "আসল", "রহস্য", "ভয়ানক", "পাগলামি", "কখনো না"
+        ])
+
+        for s in norm_sentences:
+            s_idx = s["sentenceIndex"]
+            s_text = s["text"]
+            s_start = s["startSeconds"]
+            s_end = s["endSeconds"]
+            dur = max(0.4, s_end - s_start)
+
+            llm_item = llm_map.get(s_idx)
+            words_in_sent = [re.sub(r"[^\w\u0980-\u09FF']+", "", w.lower()) for w in s_text.split()]
+            clean_text = re.sub(r'["\r\n\t]+', ' ', s_text).strip()
+
+            if llm_item:
+                v_type = str(llm_item.get("visualType", "NONE")).upper()
+                if v_type not in ["BROLL", "PNG", "TEXT_ANIMATION", "PUNCH", "NONE"]:
+                    v_type = "BROLL"
+                query = str(llm_item.get("query", "")).strip() or clean_text[:30]
+                kw = llm_item.get("keyWords", [])
+                if not isinstance(kw, list):
+                    kw = [str(kw)]
+                b_exp = str(llm_item.get("banglaExplanation", "")).strip()
+                e_sug = str(llm_item.get("editingSuggestion", "")).strip()
+            else:
+                # Heuristic Classifier: Ensure frequent engaging cues (at least every 2 sentences)
+                has_png = any(k in words_in_sent for k in png_keywords)
+                has_broll = any(k in words_in_sent for k in broll_keywords)
+                has_punch = any(k in words_in_sent for k in punch_keywords)
+                has_numbers = bool(re.search(r'\d+', s_text))
+
+                if has_png:
+                    v_type = "PNG"
+                    matched_k = next((k for k in words_in_sent if k in png_keywords), "asset")
+                    query = f"{matched_k} logo transparent png"
+                    b_exp = f"এই বাক্যে '{matched_k}'-সংক্রান্ত বিষয়ে আলোকপাত করা হচ্ছে।"
+                    e_sug = f"স্ক্রিনে {matched_k}-এর একটি স্বচ্ছ পিএনজি কাটআউট বা আইকন ফ্ল্যাশ করুন।"
+                    kw = [matched_k.upper()]
+                elif has_broll:
+                    v_type = "BROLL"
+                    matched_k = next((k for k in words_in_sent if k in broll_keywords), "cinematic broll")
+                    query = f"{matched_k} cinematic footage"
+                    b_exp = f"স্পিকার বাস্তব দৃশ্য বা অভিজ্ঞতার বিবরণ দিচ্ছেন।"
+                    e_sug = f"বক্তব্যের সাথে মিলিয়ে প্রাসঙ্গিক সিনেমাটিক বি-রোল ফুটেজ ওভারলে করুন।"
+                    kw = [w for w in words_in_sent if len(w) > 4][:3]
+                elif has_numbers or (s_idx % 3 == 1):
+                    v_type = "TEXT_ANIMATION"
+                    query = clean_text[:35]
+                    b_exp = "গুরুত্বপূর্ণ তথ্য, সংখ্যা বা প্রধান পয়েন্ট তুলে ধরা হচ্ছে।"
+                    e_sug = "মূল মেসেজ বা সংখ্যাটিকে মোশন টাইপোগ্রাফি আকারে স্ক্রিনে অ্যানিমেট করুন।"
+                    kw = [w.upper() for w in words_in_sent if len(w) > 3][:3] or ["KEY POINT"]
+                elif has_punch or (s_idx % 4 == 0):
+                    v_type = "PUNCH"
+                    query = "zoom punch"
+                    b_exp = "বক্তব্যে বিশেষ জোর বা ইমপ্যাক্ট তৈরি করা হচ্ছে।"
+                    e_sug = "দর্শকের মনোযোগ ধরে রাখতে এই বাক্যে ১১৪% ক্যামেরা পাঞ্চ ইন বা স্কেল আপ দিন।"
+                    kw = ["PUNCH"]
+                else:
+                    v_type = "BROLL" if (s_idx % 2 == 0) else "PNG"
+                    query = clean_text[:30]
+                    b_exp = f"বিষয়বস্তুর ধারাবাহিক আলোচনা: '{clean_text[:50]}...'"
+                    e_sug = "ভিডিও গতিশীল রাখতে এই অংশে প্রাসঙ্গিক ব্যাকগ্রাউন্ড বি-রোল বা গ্রাফিক্স যুক্ত করুন।"
+                    kw = [w for w in words_in_sent if len(w) > 3][:2]
+
+            # Style metadata
+            if v_type == "BROLL":
+                badge_label = "🎥 B-Roll"
+                color_theme = "cyan"
+                accent_color = "#06b6d4"
+            elif v_type == "PNG":
+                badge_label = "🖼️ PNG"
+                color_theme = "purple"
+                accent_color = "#a855f7"
+            elif v_type == "TEXT_ANIMATION":
+                badge_label = "✨ টেক্সট অ্যানিমেশন"
+                color_theme = "amber"
+                accent_color = "#f59e0b"
+            elif v_type == "PUNCH":
+                badge_label = "⚡ পাঞ্চ"
+                color_theme = "red"
+                accent_color = "#ef4444"
+            else:
+                badge_label = "🎬 স্পিকার"
+                color_theme = "neutral"
+                accent_color = "#71717a"
+
+            clean_q = re.sub(r"[^\w\s\u0980-\u09FF'-]", "", query).strip()
+            g_url = f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote(clean_q + ' transparent png')}"
+            p_url = f"https://www.pexels.com/search/videos/{urllib.parse.quote(clean_q)}/"
+
+            directive_obj = {
+                "sentenceIndex": s_idx,
+                "text": s_text,
+                "startSeconds": s_start,
+                "endSeconds": s_end,
+                "durationSeconds": dur,
+                "visualType": v_type,
+                "badgeLabel": badge_label,
+                "colorTheme": color_theme,
+                "accentColor": accent_color,
+                "query": clean_q,
+                "keyWords": kw,
+                "banglaExplanation": b_exp,
+                "editingSuggestion": e_sug,
+                "googleImagesUrl": g_url,
+                "pexelsUrl": p_url
+            }
+            directives.append(directive_obj)
+
+            if v_type != "NONE":
+                timeline_markers.append({
+                    "seconds": s_start,
+                    "duration": dur,
+                    "name": f"{badge_label}: {clean_q[:20]}",
+                    "comment": f"{e_sug} | Search: {clean_q}",
+                    "type": "BROLL" if v_type == "BROLL" else ("EMPHASIS" if v_type == "PUNCH" else "ICON")
+                })
+
+        engine_name = "AI LLM (Gemini / OpenRouter)" if llm_map else "Prismex Smart Director Engine (Contextual)"
+        return {
+            "directives": directives,
+            "totalDirectives": len([d for d in directives if d["visualType"] != "NONE"]),
+            "timelineMarkers": timeline_markers,
+            "engine": engine_name
+        }

@@ -231,6 +231,21 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async getScriptDirectives(words: any[], sentences: any[], userPrompt?: string): Promise<{ directives: any[]; totalDirectives: number; engine: string; timelineMarkers?: any[] } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/script-directives`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, sentences, language: 'bn', userPrompt })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] getScriptDirectives failed:', err);
+      return null;
+    }
+  }
+
   public async formatAeTypography(text: string): Promise<{ formattedText: string; lines: string[]; aeSnippet: string } | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/transcript/ae-typography`, {
