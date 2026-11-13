@@ -2268,7 +2268,7 @@ export const TranscriptView: React.FC = () => {
 
       {/* Pauses Only Filter View */}
       {filterMode === 'PAUSES' ? (
-        <div className="card" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <div className="card" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {detectedSilences.length === 0 ? (
             <div style={{ color: 'var(--text-muted)', fontSize: '11px', textAlign: 'center', padding: '20px' }}>
               No pauses detected.
@@ -2278,6 +2278,7 @@ export const TranscriptView: React.FC = () => {
               <div
                 key={idx}
                 style={{
+                  flexShrink: 0,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
@@ -2311,7 +2312,7 @@ export const TranscriptView: React.FC = () => {
         </div>
       ) : filterMode === 'TAKES' ? (
         /* Double Lines / Repeated Takes Filter View */
-        <div className="card" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div className="card" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {repeatedTakes.length === 0 ? (
             <div style={{ color: 'var(--text-muted)', fontSize: '11px', textAlign: 'center', padding: '20px' }}>
               {language === 'bn' ? 'কোনো ডাবল লাইন পাওয়া যায়নি।' : 'No repeated takes / double lines detected.'}
@@ -2322,6 +2323,7 @@ export const TranscriptView: React.FC = () => {
                 key={rt.id}
                 onClick={() => hostBridge.setPlayheadPosition(rt.startSeconds)}
                 style={{
+                  flexShrink: 0,
                   display: 'flex',
                   flexDirection: 'column',
                   gap: '5px',

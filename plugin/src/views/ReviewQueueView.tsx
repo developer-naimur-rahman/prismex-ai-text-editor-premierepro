@@ -88,7 +88,7 @@ export const ReviewQueueView: React.FC = () => {
       </div>
 
       {/* Suggestions List */}
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '2px' }}>
         {filteredItems.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)' }}>
             No suggested edits in this category.
@@ -103,15 +103,17 @@ export const ReviewQueueView: React.FC = () => {
                 key={item.id}
                 className="card"
                 style={{ 
+                  flexShrink: 0,
                   display: 'flex', 
                   flexDirection: 'column', 
                   gap: '6px',
+                  padding: '8px 10px',
                   borderLeft: isAccepted ? '3px solid var(--success-color)' : isRejected ? '3px solid var(--danger-color)' : '3px solid var(--warning-color)',
                   opacity: isRejected ? 0.6 : 1.0
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                     <span style={{ 
                       fontSize: '9.5px', 
                       fontWeight: 700, 
@@ -130,33 +132,43 @@ export const ReviewQueueView: React.FC = () => {
                   {/* Audition Playhead Seek */}
                   <button 
                     className="btn-secondary" 
-                    style={{ padding: '2px 6px', fontSize: '10px' }}
-                    onClick={() => hostBridge.setPlayheadPosition(item.startSeconds)}
-                    title="Jump playhead in Premiere Pro"
+                    style={{ padding: '2px 7px', fontSize: '10px', flexShrink: 0 }}
+                    onClick={() => {
+                      hostBridge.setPlayheadPosition(item.startSeconds);
+                      hostBridge.startPlayback(1);
+                    }}
+                    title="Jump playhead and start playback in Premiere Pro"
                   >
                     <Play size={10} />
                     <span>Seek</span>
                   </button>
                 </div>
 
-                <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--text-primary)' }}>
-                  {item.transcriptSnippet || '[Silence]'}
+                <div style={{ fontSize: '11px', fontWeight: 500, color: 'var(--text-primary)', lineHeight: 1.4, wordBreak: 'break-word', whiteSpace: 'normal' }}>
+                  {item.transcriptSnippet || (item.category === 'SILENCE' ? '[নীরবতা / Silence Pause]' : '[Take Cutaway]')}
                 </div>
 
-                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span>{item.reason}</span>
-                  <span>Confidence: {Math.round(item.confidence * 100)}%</span>
+                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ flex: 1, wordBreak: 'break-word' }}>{item.reason}</span>
+                  <span style={{ flexShrink: 0 }}>Confidence: {Math.round(item.confidence * 100)}%</span>
                 </div>
 
                 {/* Accept / Reject Action Chips */}
-                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
                   <button 
                     style={{
                       flex: 1,
                       backgroundColor: isAccepted ? 'var(--success-color)' : 'var(--bg-tertiary)',
                       color: isAccepted ? '#fff' : 'var(--text-primary)',
-                      padding: '4px',
-                      fontSize: '10px'
+                      padding: '5px',
+                      fontSize: '10px',
+                      borderRadius: '4px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px'
                     }}
                     onClick={() => updateReviewItemStatus(item.id, 'ACCEPTED')}
                   >
@@ -169,8 +181,15 @@ export const ReviewQueueView: React.FC = () => {
                       flex: 1,
                       backgroundColor: isRejected ? 'var(--danger-color)' : 'var(--bg-tertiary)',
                       color: isRejected ? '#fff' : 'var(--text-primary)',
-                      padding: '4px',
-                      fontSize: '10px'
+                      padding: '5px',
+                      fontSize: '10px',
+                      borderRadius: '4px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '4px'
                     }}
                     onClick={() => updateReviewItemStatus(item.id, 'REJECTED')}
                   >

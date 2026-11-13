@@ -47,7 +47,7 @@ export const TakesView: React.FC = () => {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '2px' }}>
         {repeatedTakes.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '24px', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'center' }}>
             <Layers size={24} color="var(--text-muted)" />
@@ -67,6 +67,7 @@ export const TakesView: React.FC = () => {
               key={item.id}
               onClick={() => hostBridge.setPlayheadPosition(item.startSeconds)}
               style={{
+                flexShrink: 0,
                 padding: '10px',
                 borderRadius: 'var(--radius-sm)',
                 backgroundColor: 'var(--bg-secondary)',
