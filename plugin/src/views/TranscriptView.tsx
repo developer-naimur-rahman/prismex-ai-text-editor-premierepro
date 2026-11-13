@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimecodeConverter } from '../host/TimecodeConverter';
@@ -31,7 +31,10 @@ import {
   Video,
   Volume2,
   BookOpen,
-  Check
+  Check,
+  Pencil,
+  X,
+  AlignLeft
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
@@ -140,6 +143,13 @@ export const TranscriptView: React.FC = () => {
   const [isGeneratingChapters, setIsGeneratingChapters] = useState<boolean>(false);
   const [copiedChapters, setCopiedChapters] = useState<boolean>(false);
 
+  // Per-line action state: editing, copied feedback, typography
+  const [editingParaIdx, setEditingParaIdx] = useState<number | null>(null);
+  const [editingParaText, setEditingParaText] = useState<string>('');
+  const [copiedLineIdx, setCopiedLineIdx] = useState<number | null>(null);
+  const [typographyCopiedIdx, setTypographyCopiedIdx] = useState<number | null>(null);
+  const [hoveredWordIdx, setHoveredWordIdx] = useState<number | null>(null);
+
   const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
@@ -201,7 +211,7 @@ export const TranscriptView: React.FC = () => {
   }, [words]);
 
   const wordMarkersMap = useMemo(() => {
-    const map: { [wordIdx: number]: { type: 'EMPHASIS' | 'BROLL' | 'ICON'; color: string; label: string } } = {};
+    const map: { [wordIdx: number]: { type: 'EMPHASIS' | 'BROLL' | 'ICON'; color: string; label: string; suggestion?: string; context?: string; brollQuery?: string; brollDescription?: string; iconSuggestion?: string; emphasisEffect?: string } } = {};
     for (const m of aiMarkersList) {
       const mSec = m.startSeconds;
       const wIdx = words.findIndex((w) => w.start <= mSec + 0.25 && w.end >= mSec - 0.25);
@@ -209,7 +219,13 @@ export const TranscriptView: React.FC = () => {
         map[wIdx] = {
           type: m.type,
           color: m.color === 'RED' ? '#ef4444' : m.color === 'GREEN' ? '#10b981' : '#38bdf8',
-          label: m.name
+          label: m.name,
+          suggestion: m.suggestion || m.comment || m.name,
+          context: m.context || '',
+          brollQuery: m.brollQuery || '',
+          brollDescription: m.brollDescription || '',
+          iconSuggestion: m.iconSuggestion || '',
+          emphasisEffect: m.emphasisEffect || ''
         };
       }
     }
@@ -405,6 +421,89 @@ export const TranscriptView: React.FC = () => {
       setTimeout(() => setCreativeStatus(null), 4000);
     }
   };
+
+  // Line-level Action Handlers: Copy, Edit, Typography
+  const handleCopyLine = (paraIdx: number, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedLineIdx(paraIdx);
+    setTimeout(() => setCopiedLineIdx(null), 2000);
+  };
+
+  const handleStartEditLine = (paraIdx: number, paraTokens: any[]) => {
+    setEditingParaIdx(paraIdx);
+    setEditingParaText(paraTokens.map((t) => t.word).join(' '));
+  };
+
+  const handleCancelEditLine = () => {
+    setEditingParaIdx(null);
+    setEditingParaText('');
+  };
+
+  const handleSaveEditLine = (paraIdx: number, paraTokens: any[]) => {
+    if (!editingParaText.trim()) {
+      handleCancelEditLine();
+      return;
+    }
+    const newWordsText = editingParaText.trim().split(/\s+/);
+    const startGlobalIdx = paraTokens[0].globalIdx;
+    const endGlobalIdx = paraTokens[paraTokens.length - 1].globalIdx;
+
+    const startTime = paraTokens[0].start;
+    const endTime = paraTokens[paraTokens.length - 1].end;
+    const totalDur = Math.max(0.3, endTime - startTime);
+    const wordDur = totalDur / newWordsText.length;
+
+    const replacedTokens = newWordsText.map((w, idx) => ({
+      id: `w_edit_${Date.now()}_${idx}`,
+      word: w,
+      start: Number((startTime + idx * wordDur).toFixed(3)),
+      end: Number((startTime + (idx + 1) * wordDur).toFixed(3)),
+      start_seconds: Number((startTime + idx * wordDur).toFixed(3)),
+      end_seconds: Number((startTime + (idx + 1) * wordDur).toFixed(3)),
+      isFiller: false
+    }));
+
+    const updatedWords = [
+      ...transcriptWords.slice(0, startGlobalIdx),
+      ...replacedTokens,
+      ...transcriptWords.slice(endGlobalIdx + 1)
+    ];
+
+    setTranscriptWords(updatedWords);
+    setEditingParaIdx(null);
+    setEditingParaText('');
+    setCreativeStatus(language === 'bn' ? 'লাইনটি সফলভাবে আপডেট হয়েছে!' : 'Line successfully updated!');
+    setTimeout(() => setCreativeStatus(null), 3000);
+  };
+
+  const handleCopyTypography = async (paraIdx: number, fullLineText: string) => {
+    try {
+      const res = await client.extractTypographyKeywords(fullLineText);
+      let typoText = res?.typography;
+      if (!typoText || !typoText.trim()) {
+        const raw = fullLineText.trim().split(/\s+/);
+        const stopSet = new Set(['a', 'an', 'the', 'is', 'are', 'was', 'were', 'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'that', 'this', 'and', 'but', 'or', 'so', 'it', 'i', 'you', 'he', 'she', 'they', 'we', 'এটা', 'ওটা', 'আমি', 'আমার', 'তুমি', 'তোমার', 'এবং', 'আর', 'করে', 'হলো']);
+        const filtered = raw.filter((w) => !stopSet.has(w.toLowerCase().replace(/[^a-zA-Z0-9\u0980-\u09FF]/g, '')));
+        typoText = (filtered.length > 0 ? filtered.slice(0, 4).join(' ') : raw.slice(0, 3).join(' ')).toUpperCase();
+      }
+      navigator.clipboard.writeText(typoText);
+      setTypographyCopiedIdx(paraIdx);
+      setTimeout(() => setTypographyCopiedIdx(null), 2500);
+    } catch (err) {
+      console.error('Failed to extract typography:', err);
+    }
+  };
+
+  // Auto-analyze markers when transcript is loaded so cues are visible right away
+  useEffect(() => {
+    if (transcriptWords.length > 0 && aiMarkersList.length === 0 && !isProcessingCreative) {
+      client.aiMarkers(transcriptWords).then((res) => {
+        if (res && res.markers && res.markers.length > 0) {
+          setAiMarkersList(res.markers);
+        }
+      }).catch((e) => console.log('Auto marker analysis:', e));
+    }
+  }, [transcriptWords.length, aiMarkersList.length]);
 
   const hasSelection = selStartIdx !== null && selEndIdx !== null && words.length > 0;
   const minSel = hasSelection ? Math.min(selStartIdx!, selEndIdx!) : -1;
@@ -2145,6 +2244,9 @@ export const TranscriptView: React.FC = () => {
             const matchingTake = repeatedTakes.find(
               (rt) => rt.startSeconds <= paraEnd && rt.endSeconds >= para.startTime
             );
+            const paraLineText = para.tokens.map((tok) => tok.word).join(' ');
+            const isEditingThis = editingParaIdx === para.startIdx;
+
             return (
             <div
               key={para.startIdx}
@@ -2152,13 +2254,23 @@ export const TranscriptView: React.FC = () => {
                 display: 'flex',
                 gap: '10px',
                 alignItems: 'flex-start',
-                padding: matchingTake ? '6px' : '0',
-                borderRadius: matchingTake ? '4px' : '0',
-                backgroundColor: matchingTake ? 'rgba(139, 92, 246, 0.08)' : 'transparent',
-                borderLeft: matchingTake ? '2px solid #a78bfa' : 'none'
+                padding: matchingTake ? '6px' : '4px',
+                borderRadius: '4px',
+                backgroundColor: isEditingThis
+                  ? 'rgba(59, 130, 246, 0.08)'
+                  : matchingTake
+                  ? 'rgba(139, 92, 246, 0.08)'
+                  : 'transparent',
+                borderLeft: isEditingThis
+                  ? '2px solid #3b82f6'
+                  : matchingTake
+                  ? '2px solid #a78bfa'
+                  : '2px solid transparent',
+                transition: 'background-color 0.15s ease'
               }}
             >
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '68px' }}>
+              {/* Left Column: Timecode & Double Take Scissors */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '68px', flexShrink: 0 }}>
                 <div
                   onClick={() => hostBridge.setPlayheadPosition(para.startTime)}
                   title="Click to jump to paragraph start"
@@ -2196,76 +2308,245 @@ export const TranscriptView: React.FC = () => {
                 )}
               </div>
 
-              <div style={{ flex: 1, lineHeight: 1.85 }}>
-                {para.tokens.map((item) => {
-                  if (filterMode === 'FILLERS' && !item.isFiller) return null;
-                  const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
-                  const isSelected = hasSelection && item.globalIdx >= minSel && item.globalIdx <= maxSel;
-                  const isPlayingWord = playheadSec > 0 && playheadSec >= item.start && playheadSec <= item.end;
-                  const markerInfo = wordMarkersMap[item.globalIdx];
-                  const isBroll = markerInfo?.type === 'BROLL';
-                  const isEmphasis = markerInfo?.type === 'EMPHASIS';
-                  const isIcon = markerInfo?.type === 'ICON';
-
-                  return (
-                    <span
-                      key={item.id}
-                      onClick={(e) => handleWordClick(item.globalIdx, e)}
-                      title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + markerInfo.label + ']' : ''} (Click for AI Quick Actions, Shift+Click to select)`}
+              {/* Middle Column: Words with 3-Color Highlights & Hover Tooltips OR Inline Edit Field */}
+              {isEditingThis ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <textarea
+                    value={editingParaText}
+                    onChange={(e) => setEditingParaText(e.target.value)}
+                    rows={2}
+                    style={{
+                      width: '100%',
+                      backgroundColor: '#18181b',
+                      color: '#fff',
+                      border: '1px solid #3b82f6',
+                      borderRadius: '4px',
+                      padding: '6px 8px',
+                      fontSize: '12px',
+                      fontFamily: 'inherit',
+                      resize: 'vertical',
+                      outline: 'none'
+                    }}
+                    autoFocus
+                  />
+                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button
+                      onClick={() => handleSaveEditLine(para.startIdx, para.tokens)}
                       style={{
-                        display: 'inline-block',
-                        margin: '1px 2px',
-                        padding: '1px 4px',
+                        backgroundColor: '#059669',
+                        color: '#fff',
+                        border: 'none',
                         borderRadius: '3px',
+                        padding: '3px 9px',
+                        fontSize: '11px',
                         cursor: 'pointer',
-                        backgroundColor: isPlayingWord
-                          ? 'rgba(16, 185, 129, 0.38)'
-                          : isSelected
-                          ? 'rgba(59, 130, 246, 0.45)'
-                          : matches
-                          ? '#3b82f6'
-                          : isBroll
-                          ? 'rgba(16, 185, 129, 0.15)'
-                          : isEmphasis
-                          ? 'rgba(239, 68, 68, 0.15)'
-                          : isIcon
-                          ? 'rgba(56, 189, 248, 0.15)'
-                          : item.isFiller
-                          ? 'rgba(250, 204, 21, 0.25)'
-                          : 'transparent',
-                        color: isPlayingWord
-                          ? '#fff'
-                          : isBroll
-                          ? '#6ee7b7'
-                          : isEmphasis
-                          ? '#fca5a5'
-                          : isIcon
-                          ? '#7dd3fc'
-                          : item.isFiller
-                          ? '#facc15'
-                          : 'var(--text-primary)',
-                        border: isPlayingWord
-                          ? '1px solid #34d399'
-                          : isSelected
-                          ? '1px solid #60a5fa'
-                          : item.isFiller
-                          ? '1px dashed rgba(250, 204, 21, 0.4)'
-                          : '1px solid transparent',
-                        borderBottom: isBroll
-                          ? '2px solid #10b981'
-                          : isEmphasis
-                          ? '2px solid #ef4444'
-                          : isIcon
-                          ? '2px solid #38bdf8'
-                          : undefined,
-                        textDecoration: isPlayingWord ? 'underline' : 'none',
-                        fontSize: '12px'
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px'
                       }}
                     >
-                      {item.word}
-                    </span>
-                  );
-                })}
+                      <Save size={11} />
+                      <span>সেভ</span>
+                    </button>
+                    <button
+                      onClick={handleCancelEditLine}
+                      style={{
+                        backgroundColor: 'rgba(255,255,255,0.08)',
+                        color: 'var(--text-muted)',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: '3px',
+                        padding: '3px 8px',
+                        fontSize: '11px',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      বাতিল
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ flex: 1, lineHeight: 1.85 }}>
+                  {para.tokens.map((item) => {
+                    if (filterMode === 'FILLERS' && !item.isFiller) return null;
+                    const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
+                    const isSelected = hasSelection && item.globalIdx >= minSel && item.globalIdx <= maxSel;
+                    const isPlayingWord = playheadSec > 0 && playheadSec >= item.start && playheadSec <= item.end;
+                    const markerInfo = wordMarkersMap[item.globalIdx];
+                    const isBroll = markerInfo?.type === 'BROLL';
+                    const isEmphasis = markerInfo?.type === 'EMPHASIS';
+                    const isIcon = markerInfo?.type === 'ICON';
+                    const isHovered = hoveredWordIdx === item.globalIdx;
+
+                    return (
+                      <span
+                        key={item.id}
+                        onClick={(e) => handleWordClick(item.globalIdx, e)}
+                        onMouseEnter={() => setHoveredWordIdx(item.globalIdx)}
+                        onMouseLeave={() => setHoveredWordIdx(null)}
+                        title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + (markerInfo.suggestion || markerInfo.label) + ']' : ''} (ক্লিক করুন AI অ্যাকশনের জন্য)`}
+                        style={{
+                          position: 'relative',
+                          display: 'inline-block',
+                          margin: '1px 2px',
+                          padding: '1px 5px',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          backgroundColor: isPlayingWord
+                            ? 'rgba(16, 185, 129, 0.38)'
+                            : isSelected
+                            ? 'rgba(59, 130, 246, 0.45)'
+                            : matches
+                            ? '#3b82f6'
+                            : isBroll
+                            ? 'rgba(16, 185, 129, 0.22)'
+                            : isEmphasis
+                            ? 'rgba(239, 68, 68, 0.22)'
+                            : isIcon
+                            ? 'rgba(56, 189, 248, 0.22)'
+                            : item.isFiller
+                            ? 'rgba(250, 204, 21, 0.25)'
+                            : 'transparent',
+                          color: isPlayingWord
+                            ? '#fff'
+                            : isBroll
+                            ? '#6ee7b7'
+                            : isEmphasis
+                            ? '#fca5a5'
+                            : isIcon
+                            ? '#7dd3fc'
+                            : item.isFiller
+                            ? '#facc15'
+                            : 'var(--text-primary)',
+                          border: isPlayingWord
+                            ? '1px solid #34d399'
+                            : isSelected
+                            ? '1px solid #60a5fa'
+                            : isBroll
+                            ? '1px solid rgba(16, 185, 129, 0.5)'
+                            : isEmphasis
+                            ? '1px solid rgba(239, 68, 68, 0.5)'
+                            : isIcon
+                            ? '1px solid rgba(56, 189, 248, 0.5)'
+                            : item.isFiller
+                            ? '1px dashed rgba(250, 204, 21, 0.4)'
+                            : '1px solid transparent',
+                          borderBottom: isBroll
+                            ? '2.5px solid #10b981'
+                            : isEmphasis
+                            ? '2.5px solid #ef4444'
+                            : isIcon
+                            ? '2.5px solid #38bdf8'
+                            : undefined,
+                          fontWeight: (isBroll || isEmphasis || isIcon) ? 600 : 400,
+                          textDecoration: isPlayingWord ? 'underline' : 'none',
+                          fontSize: '12px',
+                          transition: 'all 0.1s ease'
+                        }}
+                      >
+                        {item.word}
+
+                        {/* Rich Floating Tooltip on Hover */}
+                        {isHovered && markerInfo && (
+                          <span
+                            style={{
+                              position: 'absolute',
+                              bottom: 'calc(100% + 4px)',
+                              left: '50%',
+                              transform: 'translateX(-50%)',
+                              zIndex: 9999,
+                              backgroundColor: '#09090b',
+                              border: `1px solid ${markerInfo.color}`,
+                              borderRadius: '4px',
+                              padding: '3px 8px',
+                              fontSize: '10px',
+                              fontWeight: 600,
+                              color: '#fff',
+                              whiteSpace: 'nowrap',
+                              boxShadow: '0 6px 18px rgba(0,0,0,0.85)',
+                              pointerEvents: 'none',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              letterSpacing: '0.2px'
+                            }}
+                          >
+                            <span>{markerInfo.suggestion || markerInfo.label}</span>
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Right Column: Line Action Buttons (Copy Line, Edit Line, Typography Copy) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginLeft: 'auto', flexShrink: 0, paddingTop: '2px' }}>
+                {/* 📋 Copy Line Button */}
+                <button
+                  onClick={() => handleCopyLine(para.startIdx, paraLineText)}
+                  title="পুরো লাইনটি ক্লিপবোর্ডে কপি করুন"
+                  style={{
+                    backgroundColor: copiedLineIdx === para.startIdx ? 'rgba(16, 185, 129, 0.25)' : 'rgba(255,255,255,0.06)',
+                    border: copiedLineIdx === para.startIdx ? '1px solid #10b981' : '1px solid rgba(255,255,255,0.12)',
+                    color: copiedLineIdx === para.startIdx ? '#34d399' : 'var(--text-muted)',
+                    borderRadius: '3px',
+                    padding: '2px 6px',
+                    fontSize: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    cursor: 'pointer',
+                    userSelect: 'none'
+                  }}
+                >
+                  {copiedLineIdx === para.startIdx ? <Check size={10} /> : <Copy size={10} />}
+                  <span>{copiedLineIdx === para.startIdx ? 'কপি হয়েছে!' : 'কপি'}</span>
+                </button>
+
+                {/* ✏️ Edit Line Button */}
+                <button
+                  onClick={() => (isEditingThis ? handleCancelEditLine() : handleStartEditLine(para.startIdx, para.tokens))}
+                  title={isEditingThis ? 'এডিটিং বাতিল করুন' : 'এই লাইনটি এডিট করুন'}
+                  style={{
+                    backgroundColor: isEditingThis ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255,255,255,0.06)',
+                    border: isEditingThis ? '1px solid #3b82f6' : '1px solid rgba(255,255,255,0.12)',
+                    color: isEditingThis ? '#60a5fa' : 'var(--text-muted)',
+                    borderRadius: '3px',
+                    padding: '2px 6px',
+                    fontSize: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    cursor: 'pointer',
+                    userSelect: 'none'
+                  }}
+                >
+                  <Pencil size={10} />
+                  <span>{isEditingThis ? 'বাতিল' : 'এডিট'}</span>
+                </button>
+
+                {/* ✨ Typography Copy Button */}
+                <button
+                  onClick={() => handleCopyTypography(para.startIdx, paraLineText)}
+                  title="টাইপোগ্রাফির জন্য গুরুত্বপূর্ণ কি-ওয়ার্ডগুলো বাছাই করে কপি করুন"
+                  style={{
+                    backgroundColor: typographyCopiedIdx === para.startIdx ? 'rgba(234, 179, 8, 0.25)' : 'rgba(139, 92, 246, 0.15)',
+                    border: typographyCopiedIdx === para.startIdx ? '1px solid #eab308' : '1px solid rgba(139, 92, 246, 0.35)',
+                    color: typographyCopiedIdx === para.startIdx ? '#facc15' : '#c084fc',
+                    borderRadius: '3px',
+                    padding: '2px 7px',
+                    fontSize: '10px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '3px',
+                    cursor: 'pointer',
+                    fontWeight: 500,
+                    userSelect: 'none'
+                  }}
+                >
+                  <Sparkles size={10} />
+                  <span>{typographyCopiedIdx === para.startIdx ? '✓ টাইপোগ্রাফি কপি!' : '✨ টাইপোগ্রাফি'}</span>
+                </button>
               </div>
             </div>
             );

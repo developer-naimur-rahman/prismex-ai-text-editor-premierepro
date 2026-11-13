@@ -411,67 +411,249 @@ class CreativeAI:
     @classmethod
     def analyze_markers(cls, words: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Classifies timeline moments into 3 distinct color-coded marker types:
-        - RED: Emphasis & high-impact punch words
-        - GREEN: B-Roll overlay visual opportunities
-        - BLUE: Icons, PNG graphics & UI callouts
+        Deep-analyzes transcript words and classifies timeline moments into
+        3 distinct color-coded marker types with rich contextual suggestions:
+        - RED: Emphasis & high-impact punch words (zoom / scale pop / text callout)
+        - GREEN: B-Roll overlay visual opportunities (stock footage / cutaway)
+        - BLUE: Icons, PNG graphics & UI callouts (overlay graphic / sticker)
+        Each marker includes: suggestion, context, brollQuery/iconSuggestion/emphasisEffect
         """
         if not words:
             return {"markers": []}
 
         markers: List[Dict[str, Any]] = []
 
-        # Local linguistic heuristics for visual keywords
+        # --- Expanded trigger dictionaries with contextual suggestions ---
         broll_triggers = {
-            "see", "look", "watch", "show", "screen", "video", "footage", "outside", "car", "money",
-            "building", "travel", "phone", "computer", "design", "city", "people", "road", "scene",
-            "দেখুন", "দেখেন", "ভিডিও", "স্ক্রিন", "মানুষ", "টাকা", "গাড়ি", "শহর"
+            "see": "POV / Perspective Shot", "look": "Close-up Reaction", "watch": "Audience / Viewer",
+            "show": "Screen Recording / Demo", "screen": "Monitor / Device Screen", "video": "Cinematic Footage",
+            "footage": "Stock B-Roll Montage", "outside": "Outdoor / Nature Shot", "car": "Vehicle / Driving",
+            "money": "Cash / Finance Visual", "building": "Architecture / City", "travel": "Travel / Destination",
+            "phone": "Smartphone Close-up", "computer": "Workspace / Desk Setup", "design": "Design Process",
+            "city": "Aerial Cityscape", "people": "Crowd / Human Activity", "road": "Road / Journey",
+            "scene": "Dramatic Scene Cutaway", "world": "Globe / World Map", "camera": "Camera Gear",
+            "coffee": "Coffee / Lifestyle", "work": "Working / Office", "nature": "Nature / Landscape",
+            "food": "Food / Cooking", "gym": "Fitness / Workout", "house": "Home / Interior",
+            "office": "Office / Coworking Space", "classroom": "Classroom / Education",
+            "laptop": "Laptop Close-up", "studio": "Studio / Creative Space", "sky": "Sky / Clouds Timelapse",
+            "ocean": "Ocean / Water / Beach", "night": "Night City / Neon", "morning": "Sunrise / Morning Routine",
+            "book": "Book / Library", "meeting": "Meeting / Team", "coding": "Code / Programming Screen",
+            "typing": "Hands Typing / Keyboard", "music": "Music / Audio Visualizer",
+            "walking": "Walking / POV Walk", "driving": "POV Driving / Dashboard",
+            "success": "Success / Achievement", "growth": "Growth Chart / Progress",
+            "\u09a6\u09c7\u0996\u09c1\u09a8": "POV / \u09a6\u09c3\u09b7\u09cd\u099f\u09bf\u0995\u09cb\u09a3",
+            "\u09a6\u09c7\u0996\u09c7\u09a8": "\u0995\u09cd\u09b2\u09cb\u099c-\u0986\u09aa \u09b0\u09bf\u0985\u09cd\u09af\u09be\u0995\u09b6\u09a8",
+            "\u09ad\u09bf\u09a1\u09bf\u0993": "\u09b8\u09bf\u09a8\u09c7\u09ae\u09cd\u09af\u09be\u099f\u09bf\u0995 \u09ab\u09c1\u099f\u09c7\u099c",
+            "\u09b8\u09cd\u0995\u09cd\u09b0\u09bf\u09a8": "\u09ae\u09a8\u09bf\u099f\u09b0 / \u09a1\u09bf\u09ad\u09be\u0987\u09b8 \u09b8\u09cd\u0995\u09cd\u09b0\u09bf\u09a8",
+            "\u09ae\u09be\u09a8\u09c1\u09b7": "\u09ae\u09be\u09a8\u09c1\u09b7 / \u099c\u09a8\u09b8\u09ae\u09be\u0997\u09ae",
+            "\u099f\u09be\u0995\u09be": "\u0995\u09cd\u09af\u09be\u09b6 / \u0986\u09b0\u09cd\u09a5\u09bf\u0995 \u09ad\u09bf\u099c\u09cd\u09af\u09c1\u09af\u09bc\u09be\u09b2",
+            "\u0997\u09be\u09dc\u09bf": "\u0997\u09be\u09dc\u09bf / \u09a1\u09cd\u09b0\u09be\u0987\u09ad\u09bf\u0982",
+            "\u09b6\u09b9\u09b0": "\u098f\u09b0\u09bf\u09af\u09bc\u09be\u09b2 \u09b8\u09bf\u099f\u09bf\u09b8\u09cd\u0995\u09c7\u09aa",
+            "\u0998\u09b0": "\u09ac\u09be\u09dc\u09bf / \u0987\u09a8\u09cd\u099f\u09c7\u09b0\u09bf\u09af\u09bc\u09b0",
+            "\u0985\u09ab\u09bf\u09b8": "\u0985\u09ab\u09bf\u09b8 / \u0993\u09af\u09bc\u09be\u09b0\u09cd\u0995\u09b8\u09cd\u09aa\u09c7\u09b8",
+            "\u09b0\u09be\u09b8\u09cd\u09a4\u09be": "\u09b0\u09be\u09b8\u09cd\u09a4\u09be / \u099c\u09be\u09b0\u09cd\u09a8\u09bf",
+            "\u09b2\u09cd\u09af\u09be\u09aa\u099f\u09aa": "\u09b2\u09cd\u09af\u09be\u09aa\u099f\u09aa \u0995\u09cd\u09b2\u09cb\u099c-\u0986\u09aa",
+            "\u0995\u09ae\u09cd\u09aa\u09bf\u0989\u099f\u09be\u09b0": "\u0995\u09ae\u09cd\u09aa\u09bf\u0989\u099f\u09be\u09b0 / \u09a1\u09c7\u09b8\u09cd\u0995 \u09b8\u09c7\u099f\u0986\u09aa",
         }
         icon_triggers = {
-            "click", "button", "link", "subscribe", "download", "percent", "dollar", "arrow", "chart",
-            "number", "app", "website", "api", "key", "settings", "file", "folder",
-            "ক্লিক", "ডাউনলোড", "বাটন", "লিংক", "সাবস্ক্রাইব", "পার্সেন্ট", "টাকা", "অ্যাপ"
+            "click": "\U0001f5b1\ufe0f Mouse Click Icon", "button": "\U0001f518 Button / CTA Icon",
+            "link": "\U0001f517 Link / Chain Icon", "subscribe": "\U0001f514 Subscribe Bell Icon",
+            "download": "\u2b07\ufe0f Download Arrow", "percent": "\U0001f4ca Percentage Chart",
+            "dollar": "\U0001f4b2 Dollar Sign", "arrow": "\u27a1\ufe0f Arrow / Direction",
+            "chart": "\U0001f4c8 Growth Chart", "number": "\U0001f522 Number Badge",
+            "app": "\U0001f4f1 App Icon", "website": "\U0001f310 Globe / Web Icon",
+            "api": "\u2699\ufe0f API / Gear Icon", "key": "\U0001f511 Key / Security Icon",
+            "settings": "\u2699\ufe0f Settings Gear", "file": "\U0001f4c4 File Document",
+            "folder": "\U0001f4c1 Folder Icon", "email": "\u2709\ufe0f Email Envelope",
+            "notification": "\U0001f514 Notification Bell", "check": "\u2705 Checkmark",
+            "star": "\u2b50 Star Rating", "heart": "\u2764\ufe0f Heart / Like",
+            "share": "\U0001f4e4 Share Icon", "search": "\U0001f50d Search Magnifier",
+            "lock": "\U0001f512 Lock / Security", "upload": "\u2b06\ufe0f Upload Arrow",
+            "timer": "\u23f1\ufe0f Timer / Clock", "calendar": "\U0001f4c5 Calendar",
+            "warning": "\u26a0\ufe0f Warning Triangle", "list": "\U0001f4cb List / Checklist",
+            "price": "\U0001f3f7\ufe0f Price Tag", "step": "1\ufe0f\u20e3 Step Number Badge",
+            "tip": "\U0001f4a1 Lightbulb Tip", "idea": "\U0001f4a1 Idea Lightbulb",
+            "fire": "\U0001f525 Fire / Trending", "trophy": "\U0001f3c6 Trophy / Achievement",
+            "target": "\U0001f3af Target / Bullseye", "comment": "\U0001f4ac Comment Bubble",
+            "like": "\U0001f44d Thumbs Up",
+            "\u0995\u09cd\u09b2\u09bf\u0995": "\U0001f5b1\ufe0f \u09ae\u09be\u0989\u09b8 \u0995\u09cd\u09b2\u09bf\u0995 \u0986\u0987\u0995\u09a8",
+            "\u09a1\u09be\u0989\u09a8\u09b2\u09cb\u09a1": "\u2b07\ufe0f \u09a1\u09be\u0989\u09a8\u09b2\u09cb\u09a1 \u09a4\u09c0\u09b0",
+            "\u09ac\u09be\u099f\u09a8": "\U0001f518 \u09ac\u09be\u099f\u09a8 \u0986\u0987\u0995\u09a8",
+            "\u09b2\u09bf\u0982\u0995": "\U0001f517 \u09b2\u09bf\u0982\u0995 \u0986\u0987\u0995\u09a8",
+            "\u09b8\u09be\u09ac\u09b8\u09cd\u0995\u09cd\u09b0\u09be\u0987\u09ac": "\U0001f514 \u09b8\u09be\u09ac\u09b8\u09cd\u0995\u09cd\u09b0\u09be\u0987\u09ac \u09ac\u09c7\u09b2",
+            "\u0985\u09cd\u09af\u09be\u09aa": "\U0001f4f1 \u0985\u09cd\u09af\u09be\u09aa \u0986\u0987\u0995\u09a8",
+            "\u099f\u09bf\u09aa\u09b8": "\U0001f4a1 \u099f\u09bf\u09aa\u09b8 \u0986\u0987\u0995\u09a8",
+            "\u0986\u0987\u09a1\u09bf\u09af\u09bc\u09be": "\U0001f4a1 \u0986\u0987\u09a1\u09bf\u09af\u09bc\u09be \u0986\u0987\u0995\u09a8",
+            "\u09b2\u09be\u0987\u0995": "\U0001f44d \u09a5\u09be\u09ae\u09cd\u09ac\u09b8 \u0986\u09aa",
         }
         emphasis_triggers = {
-            "never", "always", "huge", "insane", "massive", "secret", "best", "worst", "important",
-            "crazy", "shocking", "game-changer", "revolutionary", "stop", "guaranteed", "truth",
-            "কখনোই", "সবসময়", "সবচেয়ে", "সেরা", "গুরুত্বপূর্ণ", "বিশাল", "আসল", "রহস্য"
+            "never": "\u274c Strong Negation", "always": "\U0001f501 Absolute Statement",
+            "huge": "\U0001f4a5 Scale Impact", "insane": "\U0001f92f Shock Factor",
+            "massive": "\U0001f4a5 Enormous Scale", "secret": "\U0001f92b Mystery / Reveal",
+            "best": "\U0001f3c6 Superlative", "worst": "\u26a0\ufe0f Negative Superlative",
+            "important": "\u26a1 Critical Point", "crazy": "\U0001f92f Shock / Disbelief",
+            "shocking": "\u26a1 Surprise Reveal", "revolutionary": "\U0001f680 Innovation",
+            "stop": "\U0001f6d1 Urgency / Pause", "guaranteed": "\u2705 Promise / Certainty",
+            "truth": "\U0001f4af Honest / Real Talk", "game-changer": "\U0001f3af Paradigm Shift",
+            "must": "\u2757 Mandatory", "exactly": "\U0001f3af Precision",
+            "first": "1\ufe0f\u20e3 Priority / Rank", "only": "\u261d\ufe0f Exclusivity",
+            "biggest": "\U0001f4a5 Largest Scale", "mistake": "\u274c Error / Warning",
+            "problem": "\u26a0\ufe0f Issue Highlight", "solution": "\U0001f4a1 Answer / Fix",
+            "impossible": "\U0001f6ab Disbelief", "incredible": "\u2728 Amazement",
+            "actually": "\U0001f446 Correction", "literally": "\U0001f4cc Factual Emphasis",
+            "absolutely": "\U0001f4af Complete Agreement", "finally": "\U0001f389 Resolution",
+            "remember": "\U0001f9e0 Memory / Recall", "powerful": "\U0001f4aa Strength / Impact",
+            "dangerous": "\u2620\ufe0f Risk / Danger", "free": "\U0001f193 Zero Cost",
+            "fast": "\u26a1 Speed", "easy": "\U0001f44c Simplicity",
+            "hard": "\U0001f48e Difficulty", "real": "\U0001f4af Authenticity",
+            "proven": "\u2705 Evidence-Based", "ultimate": "\U0001f3c6 Supreme / Final",
+            "\u0995\u0996\u09a8\u09cb\u0987": "\u274c \u09a6\u09c3\u09a2\u09bc \u09a8\u09c7\u09a4\u09bf\u09ac\u09be\u099a\u0995",
+            "\u09b8\u09ac\u09b8\u09ae\u09af\u09bc": "\U0001f501 \u09aa\u09b0\u09ae \u09ac\u09bf\u09ac\u09c3\u09a4\u09bf",
+            "\u09b8\u09ac\u099a\u09c7\u09af\u09bc\u09c7": "\U0001f3c6 \u09b8\u09b0\u09cd\u09ac\u09cb\u099a\u09cd\u099a",
+            "\u09b8\u09c7\u09b0\u09be": "\U0001f3c6 \u09b6\u09cd\u09b0\u09c7\u09b7\u09cd\u09a0",
+            "\u0997\u09c1\u09b0\u09c1\u09a4\u09cd\u09ac\u09aa\u09c2\u09b0\u09cd\u09a3": "\u26a1 \u099c\u09b0\u09c1\u09b0\u09bf \u09aa\u09af\u09bc\u09c7\u09a8\u09cd\u099f",
+            "\u09ac\u09bf\u09b6\u09be\u09b2": "\U0001f4a5 \u09ac\u09bf\u09b0\u09be\u099f \u09b8\u09cd\u0995\u09c7\u09b2",
+            "\u0986\u09b8\u09b2": "\U0001f4af \u0986\u09b8\u09b2 \u0995\u09a5\u09be",
+            "\u09b0\u09b9\u09b8\u09cd\u09af": "\U0001f92b \u09b0\u09b9\u09b8\u09cd\u09af / \u0997\u09cb\u09aa\u09a8",
+            "\u09b8\u09ae\u09be\u09a7\u09be\u09a8": "\U0001f4a1 \u09b8\u09ae\u09be\u09a7\u09be\u09a8",
+            "\u09ad\u09c1\u09b2": "\u274c \u09ad\u09c1\u09b2 / \u09b8\u09a4\u09b0\u09cd\u0995\u09a4\u09be",
+            "\u09b8\u09ae\u09b8\u09cd\u09af\u09be": "\u26a0\ufe0f \u09b8\u09ae\u09b8\u09cd\u09af\u09be",
+            "\u0985\u09b8\u09ae\u09cd\u09ad\u09ac": "\U0001f6ab \u0985\u09b8\u09ae\u09cd\u09ad\u09ac",
+            "\u0985\u09ac\u09b6\u09cd\u09af\u0987": "\u2757 \u09ac\u09be\u09a7\u09cd\u09af\u09a4\u09be\u09ae\u09c2\u09b2\u0995",
+            "\u09b6\u0995\u09cd\u09a4\u09bf\u09b6\u09be\u09b2\u09c0": "\U0001f4aa \u09b6\u0995\u09cd\u09a4\u09bf / \u09aa\u09cd\u09b0\u09ad\u09be\u09ac",
+            "\u09ae\u09a8\u09c7": "\U0001f9e0 \u09b8\u09cd\u09ae\u09c3\u09a4\u09bf / \u09ae\u09a8\u09c7 \u09b0\u09be\u0996\u09c1\u09a8",
         }
 
-        for w in words:
+        # Build context fragments
+        word_texts = [str(w.get("word", "")) for w in words]
+
+        for i, w in enumerate(words):
             token = re.sub(r"[^\w\u0980-\u09FF']+", "", str(w.get("word", "")).lower())
             start = float(w.get("start_seconds", 0.0))
             dur = max(0.3, float(w.get("end_seconds", start + 0.3)) - start)
+            ctx_start = max(0, i - 4)
+            ctx_end = min(len(word_texts), i + 5)
+            context = " ".join(word_texts[ctx_start:ctx_end])
 
             if token in emphasis_triggers:
+                effect_hint = emphasis_triggers[token]
                 markers.append({
                     "type": "EMPHASIS",
                     "color": "RED",
                     "name": f"Emphasis: {w.get('word')}",
                     "comment": "Punch word - Add scale pop or text highlight",
+                    "suggestion": f"\u26a1 \u09aa\u09be\u099e\u09cd\u099a \u099c\u09c1\u09ae (\u09e7\u09e7\u09ea% \u09b8\u09cd\u0995\u09c7\u09b2) \u2014 {effect_hint}",
+                    "emphasisEffect": effect_hint,
+                    "context": context,
                     "startSeconds": start,
                     "durationSeconds": dur
                 })
             elif token in broll_triggers:
+                broll_desc = broll_triggers[token]
+                search_q = token if len(token) > 2 else w.get("word", token)
                 markers.append({
                     "type": "BROLL",
                     "color": "GREEN",
                     "name": f"B-Roll: {w.get('word')}",
                     "comment": f"Overlay relevant visual footage for '{w.get('word')}'",
+                    "suggestion": f"\U0001f3ac B-Roll: {broll_desc}",
+                    "brollQuery": search_q,
+                    "brollDescription": broll_desc,
+                    "context": context,
                     "startSeconds": start,
                     "durationSeconds": 2.5
                 })
             elif token in icon_triggers:
+                icon_desc = icon_triggers[token]
                 markers.append({
                     "type": "ICON",
                     "color": "BLUE",
                     "name": f"Icon/PNG: {w.get('word')}",
                     "comment": f"Drop PNG icon or motion graphic for '{w.get('word')}'",
+                    "suggestion": f"\U0001f3a8 \u0986\u0987\u0995\u09a8: {icon_desc}",
+                    "iconSuggestion": icon_desc,
+                    "context": context,
                     "startSeconds": start,
                     "durationSeconds": 1.5
                 })
 
-        return {"markers": markers[:50], "total": len(markers)}
+        return {"markers": markers[:80], "total": len(markers)}
+
+    @classmethod
+    def extract_typography_keywords(cls, sentence: str) -> Dict[str, Any]:
+        """
+        Extracts only the most important 2-4 high-impact keywords from a sentence
+        for on-screen motion typography / text overlay.
+        """
+        if not sentence or not sentence.strip():
+            return {"original": sentence, "typography": "", "keywords": []}
+
+        raw_words = sentence.strip().split()
+
+        stop_words = {
+            "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "shall", "can", "need", "to", "of", "in",
+            "for", "on", "with", "at", "by", "from", "as", "into", "through",
+            "during", "before", "after", "above", "below", "between", "out", "off",
+            "over", "under", "again", "further", "then", "once", "here", "there",
+            "when", "where", "why", "how", "all", "each", "every", "both", "few",
+            "more", "most", "other", "some", "such", "no", "nor", "not", "only",
+            "own", "same", "so", "than", "too", "very", "just", "now", "and",
+            "but", "or", "if", "while", "because", "until", "that", "this",
+            "these", "those", "i", "me", "my", "we", "our", "you", "your",
+            "he", "him", "his", "she", "her", "it", "its", "they", "them",
+            "their", "what", "which", "who", "whom", "am", "about", "up", "down",
+            "get", "got", "go", "going", "like", "really", "actually", "basically",
+            "literally", "um", "uh", "ah", "okay", "ok", "right", "well", "thing",
+            "things", "something", "don't",
+            "\u098f\u099f\u09be", "\u0993\u099f\u09be", "\u09b8\u09c7\u099f\u09be", "\u09af\u09c7\u099f\u09be", "\u098f\u0995\u099f\u09be",
+            "\u0986\u09ae\u09bf", "\u0986\u09ae\u09be\u09b0", "\u0986\u09ae\u09b0\u09be", "\u09a4\u09c1\u09ae\u09bf", "\u09a4\u09cb\u09ae\u09be\u09b0",
+            "\u09b8\u09c7", "\u09a4\u09be\u09b0", "\u09a4\u09be\u09b0\u09be", "\u09a4\u09be\u09a6\u09c7\u09b0", "\u098f\u0987", "\u0993\u0987",
+            "\u09b8\u09c7\u0987", "\u09af\u09c7", "\u0995\u09bf", "\u0995\u09c7\u09a8", "\u098f\u09ac\u0982", "\u0986\u09b0", "\u0995\u09bf\u09a8\u09cd\u09a4\u09c1",
+            "\u0985\u09a5\u09ac\u09be", "\u09a4\u09be\u09b9\u09b2\u09c7", "\u09af\u09a6\u09bf", "\u09a4\u09ac\u09c7", "\u09af\u0996\u09a8",
+            "\u09a4\u0996\u09a8", "\u098f\u0996\u09a8", "\u09aa\u09b0\u09c7", "\u0986\u0997\u09c7", "\u09ae\u09a7\u09cd\u09af\u09c7",
+            "\u099c\u09a8\u09cd\u09af", "\u09a5\u09c7\u0995\u09c7", "\u09a6\u09bf\u09af\u09bc\u09c7", "\u09a8\u09bf\u09af\u09bc\u09c7",
+            "\u0995\u09b0\u09c7", "\u09b9\u09af\u09bc", "\u09b9\u09b2\u09cb", "\u099b\u09bf\u09b2", "\u0986\u099b\u09c7",
+            "\u09a8\u09be\u0987", "\u09a8\u09be", "\u09b9\u09cd\u09af\u09be\u0981", "\u09ae\u09be\u09a8\u09c7", "\u09a7\u09b0\u09cb",
+            "\u09ac\u09b2\u099b\u09bf", "\u0995\u09b0\u09ac\u09cb", "\u09af\u09be\u09ac\u09c7", "\u09a6\u09b0\u0995\u09be\u09b0",
+            "\u098f\u0995\u099f\u09c1", "\u0985\u09a8\u09c7\u0995", "\u0996\u09c1\u09ac", "\u09ac\u09c7\u09b6\u09bf", "\u0995\u09ae",
+            "\u09ad\u09be\u09b2\u09cb", "\u09ae\u09a4\u09cb", "\u09b0\u0995\u09ae", "\u09ad\u09be\u09ac\u09c7",
+        }
+
+        scored = []
+        for w in raw_words:
+            clean = re.sub(r"[^\w\u0980-\u09FF']+", "", w.lower())
+            if clean in stop_words or len(clean) < 2:
+                continue
+            score = len(clean)
+            if w[0].isupper() and not w.isupper():
+                score += 3
+            if w.isupper() and len(w) > 1:
+                score += 5
+            scored.append((w, score))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        max_keywords = min(4, max(2, len(scored) // 2))
+        top_words = scored[:max_keywords]
+
+        original_order = []
+        used = set()
+        for w in raw_words:
+            for tw, sc in top_words:
+                if tw == w and tw not in used:
+                    original_order.append((tw, sc))
+                    used.add(tw)
+                    break
+
+        keywords = [w for w, _ in original_order]
+        typography_text = " ".join(keywords).upper() if keywords else sentence.strip().upper()
+
+        return {
+            "original": sentence,
+            "typography": typography_text,
+            "keywords": keywords
+        }
 
     @classmethod
     def format_after_effects_typography(cls, text: str) -> Dict[str, Any]:

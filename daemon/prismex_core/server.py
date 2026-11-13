@@ -537,6 +537,14 @@ def format_ae_typography(req: TypographyRequest):
     """Formats text into multi-line kinetic typography layout with ready-to-paste AE ExtendScript."""
     return CreativeAI.format_after_effects_typography(req.text)
 
+class TypographyKeywordsRequest(BaseModel):
+    sentence: str
+
+@app.post("/api/v1/transcript/typography-keywords")
+def extract_typography_keywords(req: TypographyKeywordsRequest):
+    """Extracts 2-4 high-impact keywords from a sentence for on-screen motion typography."""
+    return CreativeAI.extract_typography_keywords(req.sentence)
+
 class StockSearchRequest(BaseModel):
     query: str
 

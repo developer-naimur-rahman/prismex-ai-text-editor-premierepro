@@ -246,6 +246,21 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async extractTypographyKeywords(sentence: string): Promise<{ original: string; typography: string; keywords: string[] } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/typography-keywords`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sentence })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] extractTypographyKeywords failed:', err);
+      return null;
+    }
+  }
+
   public async getReviewQueue(jobId: string): Promise<ReviewQueueItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/review-queue/${jobId}`);
