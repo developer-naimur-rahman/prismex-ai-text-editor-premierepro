@@ -45,9 +45,19 @@ REGISTERED_PROVIDERS: List[Dict[str, Any]] = [
         "max_rpm": 20
     },
     {
-        "provider_id": "gemini-cloud",
-        "name": "Google Gemini (Flash)",
-        "model_id": "gemini-1.5-flash",
+        "provider_id": "openrouter",
+        "name": "OpenRouter AI (Gemini, Claude, DeepSeek)",
+        "model_id": "google/gemini-2.5-flash",
+        "is_local": False,
+        "is_free_tier": True,
+        "capabilities": [TaskCapability.FLUENCY_REASONING, TaskCapability.GRAMMATICAL_EVALUATION],
+        "priority": 1,
+        "max_rpm": 60
+    },
+    {
+        "provider_id": "google-gemini",
+        "name": "Google Gemini (Official Free Tier)",
+        "model_id": "gemini-flash-lite-latest",
         "is_local": False,
         "is_free_tier": True,
         "capabilities": [TaskCapability.FLUENCY_REASONING, TaskCapability.GRAMMATICAL_EVALUATION],

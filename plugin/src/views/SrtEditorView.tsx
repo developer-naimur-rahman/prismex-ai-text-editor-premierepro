@@ -4,6 +4,7 @@ import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimecodeConverter } from '../host/TimecodeConverter';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { translations } from '../i18n/translations';
+import { copyToClipboard } from '../utils/clipboard';
 import {
   Subtitles,
   Sparkles,
@@ -593,8 +594,8 @@ export const SrtEditorView: React.FC = () => {
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
             <span>{language === 'bn' ? `র' SRT টেক্সট (${cues.length} টি কিউ)` : `Raw SRT Document (${cues.length} cues)`}</span>
             <button
-              onClick={() => {
-                navigator.clipboard.writeText(rawSrtText);
+              onClick={async () => {
+                await copyToClipboard(rawSrtText);
                 setStatusMessage(language === 'bn' ? 'ক্লিপবোর্ডে কপি হয়েছে!' : 'Copied SRT to clipboard!');
                 setTimeout(() => setStatusMessage(null), 2500);
               }}

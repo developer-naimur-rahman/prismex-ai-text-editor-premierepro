@@ -232,8 +232,13 @@ class SmartSRTSegmenter:
             )
             payload_text = prompt + "\n\nWords:\n" + " ".join(indexed_lines)
 
+            openrouter_key = KeychainVault.get_api_key("openrouter")
             parsed = None
-            if gemini_key:
+            if openrouter_key:
+                parsed = SmartSRTSegmenter._call_openrouter_json(openrouter_key, payload_text)
+                if parsed is not None:
+                    used_engine = "OpenRouter (AI Smart SRT)"
+            if parsed is None and gemini_key:
                 parsed = SmartSRTSegmenter._call_gemini_json(gemini_key, payload_text)
                 if parsed is not None:
                     used_engine = "Google Gemini 2.0 Flash (AI Smart SRT)"
@@ -249,6 +254,46 @@ class SmartSRTSegmenter:
                 all_ranges.append((offset + int(item["s"]), offset + int(item["e"]), str(item.get("r", "AI Phrase"))))
 
         return all_ranges, used_engine
+
+    @staticmethod
+    def _call_openrouter_json(api_key: str, prompt_text: str) -> Optional[List[Dict[str, Any]]]:
+        import requests
+        candidate_models = ["google/gemini-2.5-flash", "google/gemini-2.0-flash-001", "deepseek/deepseek-chat"]
+        for om in candidate_models:
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "HTTP-Referer": "https://prismex.ai",
+                        "X-Title": "Prismex AI Editor",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": om,
+                        "messages": [
+                            {"role": "system", "content": "You are a professional subtitle segmenter. Return JSON only."},
+                            {"role": "user", "content": prompt_text}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.1
+                    },
+                    timeout=25
+                )
+                if resp.status_code == 200:
+                    raw = resp.json()["choices"][0]["message"]["content"]
+                    cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+                    cleaned = re.sub(r"\s*```$", "", cleaned)
+                    data = json.loads(cleaned)
+                    if isinstance(data, list):
+                        return data
+                    if isinstance(data, dict):
+                        for k in ["cues", "segments", "ranges", "result"]:
+                            if k in data and isinstance(data[k], list):
+                                return data[k]
+            except Exception as e:
+                print(f"[SmartSRT] OpenRouter model {om} failed: {e}")
+        return None
 
     @staticmethod
     def _call_gemini_json(api_key: str, prompt_text: str) -> Optional[List[Dict[str, Any]]]:

@@ -133,7 +133,7 @@ export const ProvidersView: React.FC = () => {
         ))}
       </div>
 
-      {/* Key Input Modal */}
+            {/* Key Input Modal */}
       {selectedProvider && (
         <div style={{
           position: 'fixed',
@@ -145,19 +145,39 @@ export const ProvidersView: React.FC = () => {
           padding: '20px',
           zIndex: 999
         }}>
-          <div className="card" style={{ width: '100%', maxWidth: '320px', display: 'flex', flexDirection: 'column', gap: '10px', backgroundColor: 'var(--bg-secondary)' }}>
-            <h3 style={{ fontSize: '12px', fontWeight: 600 }}>Configure API Key</h3>
-            <p style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
-              Keys are encrypted in your macOS Keychain. Never written to plain-text files.
+          <div className="card" style={{ width: '100%', maxWidth: '340px', display: 'flex', flexDirection: 'column', gap: '10px', backgroundColor: 'var(--bg-secondary)', border: '1px solid rgba(255,255,255,0.2)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <h3 style={{ fontSize: '12px', fontWeight: 600 }}>
+                {selectedProvider === 'openrouter' ? '⚡ OpenRouter API Key' : `Configure ${selectedProvider}`}
+              </h3>
+              {PROVIDER_KEY_URLS[selectedProvider] && (
+                <button
+                  className="btn-secondary"
+                  style={{ padding: '2px 7px', fontSize: '9.5px', color: '#60a5fa' }}
+                  onClick={() => PremiereHostBridge.getInstance().openExternalUrl(PROVIDER_KEY_URLS[selectedProvider])}
+                >
+                  <ExternalLink size={9} />
+                  <span>Get Key</span>
+                </button>
+              )}
+            </div>
+
+            <p style={{ fontSize: '10.5px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+              {selectedProvider === 'openrouter'
+                ? 'OpenRouter API key (sk-or-v1-...) provides unified access to Google Gemini, DeepSeek V3, Claude 3.5, and Llama models.'
+                : 'Keys are encrypted securely in your local macOS Keychain. Never stored in plain-text.'}
             </p>
+
             <input 
               type="password"
-              placeholder="Paste your free-tier API key..."
+              placeholder={selectedProvider === 'openrouter' ? 'sk-or-v1-...' : 'Paste your API key here...'}
               value={keyInput}
               onChange={(e) => setKeyInput(e.target.value)}
-              style={{ padding: '6px 8px', background: 'var(--bg-tertiary)', color: '#fff', border: '1px solid var(--border-subtle)', borderRadius: '4px', fontSize: '11px' }}
+              style={{ padding: '7px 9px', background: 'var(--bg-tertiary)', color: '#fff', border: '1px solid #3b82f6', borderRadius: '4px', fontSize: '11px', outline: 'none' }}
+              autoFocus
             />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px', marginTop: '2px' }}>
               <button className="btn-secondary" onClick={() => setSelectedProvider(null)}>Cancel</button>
               <button className="btn-primary" onClick={handleSaveKey}>Save to Keychain</button>
             </div>

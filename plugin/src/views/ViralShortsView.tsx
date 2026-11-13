@@ -3,6 +3,7 @@ import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { TimecodeConverter } from '../host/TimecodeConverter';
+import { copyToClipboard } from '../utils/clipboard';
 import {
   Flame,
   Sparkles,
@@ -417,7 +418,7 @@ export const ViralShortsView: React.FC = () => {
   };
 
   // Copy Full Script
-  const handleCopyScript = (item: ViralShortItem) => {
+  const handleCopyScript = async (item: ViralShortItem) => {
     let script = item.scriptText || '';
     if (!script) {
       const hookText = typeof item.hook === 'string' ? item.hook : item.hook?.text || '';
@@ -426,7 +427,7 @@ export const ViralShortsView: React.FC = () => {
       script = `🎯 HOOK:\n"${hookText}"\n\n📖 BODY:\n"${bodyText}"\n\n📢 CTA:\n"${ctaText}"`;
     }
 
-    navigator.clipboard.writeText(script);
+    await copyToClipboard(script);
     setCopiedId(item.id);
     setStatusMessage(language === 'bn' ? 'সম্পূর্ণ স্ক্রিপ্ট ক্লিপবোর্ডে কপি হয়েছে!' : 'Full script copied to clipboard!');
     setTimeout(() => {

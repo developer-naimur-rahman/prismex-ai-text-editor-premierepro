@@ -42,6 +42,7 @@ import {
   Globe
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface WordToken {
   id: string;
@@ -513,8 +514,8 @@ export const TranscriptView: React.FC = () => {
   };
 
   // Line-level Action Handlers: Copy, Edit, Typography
-  const handleCopyLine = (paraIdx: number, text: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopyLine = async (paraIdx: number, text: string) => {
+    await copyToClipboard(text);
     setCopiedLineIdx(paraIdx);
     setTimeout(() => setCopiedLineIdx(null), 2000);
   };
@@ -576,7 +577,7 @@ export const TranscriptView: React.FC = () => {
         const filtered = raw.filter((w) => !stopSet.has(w.toLowerCase().replace(/[^a-zA-Z0-9\u0980-\u09FF]/g, '')));
         typoText = (filtered.length > 0 ? filtered.slice(0, 4).join(' ') : raw.slice(0, 3).join(' ')).toUpperCase();
       }
-      navigator.clipboard.writeText(typoText);
+      await copyToClipboard(typoText);
       setTypographyCopiedIdx(paraIdx);
       setTimeout(() => setTypographyCopiedIdx(null), 2500);
     } catch (err) {
@@ -858,9 +859,9 @@ export const TranscriptView: React.FC = () => {
     }
   };
 
-  const handleCopyAeScript = () => {
+  const handleCopyAeScript = async () => {
     if (!aeTypographyData) return;
-    navigator.clipboard.writeText(aeTypographyData.aeSnippet);
+    await copyToClipboard(aeTypographyData.aeSnippet);
     setCreativeStatus('After Effects Script copied to clipboard!');
     setTimeout(() => setCreativeStatus(null), 3000);
   };
@@ -2925,9 +2926,9 @@ export const TranscriptView: React.FC = () => {
 
           {/* 📋 Copy Word */}
           <button
-            onClick={() => {
+            onClick={async () => {
               const cleanWord = popoverWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF]/g, '').trim();
-              navigator.clipboard.writeText(cleanWord);
+              await copyToClipboard(cleanWord);
               setCreativeStatus(`"${cleanWord}" কপি হয়েছে!`);
               setTimeout(() => setCreativeStatus(null), 2500);
             }}
@@ -3006,8 +3007,8 @@ export const TranscriptView: React.FC = () => {
         >
           {/* 📋 Copy */}
           <button
-            onClick={() => {
-              navigator.clipboard.writeText(floatingSelection.text);
+            onClick={async () => {
+              await copyToClipboard(floatingSelection.text);
               setExportStatus(`"${floatingSelection.text.slice(0, 25)}..." কপি হয়েছে!`);
               setTimeout(() => setExportStatus(null), 2500);
             }}
@@ -3392,8 +3393,8 @@ export const TranscriptView: React.FC = () => {
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '6px' }}>
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(youtubeChaptersData.chaptersText);
+                onClick={async () => {
+                  await copyToClipboard(youtubeChaptersData.chaptersText);
                   setCopiedChapters(true);
                   setTimeout(() => setCopiedChapters(false), 2500);
                 }}

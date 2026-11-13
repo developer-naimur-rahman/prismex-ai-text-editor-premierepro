@@ -155,6 +155,9 @@ class ApplyReviewRequest(BaseModel):
 class ProviderKeyRequest(BaseModel):
     apiKey: str
 
+class ClipboardRequest(BaseModel):
+    text: str
+
 # ----------------- REST Endpoints -----------------
 
 @app.get("/health")
@@ -202,6 +205,17 @@ def set_provider_key(provider_id: str, payload: ProviderKeyRequest):
 def delete_provider_key(provider_id: str):
     KeychainVault.delete_api_key(provider_id)
     return {"providerId": provider_id, "status": "DELETED"}
+
+@app.post("/api/v1/system/clipboard")
+def set_system_clipboard(req: ClipboardRequest):
+    """Sets system clipboard via macOS pbcopy for 100% reliable CEP extension clipboard copy."""
+    try:
+        import subprocess
+        proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE, text=True)
+        proc.communicate(input=req.text)
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.get("/api/v1/profiles")
 def get_profiles():
@@ -431,8 +445,45 @@ def ai_analyze_transcript(req: TranscriptAIAnalyzeRequest):
     wpm = round(total_words / duration_min)
     filler_count = sum(1 for w in words if w.get("is_filler"))
 
-    # Check if Google Gemini API key is configured in macOS Keychain
-    gemini_key = KeychainVault.get_api_key("google-gemini")
+    # 1. Check if OpenRouter API key is configured
+    openrouter_key = KeychainVault.get_api_key("openrouter")
+    if openrouter_key:
+        import requests
+        candidate_models = ["google/gemini-2.5-flash", "google/gemini-2.0-flash-001", "deepseek/deepseek-chat", "anthropic/claude-3.5-haiku"]
+        for om in candidate_models:
+            try:
+                resp = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "HTTP-Referer": "https://prismex.ai",
+                        "X-Title": "Prismex AI Editor",
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "model": om,
+                        "messages": [
+                            {"role": "user", "content": f"{req.prompt}\n\nTranscript ({total_words} words, {wpm} WPM):\n{full_text[:12000]}"}
+                        ],
+                        "temperature": 0.3
+                    },
+                    timeout=25
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    text_out = data["choices"][0]["message"]["content"]
+                    return {
+                        "summary": text_out,
+                        "engine": f"OpenRouter ({om})",
+                        "wpm": wpm,
+                        "totalWords": total_words,
+                        "fillerCount": filler_count
+                    }
+            except Exception as e:
+                print(f"[AI Analyze] OpenRouter model {om} failed: {e}")
+
+    # 2. Check if Google Gemini API key is configured in macOS Keychain
+    gemini_key = KeychainVault.get_api_key("google-gemini") or KeychainVault.get_api_key("gemini-cloud")
     if gemini_key:
         import requests
         candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash"]

@@ -14,10 +14,59 @@ from ..security.keychain_vault import KeychainVault
 class CreativeAI:
     @staticmethod
     def _call_gemini_json(prompt: str) -> Optional[Any]:
-        api_key = KeychainVault.get_api_key("google-gemini")
+        import requests
+
+        # 1. Try OpenRouter API if configured
+        openrouter_key = KeychainVault.get_api_key("openrouter")
+        if openrouter_key:
+            openrouter_models = [
+                "google/gemini-2.5-flash",
+                "google/gemini-2.0-flash-001",
+                "deepseek/deepseek-chat",
+                "meta-llama/llama-3.3-70b-instruct",
+                "anthropic/claude-3.5-haiku"
+            ]
+            for om in openrouter_models:
+                try:
+                    resp = requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {openrouter_key}",
+                            "HTTP-Referer": "https://prismex.ai",
+                            "X-Title": "Prismex AI Editor",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": om,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": "You are Prismex AI video editing assistant. You must respond strictly with valid JSON only. Do not include markdown codeblocks or text outside the JSON."
+                                },
+                                {
+                                    "role": "user",
+                                    "content": prompt
+                                }
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.2
+                        },
+                        timeout=25
+                    )
+                    if resp.status_code == 200:
+                        content = resp.json()["choices"][0]["message"]["content"]
+                        cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
+                        cleaned = re.sub(r"\s*```$", "", cleaned)
+                        return json.loads(cleaned)
+                    else:
+                        print(f"[CreativeAI] OpenRouter model {om} returned status {resp.status_code}")
+                except Exception as e:
+                    print(f"[CreativeAI] OpenRouter model {om} failed: {e}")
+
+        # 2. Try Google Gemini API
+        api_key = KeychainVault.get_api_key("google-gemini") or KeychainVault.get_api_key("gemini-cloud")
         if not api_key:
             return None
-        import requests
         candidate_models = [
             "gemini-flash-lite-latest",
             "gemini-3.5-flash-lite",
