@@ -14,16 +14,27 @@ import { HistoryView } from './views/HistoryView';
 import { SrtEditorView } from './views/SrtEditorView';
 
 export const App: React.FC = () => {
-  const { activeTab, initApp } = usePrismexStore();
+  const { activeTab, language, initApp } = usePrismexStore();
 
   useEffect(() => {
     initApp();
   }, [initApp]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', backgroundColor: 'var(--bg-primary)' }}>
+    <div
+      data-lang={language}
+      className={language === 'bn' ? 'lang-bn' : 'lang-en'}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        width: '100vw',
+        backgroundColor: 'var(--bg-primary)',
+        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'var(--font-family-en)'
+      }}
+    >
       <NavigationHeader />
-      <main style={{ flex: 1, overflow: 'hidden' }}>
+      <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {activeTab === 'transcript' && <TranscriptView />}
         {activeTab === 'magic-cut' && <MagicRoughCutView />}
         {activeTab === 'silence' && <SilenceView />}

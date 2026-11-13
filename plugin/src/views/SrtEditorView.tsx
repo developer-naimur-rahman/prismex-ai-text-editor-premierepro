@@ -291,19 +291,19 @@ export const SrtEditorView: React.FC = () => {
   }, [cues, searchQuery]);
 
   return (
-    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden' }}>
+    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden', minHeight: 0 }}>
       {/* Header & Status */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Subtitles size={14} color="#60a5fa" />
-            <h2 style={{ fontSize: '12.5px', fontWeight: 600 }}>
+            <Subtitles size={15} color="#60a5fa" />
+            <h2 style={{ fontSize: '13px', fontWeight: 600 }}>
               {language === 'bn' ? 'স্মার্ট SRT ও সাবটাইটেল এডিটর' : 'Smart SRT & Caption Editor'}
             </h2>
             <span
               style={{
-                fontSize: '9px',
-                padding: '1px 5px',
+                fontSize: '9.5px',
+                padding: '2px 6px',
                 borderRadius: '3px',
                 backgroundColor: 'rgba(52, 211, 153, 0.15)',
                 color: '#34d399',
@@ -312,72 +312,83 @@ export const SrtEditorView: React.FC = () => {
                 gap: '3px'
               }}
             >
-              <CheckCircle2 size={9} /> 100% 0-Frame Drift
+              <CheckCircle2 size={10} /> {language === 'bn' ? '১০০% জিরো-ফ্রেম সিঙ্ক' : '100% 0-Frame Drift'}
             </span>
           </div>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-            {cues.length} cues • {fps} fps {engineUsed ? `• ${engineUsed}` : ''}
+          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+            {language === 'bn' ? `${cues.length} টি কিউ • ${fps} fps` : `${cues.length} cues • ${fps} fps`} {engineUsed ? `• ${engineUsed}` : ''}
           </span>
         </div>
 
         {/* Status Alert */}
         {statusMessage && (
-          <span style={{ fontSize: '10px', color: '#60a5fa', fontWeight: 600, backgroundColor: 'rgba(59, 130, 246, 0.15)', padding: '2px 8px', borderRadius: '4px' }}>
+          <span style={{ fontSize: '10px', color: '#60a5fa', fontWeight: 600, backgroundColor: 'rgba(59, 130, 246, 0.15)', padding: '3px 8px', borderRadius: '4px' }}>
             {statusMessage}
           </span>
         )}
       </div>
 
       {/* Preset Pill Bar & Sliders Toggle */}
-      <div className="card" style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div className="card" style={{ padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: '6px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>Pacing Presets:</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              {language === 'bn' ? 'পেসিং প্রিসেট:' : 'Pacing Presets:'}
+            </span>
             <button
               onClick={() => handleApplyPreset('SHORTS')}
               style={{
-                padding: '2px 8px',
-                fontSize: '9.5px',
+                padding: '3px 8px',
+                fontSize: '10px',
                 borderRadius: '4px',
-                backgroundColor: srtPreset === 'SHORTS' ? '#3b82f6' : 'var(--bg-tertiary)',
-                color: srtPreset === 'SHORTS' ? '#fff' : 'var(--text-secondary)'
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: srtPreset === 'SHORTS' ? '#2563eb' : 'var(--bg-tertiary)',
+                color: srtPreset === 'SHORTS' ? '#fff' : 'var(--text-secondary)',
+                fontWeight: srtPreset === 'SHORTS' ? 600 : 400
               }}
             >
-              Shorts/TikTok (2-3 words)
+              {language === 'bn' ? 'শর্টস/রিলস (২-৩ শব্দ)' : 'Shorts/TikTok (2-3 words)'}
             </button>
             <button
               onClick={() => handleApplyPreset('YOUTUBE')}
               style={{
-                padding: '2px 8px',
-                fontSize: '9.5px',
+                padding: '3px 8px',
+                fontSize: '10px',
                 borderRadius: '4px',
-                backgroundColor: srtPreset === 'YOUTUBE' ? '#3b82f6' : 'var(--bg-tertiary)',
-                color: srtPreset === 'YOUTUBE' ? '#fff' : 'var(--text-secondary)'
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: srtPreset === 'YOUTUBE' ? '#2563eb' : 'var(--bg-tertiary)',
+                color: srtPreset === 'YOUTUBE' ? '#fff' : 'var(--text-secondary)',
+                fontWeight: srtPreset === 'YOUTUBE' ? 600 : 400
               }}
             >
-              YouTube (5-7 words)
+              {language === 'bn' ? 'ইউটিউব (৫-৭ শব্দ)' : 'YouTube (5-7 words)'}
             </button>
             <button
               onClick={() => handleApplyPreset('PODCAST')}
               style={{
-                padding: '2px 8px',
-                fontSize: '9.5px',
+                padding: '3px 8px',
+                fontSize: '10px',
                 borderRadius: '4px',
-                backgroundColor: srtPreset === 'PODCAST' ? '#3b82f6' : 'var(--bg-tertiary)',
-                color: srtPreset === 'PODCAST' ? '#fff' : 'var(--text-secondary)'
+                border: 'none',
+                cursor: 'pointer',
+                backgroundColor: srtPreset === 'PODCAST' ? '#2563eb' : 'var(--bg-tertiary)',
+                color: srtPreset === 'PODCAST' ? '#fff' : 'var(--text-secondary)',
+                fontWeight: srtPreset === 'PODCAST' ? 600 : 400
               }}
             >
-              Podcast (8-12 words)
+              {language === 'bn' ? 'পডকাস্ট (৮-১২ শব্দ)' : 'Podcast (8-12 words)'}
             </button>
           </div>
 
           <button
             onClick={() => setShowSliders(!showSliders)}
             className="btn-secondary"
-            style={{ padding: '2px 7px', fontSize: '9.5px' }}
+            style={{ padding: '2px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
           >
-            <span>{showSliders ? 'Hide Sliders' : 'Fine Tune'}</span>
-            {showSliders ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+            <span>{language === 'bn' ? (showSliders ? 'স্লাইডার লুকান' : 'সূক্ষ্ম টিউন') : (showSliders ? 'Hide Sliders' : 'Fine Tune')}</span>
+            {showSliders ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
           </button>
         </div>
 
@@ -385,7 +396,9 @@ export const SrtEditorView: React.FC = () => {
         {showSliders && (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '6px', paddingTop: '6px', borderTop: '1px solid var(--border-subtle)' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <label style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Target Words ({targetWords}):</label>
+              <label style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? `টার্গেট শব্দ (${targetWords}):` : `Target Words (${targetWords}):`}
+              </label>
               <input
                 type="range"
                 min={1}
@@ -398,7 +411,9 @@ export const SrtEditorView: React.FC = () => {
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <label style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Target Chars ({targetChars}):</label>
+              <label style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? `টার্গেট অক্ষর (${targetChars}):` : `Target Chars (${targetChars}):`}
+              </label>
               <input
                 type="range"
                 min={8}
@@ -411,7 +426,9 @@ export const SrtEditorView: React.FC = () => {
               />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <label style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>Max Width ({maxChars}c):</label>
+              <label style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? `সর্বোচ্চ দৈর্ঘ্য (${maxChars}c):` : `Max Width (${maxChars}c):`}
+              </label>
               <input
                 type="range"
                 min={12}
@@ -431,7 +448,7 @@ export const SrtEditorView: React.FC = () => {
                 onChange={(e) => setFlexibleWords(e.target.checked)}
               />
               <label htmlFor="flexCheckSrt" style={{ fontSize: '9.5px', color: 'var(--text-primary)', cursor: 'pointer' }}>
-                Flexible Meaning Fit
+                {language === 'bn' ? 'অর্থপূর্ণ ফ্লেক্সিবল ফিট' : 'Flexible Meaning Fit'}
               </label>
             </div>
             <button
@@ -440,14 +457,14 @@ export const SrtEditorView: React.FC = () => {
               className="btn-primary"
               style={{ padding: '3px 8px', fontSize: '10px', height: '24px', alignSelf: 'flex-end' }}
             >
-              <Sparkles size={11} /> Re-Segment
+              <Sparkles size={11} /> {language === 'bn' ? 'পুনরায় তৈরি' : 'Re-Segment'}
             </button>
           </div>
         )}
       </div>
 
       {/* Master 1-Click Action Bar (Save All 3 + Premiere Captions) */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', alignItems: 'center' }}>
           {/* Master 1-Click Save All 3 */}
           <button
@@ -455,10 +472,14 @@ export const SrtEditorView: React.FC = () => {
             className="btn-primary"
             title="Auto-saves all 3 files (.SRT, .TXT, .JSON) directly into the Premiere Pro project directory"
             style={{
-              padding: '4px 10px',
-              fontSize: '10.5px',
+              padding: '5px 12px',
+              fontSize: '11px',
               fontWeight: 600,
               backgroundColor: '#2563eb',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '4px'
@@ -474,13 +495,14 @@ export const SrtEditorView: React.FC = () => {
             className="btn-secondary"
             title="Create Caption Track in Premiere Pro Timeline and populate Text Panel Captions"
             style={{
-              padding: '4px 10px',
-              fontSize: '10.5px',
+              padding: '5px 12px',
+              fontSize: '11px',
               color: '#34d399',
               borderColor: 'rgba(16, 185, 129, 0.4)',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px'
+              gap: '4px',
+              cursor: 'pointer'
             }}
           >
             <Subtitles size={12} />
@@ -490,37 +512,41 @@ export const SrtEditorView: React.FC = () => {
 
         {/* Individual File Exports */}
         <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
-          <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>Export:</span>
-          <button onClick={() => handleExportSingleFile('SRT')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '9.5px' }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            {language === 'bn' ? 'এক্সপোর্ট:' : 'Export:'}
+          </span>
+          <button onClick={() => handleExportSingleFile('SRT')} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
             .SRT
           </button>
-          <button onClick={() => handleExportSingleFile('TXT')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '9.5px' }}>
+          <button onClick={() => handleExportSingleFile('TXT')} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
             .TXT
           </button>
-          <button onClick={() => handleExportSingleFile('JSON')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '9.5px' }}>
+          <button onClick={() => handleExportSingleFile('JSON')} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
             .JSON
           </button>
         </div>
       </div>
 
       {/* Quick Punctuation Tools & View Mode Toggle */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap', flexShrink: 0 }}>
         <div style={{ display: 'flex', gap: '3px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Punctuation:</span>
-          <button onClick={() => handlePunctuationTransform('COMMAS')} className="btn-secondary" style={{ padding: '1px 5px', fontSize: '9px' }}>
-            Strip ,
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+            {language === 'bn' ? 'যতিচিহ্ন:' : 'Punctuation:'}
+          </span>
+          <button onClick={() => handlePunctuationTransform('COMMAS')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'কমা মুছুন' : 'Strip ,'}
           </button>
-          <button onClick={() => handlePunctuationTransform('PERIODS')} className="btn-secondary" style={{ padding: '1px 5px', fontSize: '9px' }}>
-            Strip .
+          <button onClick={() => handlePunctuationTransform('PERIODS')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'দাঁড়ি মুছুন' : 'Strip .'}
           </button>
-          <button onClick={() => handlePunctuationTransform('ALL')} className="btn-secondary" style={{ padding: '1px 5px', fontSize: '9px', color: '#f87171' }}>
-            Strip All
+          <button onClick={() => handlePunctuationTransform('ALL')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px', color: '#f87171' }}>
+            {language === 'bn' ? 'সব চিহ্ন মুছুন' : 'Strip All'}
           </button>
-          <button onClick={() => handlePunctuationTransform('UPPER')} className="btn-secondary" style={{ padding: '1px 5px', fontSize: '9px' }}>
-            ALL CAPS
+          <button onClick={() => handlePunctuationTransform('UPPER')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'বড় হাতের' : 'ALL CAPS'}
           </button>
-          <button onClick={() => handlePunctuationTransform('TITLE')} className="btn-secondary" style={{ padding: '1px 5px', fontSize: '9px' }}>
-            Title Case
+          <button onClick={() => handlePunctuationTransform('TITLE')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'ক্যাপিটাল' : 'Title Case'}
           </button>
         </div>
 
@@ -528,49 +554,53 @@ export const SrtEditorView: React.FC = () => {
           <button
             onClick={() => setViewMode('CARDS')}
             style={{
-              padding: '2px 6px',
-              fontSize: '9.5px',
+              padding: '3px 8px',
+              fontSize: '10px',
               borderRadius: '3px',
-              backgroundColor: viewMode === 'CARDS' ? 'var(--bg-tertiary)' : 'transparent',
+              cursor: 'pointer',
+              backgroundColor: viewMode === 'CARDS' ? '#2563eb' : 'var(--bg-tertiary)',
               color: viewMode === 'CARDS' ? '#fff' : 'var(--text-muted)',
-              border: '1px solid var(--border-subtle)'
+              border: '1px solid var(--border-subtle)',
+              fontWeight: viewMode === 'CARDS' ? 600 : 400
             }}
           >
-            <LayoutList size={10} style={{ marginRight: '2px' }} />
-            Cards
+            <LayoutList size={11} style={{ marginRight: '3px', verticalAlign: 'middle' }} />
+            {language === 'bn' ? 'কার্ডস' : 'Cards'}
           </button>
           <button
             onClick={() => setViewMode('RAW')}
             style={{
-              padding: '2px 6px',
-              fontSize: '9.5px',
+              padding: '3px 8px',
+              fontSize: '10px',
               borderRadius: '3px',
-              backgroundColor: viewMode === 'RAW' ? 'var(--bg-tertiary)' : 'transparent',
+              cursor: 'pointer',
+              backgroundColor: viewMode === 'RAW' ? '#2563eb' : 'var(--bg-tertiary)',
               color: viewMode === 'RAW' ? '#fff' : 'var(--text-muted)',
-              border: '1px solid var(--border-subtle)'
+              border: '1px solid var(--border-subtle)',
+              fontWeight: viewMode === 'RAW' ? 600 : 400
             }}
           >
-            <FileCode size={10} style={{ marginRight: '2px' }} />
-            Raw SRT
+            <FileCode size={11} style={{ marginRight: '3px', verticalAlign: 'middle' }} />
+            {language === 'bn' ? 'র\' SRT' : 'Raw SRT'}
           </button>
         </div>
       </div>
 
       {/* Main Content Area */}
       {viewMode === 'RAW' ? (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9.5px', color: 'var(--text-muted)' }}>
-            <span>Raw SRT Document ({cues.length} cues)</span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden', minHeight: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)', flexShrink: 0 }}>
+            <span>{language === 'bn' ? `র' SRT টেক্সট (${cues.length} টি কিউ)` : `Raw SRT Document (${cues.length} cues)`}</span>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(rawSrtText);
-                setStatusMessage('Copied SRT to clipboard!');
+                setStatusMessage(language === 'bn' ? 'ক্লিপবোর্ডে কপি হয়েছে!' : 'Copied SRT to clipboard!');
                 setTimeout(() => setStatusMessage(null), 2500);
               }}
               className="btn-secondary"
-              style={{ padding: '1px 6px', fontSize: '9px' }}
+              style={{ padding: '2px 8px', fontSize: '10px' }}
             >
-              <Copy size={9} style={{ marginRight: '2px' }} /> Copy All
+              <Copy size={10} style={{ marginRight: '3px' }} /> {language === 'bn' ? 'সব কপি করুন' : 'Copy All'}
             </button>
           </div>
           <textarea
@@ -583,41 +613,50 @@ export const SrtEditorView: React.FC = () => {
               borderRadius: '4px',
               color: '#93c5fd',
               fontFamily: 'monospace',
-              fontSize: '10.5px',
+              fontSize: '11px',
+              lineHeight: '1.5',
               padding: '8px',
               resize: 'none'
             }}
           />
         </div>
       ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' }}>
-          {/* Cue Search Bar */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              backgroundColor: 'var(--bg-tertiary)',
-              padding: '4px 8px',
-              borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--border-subtle)'
-            }}
-          >
-            <Search size={11} color="var(--text-muted)" />
-            <input
-              type="text"
-              placeholder={language === 'bn' ? 'কিউ বা সাবটাইটেল খুঁজুন...' : 'Search cues...'}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px', overflow: 'hidden', minHeight: 0 }}>
+          {/* Cue Search Bar & Helpful Hint */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flexShrink: 0 }}>
+            <div
               style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-primary)',
-                fontSize: '10px',
-                outline: 'none',
-                width: '100%'
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                backgroundColor: 'var(--bg-tertiary)',
+                padding: '5px 10px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border-subtle)'
               }}
-            />
+            >
+              <Search size={12} color="var(--text-muted)" />
+              <input
+                type="text"
+                placeholder={language === 'bn' ? 'কিউ বা সাবটাইটেল টেক্সট খুঁজুন...' : 'Search cues or subtitle text...'}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  color: 'var(--text-primary)',
+                  fontSize: '11px',
+                  outline: 'none',
+                  width: '100%',
+                  fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'inherit'
+                }}
+              />
+            </div>
+            <div style={{ fontSize: '9.5px', color: '#93c5fd', paddingLeft: '2px' }}>
+              {language === 'bn'
+                ? '💡 যে কোনো লাইনে কার্সর রেখে কীবোর্ডের Enter চাপলে অটোমেটিক দুটি টাইমকোড কিউ-তে ভাগ হয়ে যাবে।'
+                : '💡 Pro-tip: Place cursor inside text and press Enter to split into two timed cues.'}
+            </div>
           </div>
 
           {/* Cue Cards Scrollable Container */}
@@ -625,17 +664,18 @@ export const SrtEditorView: React.FC = () => {
             style={{
               flex: 1,
               overflowY: 'auto',
+              minHeight: 0,
               display: 'flex',
               flexDirection: 'column',
-              gap: '4px',
-              paddingRight: '2px'
+              gap: '6px',
+              paddingRight: '4px'
             }}
           >
             {filteredCues.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '30px', color: 'var(--text-muted)', fontSize: '11px' }}>
                 {transcriptWords.length === 0
-                  ? 'No transcript available. Please transcribe sequence in Text Panel first.'
-                  : 'No cues matching your search.'}
+                  ? (language === 'bn' ? 'কোনো ট্রান্সক্রিপ্ট পাওয়া যায়নি। অনুগ্রহ করে প্রথমে টেক্সট প্যানেল থেকে সিকোয়েন্স ট্রান্সক্রাইব করুন।' : 'No transcript available. Please transcribe sequence in Text Panel first.')
+                  : (language === 'bn' ? 'অনুসন্ধানের সাথে কোনো কিউ মেলেনি।' : 'No cues matching your search.')}
               </div>
             ) : (
               filteredCues.map((cue, idx) => (
@@ -643,42 +683,45 @@ export const SrtEditorView: React.FC = () => {
                   key={`cue_${cue.index}`}
                   className="card"
                   style={{
-                    padding: '6px 8px',
+                    flexShrink: 0,
+                    minHeight: 'fit-content',
+                    padding: '8px 10px',
                     display: 'flex',
                     flexDirection: 'column',
-                    gap: '4px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.02)',
-                    borderColor: 'rgba(255, 255, 255, 0.06)'
+                    gap: '6px',
+                    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                    borderColor: 'rgba(255, 255, 255, 0.09)',
+                    borderRadius: '5px'
                   }}
                 >
                   {/* Card Header */}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '9.5px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span
                         onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
-                        style={{ color: '#60a5fa', fontWeight: 700, cursor: 'pointer' }}
+                        style={{ color: '#60a5fa', fontWeight: 700, cursor: 'pointer', fontSize: '11px' }}
                         title="Click to seek playhead to cue start"
                       >
                         #{cue.index}
                       </span>
-                      <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace' }}>
+                      <span style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 600, fontSize: '10px' }}>
                         {cue.startSrt} → {cue.endSrt}
                       </span>
-                      <span style={{ color: '#a78bfa', fontFamily: 'monospace', fontSize: '9px' }}>
+                      <span style={{ color: '#a78bfa', fontFamily: 'monospace', fontSize: '9px', backgroundColor: 'rgba(167, 139, 250, 0.1)', padding: '1px 5px', borderRadius: '3px' }}>
                         F:{cue.startFrame}-{cue.endFrame}
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span style={{ color: 'var(--text-muted)', fontSize: '9px' }}>
-                        {cue.wordCount}w • {cue.charCount}c
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '9.5px' }}>
+                        {language === 'bn' ? `${cue.wordCount} শব্দ • ${cue.charCount} অক্ষর` : `${cue.wordCount}w • ${cue.charCount}c`}
                       </span>
                       {cue.reason && (
                         <span
                           style={{
-                            fontSize: '8.5px',
-                            padding: '1px 4px',
-                            borderRadius: '2px',
+                            fontSize: '9px',
+                            padding: '1px 6px',
+                            borderRadius: '3px',
                             backgroundColor: 'rgba(59, 130, 246, 0.15)',
                             color: '#93c5fd'
                           }}
@@ -690,21 +733,25 @@ export const SrtEditorView: React.FC = () => {
                   </div>
 
                   {/* Card Input & Action Bar */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <input
                       type="text"
                       value={cue.text}
                       onChange={(e) => handleCueTextChange(idx, e.target.value)}
                       onKeyDown={(e) => handleCueKeyDown(idx, e)}
-                      title="Edit text. Press Enter in text box to split into two lines!"
+                      title={language === 'bn' ? 'টেক্সট এডিট করুন। নতুন লাইন/কিউ তৈরি করতে এন্টার চাপুন।' : 'Edit text. Press Enter to split into two lines!'}
                       style={{
                         flex: 1,
                         backgroundColor: 'var(--bg-tertiary)',
                         border: '1px solid var(--border-subtle)',
-                        borderRadius: '3px',
-                        color: 'var(--text-primary)',
-                        fontSize: '11px',
-                        padding: '3px 6px'
+                        borderRadius: '4px',
+                        color: '#ffffff',
+                        fontSize: '12px',
+                        fontWeight: 500,
+                        lineHeight: '1.4',
+                        padding: '6px 8px',
+                        minHeight: '32px',
+                        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'inherit'
                       }}
                     />
 
@@ -712,10 +759,11 @@ export const SrtEditorView: React.FC = () => {
                     <button
                       onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
                       className="btn-secondary"
-                      style={{ padding: '2px 5px', fontSize: '9px' }}
-                      title="Seek playhead in Premiere Pro"
+                      style={{ padding: '5px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
+                      title={language === 'bn' ? 'টাইমলাইন প্লেহেড এই কিউ-তে নিন' : 'Seek playhead in Premiere Pro'}
                     >
-                      <Play size={9} />
+                      <Play size={10} />
+                      <span>{language === 'bn' ? 'প্লে' : 'Seek'}</span>
                     </button>
 
                     {/* Merge Down */}
@@ -723,10 +771,11 @@ export const SrtEditorView: React.FC = () => {
                       <button
                         onClick={() => handleMergeNextCue(idx)}
                         className="btn-secondary"
-                        style={{ padding: '2px 5px', fontSize: '9px' }}
-                        title="Merge with next line"
+                        style={{ padding: '5px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
+                        title={language === 'bn' ? 'পরের লাইনের সাথে জোড়া লাগান' : 'Merge with next line'}
                       >
-                        Merge ↓
+                        <Split size={10} style={{ transform: 'rotate(180deg)' }} />
+                        <span>{language === 'bn' ? 'জোড়া' : 'Merge'}</span>
                       </button>
                     )}
 
@@ -734,16 +783,19 @@ export const SrtEditorView: React.FC = () => {
                     <button
                       onClick={() => handleDeleteCue(idx)}
                       style={{
-                        padding: '2px 5px',
-                        fontSize: '9px',
-                        backgroundColor: 'transparent',
+                        padding: '5px 7px',
+                        fontSize: '10px',
+                        backgroundColor: 'rgba(239, 68, 68, 0.15)',
                         color: '#f87171',
-                        border: 'none',
-                        cursor: 'pointer'
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center'
                       }}
-                      title="Delete cue"
+                      title={language === 'bn' ? 'এই কিউ ডিলিট করুন' : 'Delete cue'}
                     >
-                      <Trash2 size={10} />
+                      <Trash2 size={11} />
                     </button>
                   </div>
                 </div>
