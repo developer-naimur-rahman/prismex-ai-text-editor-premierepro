@@ -12,24 +12,46 @@ import {
   FolderPlus,
   Send,
   RefreshCw,
-  Video,
-  Layers,
-  ArrowRight,
-  BookmarkPlus,
-  MessageSquare
+  Copy,
+  BookOpen,
+  HelpCircle,
+  Megaphone,
+  Check,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
+
+interface ShortBlock {
+  text: string;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds?: number;
+}
+
+interface ShortSegment {
+  role: 'HOOK' | 'BODY' | 'CTA' | string;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds?: number;
+  text?: string;
+}
 
 interface ViralShortItem {
   id: string;
   title: string;
-  hook: string;
+  educationalLesson?: string;
+  viralityScore: number;
+  reason: string;
+  hook: ShortBlock | string;
+  body?: ShortBlock;
+  cta?: ShortBlock;
+  segments?: ShortSegment[];
   startSeconds: number;
   endSeconds: number;
   durationSeconds: number;
-  startFrame: number;
-  endFrame: number;
-  viralityScore: number;
-  reason: string;
+  totalDurationSeconds?: number;
+  startFrame?: number;
+  endFrame?: number;
   brollSuggestions?: string[];
   loopIdea?: string;
   aspectRatio?: string;
@@ -58,6 +80,7 @@ export const ViralShortsView: React.FC = () => {
   const [refineInstructions, setRefineInstructions] = useState<{ [key: string]: string }>({});
   const [createdSequences, setCreatedSequences] = useState<{ [key: string]: string }>({});
   const [isBatchCreating, setIsBatchCreating] = useState<boolean>(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // Auto-generate shorts on first load if transcript exists
   useEffect(() => {
@@ -72,7 +95,7 @@ export const ViralShortsView: React.FC = () => {
       return;
     }
     setIsGenerating(true);
-    setStatusMessage(language === 'bn' ? 'AI ভাইরাল শর্টস ও হুক বিশ্লেষণ করছে...' : 'AI Analyzing viral hooks & moments...');
+    setStatusMessage(language === 'bn' ? 'AI ভাইরাল হুক, বডি ও শিক্ষণীয় সিটিএ বিশ্লেষণ করছে...' : 'AI Analyzing viral hooks, body & educational CTAs...');
     try {
       const res = await client.generateViralShorts(
         transcriptWords,
@@ -85,8 +108,8 @@ export const ViralShortsView: React.FC = () => {
         setShorts(res);
         setStatusMessage(
           language === 'bn'
-            ? `${res.length} টি ভাইরাল শর্টস ক্যান্ডিডেট তৈরি হয়েছে!`
-            : `Generated ${res.length} viral short candidates!`
+            ? `${res.length} টি সুসংগঠিত ভাইরাল শর্টস (হুক + বডি + সিটিএ) তৈরি হয়েছে!`
+            : `Generated ${res.length} structured viral shorts (Hook + Body + CTA)!`
         );
       } else {
         setStatusMessage(language === 'bn' ? 'কোনো শর্ট তৈরি করা সম্ভব হয়নি।' : 'Could not generate shorts.');
@@ -119,21 +142,48 @@ export const ViralShortsView: React.FC = () => {
     }
   };
 
+  // Helper to extract segments from a short item (Hook, Body, CTA)
+  const extractShortSegments = (item: ViralShortItem): Array<{ role: string; startSeconds: number; endSeconds: number }> => {
+    if (item.segments && item.segments.length > 0) {
+      return item.segments.map(s => ({
+        role: s.role,
+        startSeconds: Number(s.startSeconds) || 0,
+        endSeconds: Number(s.endSeconds) || 0
+      }));
+    }
+
+    const segs: Array<{ role: string; startSeconds: number; endSeconds: number }> = [];
+    if (typeof item.hook === 'object' && item.hook.startSeconds !== undefined) {
+      segs.push({ role: 'HOOK', startSeconds: item.hook.startSeconds, endSeconds: item.hook.endSeconds });
+    }
+    if (item.body && item.body.startSeconds !== undefined) {
+      segs.push({ role: 'BODY', startSeconds: item.body.startSeconds, endSeconds: item.body.endSeconds });
+    }
+    if (item.cta && item.cta.startSeconds !== undefined) {
+      segs.push({ role: 'CTA', startSeconds: item.cta.startSeconds, endSeconds: item.cta.endSeconds });
+    }
+
+    if (segs.length === 0) {
+      segs.push({ role: 'SHORT', startSeconds: item.startSeconds, endSeconds: item.endSeconds });
+    }
+    return segs;
+  };
+
   const handleCreateSingleSequence = async (item: ViralShortItem) => {
     setStatusMessage(language === 'bn' ? `৯:১৬ সিকোয়েন্স তৈরি হচ্ছে (${item.title})...` : `Building 9:16 Sequence (${item.title})...`);
     try {
-      const res = await hostBridge.createVerticalShortSequence(
+      const segments = extractShortSegments(item);
+      const res = await hostBridge.createMultiSegmentVerticalShortSequence(
         item.title,
-        item.startSeconds,
-        item.endSeconds,
+        segments,
         item.markers
       );
       if (res.success && res.sequenceName) {
         setCreatedSequences(prev => ({ ...prev, [item.id]: res.sequenceName! }));
         setStatusMessage(
           language === 'bn'
-            ? `নতুন ৯:১৬ সিকোয়েন্স তৈরি হয়েছে: ${res.sequenceName} (Bin: ${res.bin})`
-            : `Created 9:16 Sequence: ${res.sequenceName} (Bin: ${res.bin})`
+            ? `নতুন ৯:১৬ সিকোয়েন্স তৈরি হয়েছে: ${res.sequenceName} (${res.segmentCount || segments.length}টি সেগমেন্ট স্প্লাইসড)`
+            : `Created 9:16 Sequence: ${res.sequenceName} (${res.segmentCount || segments.length} segments spliced)`
         );
       } else {
         setStatusMessage(res.error || 'Failed to create sequence');
@@ -150,10 +200,10 @@ export const ViralShortsView: React.FC = () => {
     setStatusMessage(language === 'bn' ? 'সবগুলো ৯:১৬ সিকোয়েন্স তৈরি হচ্ছে...' : 'Batch creating 9:16 sequences in Premiere Pro...');
     try {
       for (const item of shorts) {
-        await hostBridge.createVerticalShortSequence(
+        const segments = extractShortSegments(item);
+        await hostBridge.createMultiSegmentVerticalShortSequence(
           item.title,
-          item.startSeconds,
-          item.endSeconds,
+          segments,
           item.markers
         );
       }
@@ -166,6 +216,40 @@ export const ViralShortsView: React.FC = () => {
       setIsBatchCreating(false);
       setTimeout(() => setStatusMessage(null), 6000);
     }
+  };
+
+  const handleCopyScript = (item: ViralShortItem) => {
+    let script = item.scriptText || '';
+    if (!script) {
+      const hookText = typeof item.hook === 'string' ? item.hook : item.hook?.text || '';
+      const bodyText = item.body?.text || '';
+      const ctaText = item.cta?.text || '';
+      script = `🎯 HOOK (০-৫ সেকেন্ড):\n"${hookText}"\n\n📖 BODY / STORY:\n"${bodyText}"\n\n📢 CTA / TAKEAWAY:\n"${ctaText}"`;
+    }
+
+    navigator.clipboard.writeText(script);
+    setCopiedId(item.id);
+    setStatusMessage(language === 'bn' ? 'সম্পূর্ণ স্ক্রিপ্ট ক্লিপবোর্ডে কপি হয়েছে!' : 'Full script copied to clipboard!');
+    setTimeout(() => {
+      setCopiedId(null);
+      setStatusMessage(null);
+    }, 3000);
+  };
+
+  // Update a specific block's text or timecodes
+  const handleUpdateBlock = (shortId: string, role: 'hook' | 'body' | 'cta', field: 'text' | 'startSeconds' | 'endSeconds', value: any) => {
+    setShorts(prev => prev.map(s => {
+      if (s.id !== shortId) return s;
+      const currentBlock = (s as any)[role] || { text: '', startSeconds: 0, endSeconds: 0 };
+      const updatedBlock = typeof currentBlock === 'string'
+        ? { text: field === 'text' ? value : currentBlock, startSeconds: s.startSeconds, endSeconds: s.endSeconds }
+        : { ...currentBlock, [field]: value };
+
+      return {
+        ...s,
+        [role]: updatedBlock
+      };
+    }));
   };
 
   return (
@@ -191,13 +275,13 @@ export const ViralShortsView: React.FC = () => {
                 fontWeight: 600
               }}
             >
-              1080x1920 Vertical
+              ১০৮০x১৯২০ Vertical
             </span>
           </div>
           <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
             {language === 'bn'
-              ? 'লং ভিডিও থেকে স্বয়ংক্রিয়ভাবে কাট ও এডিটিংসহ নতুন ৯:১৬ সিকোয়েন্স তৈরি করুন'
-              : 'Auto-extract viral 30-60s vertical sequences with all original edits intact'}
+              ? '৩-পার্ট ভাইরাল ব্লুপ্রিন্ট (🎯 হুক + 📖 শিক্ষণীয় বডি + 📢 সিটিএ) এবং ভিন্ন ভিন্ন অংশ থেকে অটো-স্প্লাইসিং'
+              : '3-Part Viral Blueprint (🎯 Hook + 📖 Educational Body + 📢 CTA) with non-linear multi-segment splicing'}
           </span>
         </div>
 
@@ -267,8 +351,8 @@ export const ViralShortsView: React.FC = () => {
             type="text"
             placeholder={
               language === 'bn'
-                ? 'এআই-কে নির্দিষ্ট নির্দেশনা দিন (যেমন: ৪৫ সেকেন্ডের মধ্যে ক্যালিফোর্নিয়া ছাড়ার গল্পটা দাও)...'
-                : 'Specific AI instruction (e.g., under 45s, focus on why we left, high energy)...'
+                ? 'এআই-কে নির্দিষ্ট নির্দেশনা দিন (যেমন: শিক্ষণীয় পয়েন্টসহ ১ মিনিটের মধ্যে ক্যালিফোর্নিয়ার খরচ নিয়ে শর্টস দাও)...'
+                : 'Specific AI instruction (e.g., educational lesson under 60s, focus on why we left, high energy)...'
             }
             value={customGoal}
             onChange={(e) => setCustomGoal(e.target.value)}
@@ -328,6 +412,26 @@ export const ViralShortsView: React.FC = () => {
         ) : (
           shorts.map((item, idx) => {
             const isCreated = !!createdSequences[item.id];
+            const isCopied = copiedId === item.id;
+
+            const hookObj: ShortBlock = typeof item.hook === 'string'
+              ? { text: item.hook, startSeconds: item.startSeconds, endSeconds: item.startSeconds + 5 }
+              : item.hook || { text: '', startSeconds: item.startSeconds, endSeconds: item.startSeconds + 5 };
+
+            const bodyObj: ShortBlock = item.body || {
+              text: '',
+              startSeconds: hookObj.endSeconds,
+              endSeconds: item.endSeconds - 5
+            };
+
+            const ctaObj: ShortBlock = item.cta || {
+              text: '',
+              startSeconds: Math.max(hookObj.endSeconds, item.endSeconds - 5),
+              endSeconds: item.endSeconds
+            };
+
+            const totalDur = item.totalDurationSeconds || item.durationSeconds;
+
             return (
               <div
                 key={item.id}
@@ -338,9 +442,9 @@ export const ViralShortsView: React.FC = () => {
                   padding: '10px 12px',
                   display: 'flex',
                   flexDirection: 'column',
-                  gap: '6px',
+                  gap: '8px',
                   backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                  borderColor: isCreated ? 'rgba(52, 211, 153, 0.4)' : 'rgba(249, 115, 22, 0.25)',
+                  borderColor: isCreated ? 'rgba(52, 211, 153, 0.4)' : 'rgba(249, 115, 22, 0.3)',
                   borderRadius: '6px'
                 }}
               >
@@ -369,49 +473,227 @@ export const ViralShortsView: React.FC = () => {
                       🔥 {item.viralityScore}% Virality
                     </span>
                     <span style={{ fontSize: '9.5px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                      [{TimecodeConverter.formatTimecode(item.startSeconds, fps)} → {TimecodeConverter.formatTimecode(item.endSeconds, fps)} • {item.durationSeconds}s]
+                      [মোট সময়: {totalDur}s]
                     </span>
+                    <button
+                      onClick={() => handleCopyScript(item)}
+                      style={{
+                        padding: '2px 8px',
+                        fontSize: '9.5px',
+                        backgroundColor: isCopied ? '#059669' : 'rgba(255,255,255,0.08)',
+                        color: isCopied ? '#fff' : 'var(--text-primary)',
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        borderRadius: '3px',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '3px'
+                      }}
+                      title={language === 'bn' ? 'সম্পূর্ণ স্ক্রিপ্ট কপি করুন' : 'Copy Full Script'}
+                    >
+                      {isCopied ? <Check size={10} /> : <Copy size={10} />}
+                      <span>{isCopied ? (language === 'bn' ? 'কপি হয়েছে' : 'Copied!') : (language === 'bn' ? 'স্ক্রিপ্ট কপি' : 'Copy Script')}</span>
+                    </button>
                   </div>
                 </div>
 
-                {/* Hook Box */}
-                {item.hook && (
+                {/* Educational Lesson Badge */}
+                {item.educationalLesson && (
                   <div
                     style={{
                       padding: '4px 8px',
                       borderRadius: '4px',
-                      backgroundColor: 'rgba(234, 179, 8, 0.1)',
-                      border: '1px solid rgba(234, 179, 8, 0.25)',
+                      backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                      border: '1px solid rgba(59, 130, 246, 0.25)',
                       display: 'flex',
                       alignItems: 'center',
                       gap: '4px',
-                      fontSize: '11px',
-                      color: '#fef08a'
+                      fontSize: '10.5px',
+                      color: '#93c5fd'
                     }}
                   >
-                    <span style={{ fontWeight: 700, color: '#facc15' }}>💡 Hook:</span>
-                    <span style={{ fontStyle: 'italic' }}>"{item.hook}"</span>
+                    <BookOpen size={11} color="#60a5fa" />
+                    <span style={{ fontWeight: 600 }}>{language === 'bn' ? 'শিক্ষণীয় উদ্দেশ্য:' : 'Key Lesson:'}</span>
+                    <span>{item.educationalLesson}</span>
                   </div>
                 )}
 
-                {/* Script Preview */}
-                {item.scriptText && (
+                {/* 3 DISTINCT CORE BLOCKS: 1. HOOK, 2. BODY, 3. CTA */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  {/* Block 1: 🎯 Hook */}
                   <div
                     style={{
-                      fontSize: '11px',
-                      color: 'var(--text-secondary)',
-                      lineHeight: '1.4',
-                      maxHeight: '65px',
-                      overflowY: 'auto',
-                      padding: '4px 6px',
-                      backgroundColor: 'var(--bg-tertiary)',
-                      borderRadius: '4px',
-                      border: '1px solid var(--border-subtle)'
+                      padding: '6px 8px',
+                      borderRadius: '5px',
+                      backgroundColor: 'rgba(234, 179, 8, 0.08)',
+                      border: '1px solid rgba(234, 179, 8, 0.25)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px'
                     }}
                   >
-                    {item.scriptText}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#facc15', fontWeight: 600 }}>
+                        <Flame size={11} />
+                        <span>{language === 'bn' ? '১. হুক (০-৫ সে.):' : '1. Hook (0-5s):'}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '9.5px', color: '#fef08a' }}>
+                          [{TimecodeConverter.formatTimecode(hookObj.startSeconds, fps)} → {TimecodeConverter.formatTimecode(hookObj.endSeconds, fps)}]
+                        </span>
+                        <button
+                          onClick={() => hostBridge.setPlayheadPosition(hookObj.startSeconds)}
+                          style={{
+                            padding: '1px 5px',
+                            fontSize: '9px',
+                            backgroundColor: 'rgba(234, 179, 8, 0.2)',
+                            color: '#facc15',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                          }}
+                          title="Seek playhead to Hook"
+                        >
+                          <Play size={8} style={{ verticalAlign: 'middle', marginRight: '2px' }} />
+                          {language === 'bn' ? 'প্লে' : 'Seek'}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      rows={2}
+                      value={hookObj.text}
+                      onChange={(e) => handleUpdateBlock(item.id, 'hook', 'text', e.target.value)}
+                      placeholder={language === 'bn' ? 'হুক টেক্সট লিখুন...' : 'Hook sentence text...'}
+                      style={{
+                        backgroundColor: 'rgba(0,0,0,0.25)',
+                        border: '1px solid rgba(234, 179, 8, 0.3)',
+                        borderRadius: '3px',
+                        color: '#fef08a',
+                        fontSize: '11px',
+                        padding: '4px 6px',
+                        outline: 'none',
+                        resize: 'vertical',
+                        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'inherit'
+                      }}
+                    />
                   </div>
-                )}
+
+                  {/* Block 2: 📖 Body / Story */}
+                  <div
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '5px',
+                      backgroundColor: 'rgba(52, 211, 153, 0.08)',
+                      border: '1px solid rgba(52, 211, 153, 0.25)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#34d399', fontWeight: 600 }}>
+                        <BookOpen size={11} />
+                        <span>{language === 'bn' ? '২. মূল গল্প / বডি (শিক্ষণীয় বিষয়):' : '2. Body / Story (Educational Value):'}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '9.5px', color: '#a7f3d0' }}>
+                          [{TimecodeConverter.formatTimecode(bodyObj.startSeconds, fps)} → {TimecodeConverter.formatTimecode(bodyObj.endSeconds, fps)}]
+                        </span>
+                        <button
+                          onClick={() => hostBridge.setPlayheadPosition(bodyObj.startSeconds)}
+                          style={{
+                            padding: '1px 5px',
+                            fontSize: '9px',
+                            backgroundColor: 'rgba(52, 211, 153, 0.2)',
+                            color: '#34d399',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                          }}
+                          title="Seek playhead to Body"
+                        >
+                          <Play size={8} style={{ verticalAlign: 'middle', marginRight: '2px' }} />
+                          {language === 'bn' ? 'প্লে' : 'Seek'}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      rows={3}
+                      value={bodyObj.text}
+                      onChange={(e) => handleUpdateBlock(item.id, 'body', 'text', e.target.value)}
+                      placeholder={language === 'bn' ? 'মূল গল্প ও শিক্ষণীয় টেক্সট...' : 'Main story and value content...'}
+                      style={{
+                        backgroundColor: 'rgba(0,0,0,0.25)',
+                        border: '1px solid rgba(52, 211, 153, 0.3)',
+                        borderRadius: '3px',
+                        color: '#ecfdf5',
+                        fontSize: '11px',
+                        padding: '4px 6px',
+                        outline: 'none',
+                        resize: 'vertical',
+                        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'inherit'
+                      }}
+                    />
+                  </div>
+
+                  {/* Block 3: 📢 CTA / Outro */}
+                  <div
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '5px',
+                      backgroundColor: 'rgba(168, 85, 247, 0.08)',
+                      border: '1px solid rgba(168, 85, 247, 0.25)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '4px'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '10px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#c084fc', fontWeight: 600 }}>
+                        <Megaphone size={11} />
+                        <span>{language === 'bn' ? '৩. সিটিএ / টেকঅ্যাওয়ে (সমাপ্তি):' : '3. CTA / Takeaway (Outro):'}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <span style={{ fontFamily: 'monospace', fontSize: '9.5px', color: '#e9d5ff' }}>
+                          [{TimecodeConverter.formatTimecode(ctaObj.startSeconds, fps)} → {TimecodeConverter.formatTimecode(ctaObj.endSeconds, fps)}]
+                        </span>
+                        <button
+                          onClick={() => hostBridge.setPlayheadPosition(ctaObj.startSeconds)}
+                          style={{
+                            padding: '1px 5px',
+                            fontSize: '9px',
+                            backgroundColor: 'rgba(168, 85, 247, 0.2)',
+                            color: '#c084fc',
+                            border: 'none',
+                            borderRadius: '3px',
+                            cursor: 'pointer'
+                          }}
+                          title="Seek playhead to CTA"
+                        >
+                          <Play size={8} style={{ verticalAlign: 'middle', marginRight: '2px' }} />
+                          {language === 'bn' ? 'প্লে' : 'Seek'}
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      rows={2}
+                      value={ctaObj.text}
+                      onChange={(e) => handleUpdateBlock(item.id, 'cta', 'text', e.target.value)}
+                      placeholder={language === 'bn' ? 'কল-টু-অ্যাকশন টেক্সট লিখুন...' : 'Call-to-action text...'}
+                      style={{
+                        backgroundColor: 'rgba(0,0,0,0.25)',
+                        border: '1px solid rgba(168, 85, 247, 0.3)',
+                        borderRadius: '3px',
+                        color: '#fae8ff',
+                        fontSize: '11px',
+                        padding: '4px 6px',
+                        outline: 'none',
+                        resize: 'vertical',
+                        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'inherit'
+                      }}
+                    />
+                  </div>
+                </div>
 
                 {/* B-Roll & Visual Suggestions */}
                 {item.brollSuggestions && item.brollSuggestions.length > 0 && (
@@ -429,7 +711,7 @@ export const ViralShortsView: React.FC = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px' }}>
                   <input
                     type="text"
-                    placeholder={language === 'bn' ? 'এই শর্টটি পরিবর্তন করতে বলুন (যেমন: ৩৫ সেকেন্ড করো)...' : 'Refine this short (e.g., make it 35s, punchier)...'}
+                    placeholder={language === 'bn' ? 'এই শর্টটি পরিবর্তন করতে বলুন (যেমন: হুক আরও আকর্ষণীয় করো, বা বডি ৪৫ সেকেন্ড করো)...' : 'Refine this short (e.g., make hook punchier, shorten body to 40s)...'}
                     value={refineInstructions[item.id] || ''}
                     onChange={(e) => setRefineInstructions(prev => ({ ...prev, [item.id]: e.target.value }))}
                     onKeyDown={(e) => {
@@ -459,23 +741,23 @@ export const ViralShortsView: React.FC = () => {
                 </div>
 
                 {/* Action Buttons */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', paddingTop: '4px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                   <button
-                    onClick={() => hostBridge.setPlayheadPosition(item.startSeconds)}
+                    onClick={() => hostBridge.setPlayheadPosition(hookObj.startSeconds)}
                     className="btn-secondary"
                     style={{ padding: '3px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
-                    title={language === 'bn' ? 'টাইমলাইনে এই অংশে প্লেহেড নিন' : 'Seek playhead to short start'}
+                    title={language === 'bn' ? 'টাইমলাইনে হুক অংশে প্লেহেড নিন' : 'Seek playhead to short start'}
                   >
                     <Play size={10} />
-                    <span>{language === 'bn' ? 'প্লেহেড সেখানে নিন' : 'Preview / Seek'}</span>
+                    <span>{language === 'bn' ? 'শুরুর প্লেহেডে যান' : 'Preview / Seek'}</span>
                   </button>
 
                   <button
                     onClick={() => handleCreateSingleSequence(item)}
                     className="btn-primary"
                     style={{
-                      padding: '4px 10px',
-                      fontSize: '10px',
+                      padding: '5px 12px',
+                      fontSize: '10.5px',
                       fontWeight: 600,
                       backgroundColor: isCreated ? '#059669' : '#ea580c',
                       color: '#ffffff',
@@ -487,11 +769,11 @@ export const ViralShortsView: React.FC = () => {
                       gap: '4px'
                     }}
                   >
-                    {isCreated ? <CheckCircle2 size={11} /> : <Scissors size={11} />}
+                    {isCreated ? <CheckCircle2 size={12} /> : <Scissors size={12} />}
                     <span>
                       {isCreated
-                        ? (language === 'bn' ? 'তৈরি হয়েছে (আবার তৈরি করুন)' : 'Sequence Created (Re-create)')
-                        : (language === 'bn' ? '১-ক্লিকে ৯:১৬ সিকোয়েন্স তৈরি করুন' : 'Create 9:16 Sequence')}
+                        ? (language === 'bn' ? 'সিকোয়েন্স তৈরি হয়েছে (পুনরায় তৈরি)' : 'Sequence Created (Re-create)')
+                        : (language === 'bn' ? '১-ক্লিকে ৯:১৬ সিকোয়েন্স তৈরি করুন' : '1-Click Create 9:16 Sequence')}
                     </span>
                   </button>
                 </div>

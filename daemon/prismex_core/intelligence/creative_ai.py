@@ -87,130 +87,228 @@ class CreativeAI:
         fps: float = 24.0,
         custom_prompt: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Identifies top 3-10 high-engagement viral hook segments (30-60s) for 9:16 Vertical Shorts."""
+        """
+        Extracts highly structured, educational, 3-part viral Shorts (Hook -> Body -> CTA)
+        from across the transcript with non-linear multi-segment splicing.
+        """
         if not words:
             return []
 
         full_text = " ".join(str(s.get("text", "")).strip() for s in sentences) if sentences else " ".join(str(w.get("word", "")) for w in words)
         total_dur = float(words[-1].get("end_seconds", 0.0)) if words else 0.0
 
-        user_guidance = f"\nUser Specific Goal / Direction: {custom_prompt}\n" if custom_prompt else ""
+        user_guidance = f"\nUser Custom Editorial Goal: {custom_prompt}\n" if custom_prompt else ""
 
         prompt = (
-            "You are a master viral YouTube Shorts, TikTok, and Instagram Reels video producer and editor.\n"
-            "Analyze this transcript from a long video and extract "
-            f"up to {target_count} distinct 25-to-60-second high-virality vertical short video candidates.\n"
+            "You are an elite YouTube Shorts, TikTok, and Instagram Reels video editor and strategist.\n"
+            "You DO NOT just pick random time intervals. You plan and construct purposeful, educational, "
+            "and high-retention viral vertical short videos from this long video transcript.\n\n"
             f"{user_guidance}\n"
-            "Each Short must have:\n"
-            "1. An irresistible 1-3s Opening Hook that stops viewers from swiping.\n"
-            "2. A coherent, high-retention story or punchline.\n"
-            "3. Seamless loop potential or strong ending.\n"
-            f"Transcript ({round(total_dur, 1)}s total):\n{full_text[:9000]}\n\n"
-            "Return ONLY a JSON array of objects with keys:\n"
+            "MANDATORY 3-PART VIRAL STRUCTURE FOR EVERY SHORT:\n"
+            "1. 🎯 HOOK (0-5s): A bold question, counter-intuitive insight, or shocking statement that stops the scroll.\n"
+            "2. 📖 BODY / STORY / VALUE (20-45s): An educational, structured story or explanation that delivers real value and teaches the viewer something meaningful.\n"
+            "3. 📢 CTA / TAKEAWAY (3-8s): A clear concluding lesson, actionable advice, or engagement call.\n\n"
+            "CRITICAL RULES:\n"
+            "- You CAN pull the Hook, Body, and CTA from DIFFERENT parts of the long video if needed to make the story complete and powerful!\n"
+            "- Never cut off mid-thought or mid-sentence. Keep complete semantic phrases.\n"
+            f"- Transcript ({round(total_dur, 1)}s total duration):\n{full_text[:9000]}\n\n"
+            f"Generate up to {target_count} distinct viral shorts. Return ONLY a JSON array of objects with keys:\n"
             "[\n"
             "  {\n"
             '    "id": "short_1",\n'
             '    "title": "Punchy Short Title",\n'
-            '    "hook": "The opening 1-3 second hook line",\n'
-            '    "startSeconds": 14.5,\n'
-            '    "endSeconds": 58.2,\n'
+            '    "educationalLesson": "What viewers learn from this video",\n'
             '    "viralityScore": 96,\n'
-            '    "reason": "Why this moment will blow up",\n'
-            '    "brollSuggestions": ["Overlay moving truck footage", "Show cost graph"],\n'
-            '    "loopIdea": "Ending connects back to hook"\n'
+            '    "reason": "Why this video will hold high viewer retention",\n'
+            '    "hook": {"text": "Hook sentence text", "startSeconds": 140.0, "endSeconds": 145.0},\n'
+            '    "body": {"text": "Main story and explanation", "startSeconds": 30.0, "endSeconds": 68.0},\n'
+            '    "cta": {"text": "Ending takeaway and CTA", "startSeconds": 210.0, "endSeconds": 216.0},\n'
+            '    "brollSuggestions": ["Show moving truck", "Display cost chart"],\n'
+            '    "loopIdea": "How ending seamlessly loops back into the hook"\n'
             "  }\n"
             "]"
         )
 
         def _get_words_in_range(s_sec: float, e_sec: float) -> str:
             chunk = [str(w.get("word", "")) for w in words if float(w.get("start_seconds", 0.0)) >= s_sec - 0.2 and float(w.get("end_seconds", 0.0)) <= e_sec + 0.2]
-            return " ".join(chunk) if chunk else full_text[:200]
+            return " ".join(chunk) if chunk else ""
 
-        def _generate_markers_for_range(s_sec: float, e_sec: float) -> List[Dict[str, Any]]:
-            m_list = []
-            # 1. Opening hook marker
-            m_list.append({"seconds": round(s_sec, 2), "type": "EMPHASIS", "name": "Viral Hook", "comment": "Opening hook phrase"})
-            # 2. Midpoint B-Roll marker
-            mid = round((s_sec + e_sec) / 2.0, 2)
-            m_list.append({"seconds": mid, "type": "BROLL", "name": "B-Roll Cutaway", "comment": "Add visual b-roll or graphic"})
-            # 3. Peak punchline marker
-            punch = round(min(e_sec - 2.0, mid + (e_sec - mid) * 0.6), 2)
-            if punch > mid:
-                m_list.append({"seconds": punch, "type": "SFX", "name": "Punchline / SFX", "comment": "Sound FX / Zoom In"})
-            return m_list
+        def _build_segments(h: Dict[str, Any], b: Dict[str, Any], c: Dict[str, Any]) -> List[Dict[str, Any]]:
+            segs = []
+            if h.get("startSeconds") is not None and h.get("endSeconds") is not None:
+                h_dur = max(0.5, float(h["endSeconds"]) - float(h["startSeconds"]))
+                segs.append({
+                    "role": "HOOK",
+                    "text": h.get("text", ""),
+                    "startSeconds": round(float(h["startSeconds"]), 2),
+                    "endSeconds": round(float(h["endSeconds"]), 2),
+                    "durationSeconds": round(h_dur, 2)
+                })
+            if b.get("startSeconds") is not None and b.get("endSeconds") is not None:
+                b_dur = max(1.0, float(b["endSeconds"]) - float(b["startSeconds"]))
+                segs.append({
+                    "role": "BODY",
+                    "text": b.get("text", ""),
+                    "startSeconds": round(float(b["startSeconds"]), 2),
+                    "endSeconds": round(float(b["endSeconds"]), 2),
+                    "durationSeconds": round(b_dur, 2)
+                })
+            if c.get("startSeconds") is not None and c.get("endSeconds") is not None:
+                c_dur = max(0.5, float(c["endSeconds"]) - float(c["startSeconds"]))
+                segs.append({
+                    "role": "CTA",
+                    "text": c.get("text", ""),
+                    "startSeconds": round(float(c["startSeconds"]), 2),
+                    "endSeconds": round(float(c["endSeconds"]), 2),
+                    "durationSeconds": round(c_dur, 2)
+                })
+            return segs
 
         ai_res = cls._call_gemini_json(prompt)
         if isinstance(ai_res, list) and len(ai_res) > 0:
             shorts = []
             for idx, item in enumerate(ai_res):
-                s_sec = max(0.0, float(item.get("startSeconds", 0.0)))
-                e_sec = min(total_dur, max(s_sec + 15.0, float(item.get("endSeconds", s_sec + 45.0))))
-                script_text = _get_words_in_range(s_sec, e_sec)
+                h = item.get("hook", {})
+                b = item.get("body", {})
+                c = item.get("cta", {})
+
+                # Ensure texts are filled
+                if not h.get("text") and "startSeconds" in h:
+                    h["text"] = _get_words_in_range(float(h["startSeconds"]), float(h["endSeconds"]))
+                if not b.get("text") and "startSeconds" in b:
+                    b["text"] = _get_words_in_range(float(b["startSeconds"]), float(b["endSeconds"]))
+                if not c.get("text") and "startSeconds" in c:
+                    c["text"] = _get_words_in_range(float(c["startSeconds"]), float(c["endSeconds"]))
+
+                segs = _build_segments(h, b, c)
+                total_duration = sum(s["durationSeconds"] for s in segs)
+
+                # Formatted full script
+                formatted_script = (
+                    f"🎯 HOOK:\n\"{h.get('text', '')}\"\n\n"
+                    f"📖 BODY / STORY:\n\"{b.get('text', '')}\"\n\n"
+                    f"📢 CTA / TAKEAWAY:\n\"{c.get('text', '')}\""
+                )
+
+                # Visual Markers relative to timeline
+                markers = []
+                cur_marker_t = 0.0
+                for s in segs:
+                    m_type = "EMPHASIS" if s["role"] == "HOOK" else ("BROLL" if s["role"] == "BODY" else "SFX")
+                    markers.append({
+                        "seconds": round(cur_marker_t, 2),
+                        "type": m_type,
+                        "name": f"Short {s['role']}",
+                        "comment": s["text"][:40]
+                    })
+                    cur_marker_t += s["durationSeconds"]
+
+                s_start = segs[0]["startSeconds"] if segs else 0.0
+                s_end = segs[-1]["endSeconds"] if segs else total_dur
+
                 shorts.append({
-                    "id": f"short_{idx + 1}_{int(s_sec)}",
+                    "id": f"short_{idx + 1}_{int(s_start)}",
                     "title": str(item.get("title", f"Viral Short #{idx + 1}")),
-                    "hook": str(item.get("hook", "")),
-                    "startSeconds": round(s_sec, 2),
-                    "endSeconds": round(e_sec, 2),
-                    "durationSeconds": round(e_sec - s_sec, 2),
-                    "startFrame": int(round(s_sec * fps)),
-                    "endFrame": int(round(e_sec * fps)),
-                    "viralityScore": int(item.get("viralityScore", 92 - idx * 2)),
-                    "reason": str(item.get("reason", "High-retention story")),
-                    "brollSuggestions": item.get("brollSuggestions", ["Overlay B-Roll", "Add Sound FX"]),
-                    "loopIdea": item.get("loopIdea", "Seamless loop to hook"),
+                    "educationalLesson": str(item.get("educationalLesson", "Educational value")),
+                    "viralityScore": int(item.get("viralityScore", 95 - idx * 2)),
+                    "reason": str(item.get("reason", "Structured narrative retention")),
+                    "hook": h,
+                    "body": b,
+                    "cta": c,
+                    "segments": segs,
+                    "totalDurationSeconds": round(total_duration, 2),
+                    "startSeconds": round(s_start, 2),
+                    "endSeconds": round(s_end, 2),
+                    "durationSeconds": round(total_duration, 2),
+                    "startFrame": int(round(s_start * fps)),
+                    "endFrame": int(round(s_end * fps)),
+                    "brollSuggestions": item.get("brollSuggestions", ["Overlay relevant B-Roll", "Display on-screen graphics"]),
+                    "loopIdea": item.get("loopIdea", "Ending connects smoothly back into the opening hook"),
                     "aspectRatio": "9:16 (1080x1920)",
-                    "scriptText": script_text,
-                    "markers": _generate_markers_for_range(s_sec, e_sec)
+                    "scriptText": formatted_script,
+                    "markers": markers
                 })
             return shorts
 
-        # Offline Local Chunker: Divide into 35-50s high-energy slices with heuristic hooks
+        # Offline Local Heuristic Planner: Group sentences into structured Hook -> Body -> CTA
         shorts = []
-        if total_dur <= 15.0:
-            shorts.append({
-                "id": "short_1_0",
-                "title": "Short #1 - Complete Moment",
-                "hook": full_text[:40] + "...",
-                "startSeconds": 0.0,
-                "endSeconds": round(total_dur, 2),
-                "durationSeconds": round(total_dur, 2),
-                "startFrame": 0,
-                "endFrame": int(round(total_dur * fps)),
-                "viralityScore": 94,
-                "reason": "Compact standalone moment",
-                "brollSuggestions": ["Show title card", "Add background music"],
-                "aspectRatio": "9:16 (1080x1920)",
-                "scriptText": full_text,
-                "markers": _generate_markers_for_range(0.0, total_dur)
-            })
-            return shorts
+        sent_list = sentences if sentences else []
+        n_sent = len(sent_list)
 
-        slice_dur = min(48.0, max(25.0, total_dur / max(1, target_count)))
-        curr_t = 0.0
+        if n_sent == 0:
+            return []
+
+        # Divide sentences into logical chunks of 4-7 sentences
+        chunk_size = max(3, min(7, n_sent // max(1, target_count)))
+        curr_idx = 0
         idx = 1
-        while curr_t + 15.0 <= total_dur and len(shorts) < target_count:
-            end_t = min(total_dur, curr_t + slice_dur)
-            script_text = _get_words_in_range(curr_t, end_t)
-            first_few = script_text.split()[:7]
-            hook_text = " ".join(first_few) + "..." if first_few else f"Moment at {round(curr_t, 1)}s"
+
+        while curr_idx < n_sent and len(shorts) < target_count:
+            end_idx = min(n_sent, curr_idx + chunk_size)
+            sub_sents = sent_list[curr_idx:end_idx]
+            if len(sub_sents) == 0:
+                break
+
+            # S1 = Hook, S2..Sn-1 = Body, Sn = CTA
+            h_sent = sub_sents[0]
+            c_sent = sub_sents[-1] if len(sub_sents) > 1 else sub_sents[0]
+            b_sents = sub_sents[1:-1] if len(sub_sents) > 2 else [sub_sents[0]]
+
+            h = {
+                "text": str(h_sent.get("text", "")).strip(),
+                "startSeconds": round(float(h_sent.get("start_seconds", 0.0)), 2),
+                "endSeconds": round(float(h_sent.get("end_seconds", 0.0)), 2)
+            }
+            b = {
+                "text": " ".join(str(s.get("text", "")).strip() for s in b_sents),
+                "startSeconds": round(float(b_sents[0].get("start_seconds", 0.0)), 2),
+                "endSeconds": round(float(b_sents[-1].get("end_seconds", 0.0)), 2)
+            }
+            c = {
+                "text": str(c_sent.get("text", "")).strip(),
+                "startSeconds": round(float(c_sent.get("start_seconds", 0.0)), 2),
+                "endSeconds": round(float(c_sent.get("end_seconds", 0.0)), 2)
+            }
+
+            segs = _build_segments(h, b, c)
+            total_duration = sum(s["durationSeconds"] for s in segs)
+
+            formatted_script = (
+                f"🎯 HOOK:\n\"{h['text']}\"\n\n"
+                f"📖 BODY / STORY:\n\"{b['text']}\"\n\n"
+                f"📢 CTA / TAKEAWAY:\n\"{c['text']}\""
+            )
+
+            markers = [
+                {"seconds": 0.0, "type": "EMPHASIS", "name": "Hook", "comment": h['text'][:30]},
+                {"seconds": round(segs[0]["durationSeconds"], 2), "type": "BROLL", "name": "Story Body", "comment": "B-roll cutaway"},
+                {"seconds": round(total_duration - 4.0, 2), "type": "SFX", "name": "CTA Outro", "comment": "Closing takeaway"}
+            ]
+
             shorts.append({
-                "id": f"short_{idx}_{int(curr_t)}",
-                "title": f"Short #{idx} - Key Story Moment",
-                "hook": hook_text,
-                "startSeconds": round(curr_t, 2),
-                "endSeconds": round(end_t, 2),
-                "durationSeconds": round(end_t - curr_t, 2),
-                "startFrame": int(round(curr_t * fps)),
-                "endFrame": int(round(end_t * fps)),
-                "viralityScore": max(75, 95 - (idx * 3)),
-                "reason": "Engaging narrative pacing slice",
-                "brollSuggestions": ["Add cutaway B-roll", "Zoom punch on speaker"],
+                "id": f"short_{idx}_{int(h['startSeconds'])}",
+                "title": f"Short #{idx} - Key Lesson",
+                "educationalLesson": "Key story takeaway from conversation",
+                "viralityScore": max(78, 95 - (idx * 3)),
+                "reason": "Structured 3-part narrative with clear hook and lesson",
+                "hook": h,
+                "body": b,
+                "cta": c,
+                "segments": segs,
+                "totalDurationSeconds": round(total_duration, 2),
+                "startSeconds": h["startSeconds"],
+                "endSeconds": c["endSeconds"],
+                "durationSeconds": round(total_duration, 2),
+                "startFrame": int(round(h["startSeconds"] * fps)),
+                "endFrame": int(round(c["endSeconds"] * fps)),
+                "brollSuggestions": ["Insert B-roll overlay on topic", "Add dynamic zoom punch on hook"],
+                "loopIdea": "Closing takeaway loops back into opening question",
                 "aspectRatio": "9:16 (1080x1920)",
-                "scriptText": script_text,
-                "markers": _generate_markers_for_range(curr_t, end_t)
+                "scriptText": formatted_script,
+                "markers": markers
             })
-            curr_t = end_t
+
+            curr_idx = end_idx
             idx += 1
 
         return shorts
@@ -223,37 +321,87 @@ class CreativeAI:
         words: List[Dict[str, Any]],
         fps: float = 24.0,
     ) -> Dict[str, Any]:
-        """Interactive AI Refinement: adjusts timecodes, hook, or trims short based on user request."""
+        """Interactive AI Refinement: adjusts timecodes, hook, body, CTA or trims short based on user request."""
         total_dur = float(words[-1].get("end_seconds", 0.0)) if words else 100.0
 
         prompt = (
-            "You are an expert video editor. The user wants to adjust a vertical short video candidate.\n"
-            f"Current Short: Title='{short_data.get('title')}', Hook='{short_data.get('hook')}', "
-            f"Start={short_data.get('startSeconds')}s, End={short_data.get('endSeconds')}s\n"
+            "You are an expert video editor. The user wants to adjust a 3-part vertical short video candidate.\n"
+            f"Current Short: Title='{short_data.get('title')}', EducationalLesson='{short_data.get('educationalLesson')}'\n"
+            f"Current Hook: {short_data.get('hook')}\n"
+            f"Current Body: {short_data.get('body')}\n"
+            f"Current CTA: {short_data.get('cta')}\n"
             f"Current Script:\n{short_data.get('scriptText', '')}\n\n"
             f"User Adjustment Request: \"{instruction}\"\n\n"
-            "Return a refined JSON object with keys: "
-            '{"title": "Updated Title", "hook": "Updated Hook", "startSeconds": 0.0, "endSeconds": 40.0, "reason": "Explanation of changes", "brollSuggestions": ["..."]}'
+            "Return a refined JSON object with keys:\n"
+            "{\n"
+            '  "title": "Updated Title",\n'
+            '  "educationalLesson": "Updated educational lesson",\n'
+            '  "reason": "Explanation of changes",\n'
+            '  "hook": {"text": "Updated hook text", "startSeconds": 0.0, "endSeconds": 5.0},\n'
+            '  "body": {"text": "Updated body text", "startSeconds": 5.0, "endSeconds": 40.0},\n'
+            '  "cta": {"text": "Updated CTA text", "startSeconds": 40.0, "endSeconds": 45.0},\n'
+            '  "brollSuggestions": ["..."]\n'
+            "}"
         )
 
         ai_res = cls._call_gemini_json(prompt)
-        if isinstance(ai_res, dict) and "startSeconds" in ai_res:
-            s_sec = max(0.0, float(ai_res.get("startSeconds", short_data.get("startSeconds", 0.0))))
-            e_sec = min(total_dur, max(s_sec + 10.0, float(ai_res.get("endSeconds", short_data.get("endSeconds", 40.0)))))
-            chunk = [str(w.get("word", "")) for w in words if float(w.get("start_seconds", 0.0)) >= s_sec - 0.2 and float(w.get("end_seconds", 0.0)) <= e_sec + 0.2]
-            script_text = " ".join(chunk) if chunk else short_data.get("scriptText", "")
+        if isinstance(ai_res, dict):
+            h = ai_res.get("hook", short_data.get("hook"))
+            b = ai_res.get("body", short_data.get("body"))
+            c = ai_res.get("cta", short_data.get("cta"))
+
+            # Normalize if dicts
+            def _norm_blk(blk: Any, def_start: float, def_end: float) -> Dict[str, Any]:
+                if isinstance(blk, dict):
+                    s_sec = max(0.0, float(blk.get("startSeconds", def_start)))
+                    e_sec = min(total_dur, max(s_sec + 1.0, float(blk.get("endSeconds", def_end))))
+                    return {
+                        "text": str(blk.get("text", "")).strip(),
+                        "startSeconds": round(s_sec, 2),
+                        "endSeconds": round(e_sec, 2),
+                        "durationSeconds": round(e_sec - s_sec, 2)
+                    }
+                return {
+                    "text": str(blk or "").strip(),
+                    "startSeconds": round(def_start, 2),
+                    "endSeconds": round(def_end, 2),
+                    "durationSeconds": round(def_end - def_start, 2)
+                }
+
+            h_norm = _norm_blk(h, short_data.get("startSeconds", 0.0), short_data.get("startSeconds", 0.0) + 5.0)
+            b_norm = _norm_blk(b, h_norm["endSeconds"], max(h_norm["endSeconds"] + 15.0, short_data.get("endSeconds", 45.0) - 5.0))
+            c_norm = _norm_blk(c, b_norm["endSeconds"], b_norm["endSeconds"] + 5.0)
+
+            segs = [
+                {"role": "HOOK", "startSeconds": h_norm["startSeconds"], "endSeconds": h_norm["endSeconds"], "durationSeconds": h_norm["durationSeconds"], "text": h_norm["text"]},
+                {"role": "BODY", "startSeconds": b_norm["startSeconds"], "endSeconds": b_norm["endSeconds"], "durationSeconds": b_norm["durationSeconds"], "text": b_norm["text"]},
+                {"role": "CTA", "startSeconds": c_norm["startSeconds"], "endSeconds": c_norm["endSeconds"], "durationSeconds": c_norm["durationSeconds"], "text": c_norm["text"]},
+            ]
+            total_duration = sum(s["durationSeconds"] for s in segs)
+
+            formatted_script = (
+                f"🎯 HOOK:\n\"{h_norm['text']}\"\n\n"
+                f"📖 BODY / STORY:\n\"{b_norm['text']}\"\n\n"
+                f"📢 CTA / TAKEAWAY:\n\"{c_norm['text']}\""
+            )
+
             return {
                 **short_data,
                 "title": str(ai_res.get("title", short_data.get("title"))),
-                "hook": str(ai_res.get("hook", short_data.get("hook"))),
-                "startSeconds": round(s_sec, 2),
-                "endSeconds": round(e_sec, 2),
-                "durationSeconds": round(e_sec - s_sec, 2),
-                "startFrame": int(round(s_sec * fps)),
-                "endFrame": int(round(e_sec * fps)),
+                "educationalLesson": str(ai_res.get("educationalLesson", short_data.get("educationalLesson", ""))),
                 "reason": str(ai_res.get("reason", "Refined per user instruction")),
+                "hook": h_norm,
+                "body": b_norm,
+                "cta": c_norm,
+                "segments": segs,
+                "totalDurationSeconds": round(total_duration, 2),
+                "durationSeconds": round(total_duration, 2),
+                "startSeconds": h_norm["startSeconds"],
+                "endSeconds": c_norm["endSeconds"],
+                "startFrame": int(round(h_norm["startSeconds"] * fps)),
+                "endFrame": int(round(c_norm["endSeconds"] * fps)),
                 "brollSuggestions": ai_res.get("brollSuggestions", short_data.get("brollSuggestions", [])),
-                "scriptText": script_text
+                "scriptText": formatted_script
             }
 
         # Offline fallback: simple duration trim if requested

@@ -439,6 +439,34 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Clones active sequence, converts to 9:16 vertical (1080x1920), organizes in bin,
+   * stitches multi-part segments (Hook -> Body -> CTA) contiguously, and adds markers.
+   */
+  public async createMultiSegmentVerticalShortSequence(
+    title: string,
+    segments: Array<{ role: string; startSeconds: number; endSeconds: number }>,
+    markers?: any[]
+  ): Promise<{ success: boolean; sequenceName?: string; bin?: string; durationSeconds?: number; segmentCount?: number; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, sequenceName: `${title}_9x16`, bin: '_Prismex_Viral_Shorts', durationSeconds: 45, segmentCount: segments.length };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const safeTitle = (title || 'Short').replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, '_');
+      const segmentsJson = JSON.stringify(segments);
+      const markersJson = markers ? JSON.stringify(markers) : '[]';
+      const escapedSegments = JSON.stringify(segmentsJson);
+      const escapedMarkers = JSON.stringify(markersJson);
+      const res = await this.evalScript(
+        `$._prismex.createMultiSegmentVerticalShortSequence("${safeTitle}", ${escapedSegments}, ${escapedMarkers})`
+      );
+      return JSON.parse(res || '{"success":false}');
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  /**
    * Clones active sequence, converts to 9:16 vertical (1080x1920), moves to bin,
    * trims to short duration, and places AI timeline markers.
    */

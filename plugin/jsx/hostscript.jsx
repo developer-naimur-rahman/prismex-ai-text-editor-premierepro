@@ -644,7 +644,7 @@ $._prismex.loadProjectCache = function(cacheKey) {
     }
 };
 
-$._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endSeconds, markersJson) {
+$._prismex.createMultiSegmentVerticalShortSequence = function(shortTitle, segmentsJson, markersJson) {
     try {
         if (!app.project || !app.project.activeSequence) {
             return JSON.stringify({ success: false, error: "No active sequence found" });
@@ -656,11 +656,82 @@ $._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endS
         var initialTicks = Math.max(0, parseFloat(origSeq.end || 0) - zeroTicks);
         var initialSec = initialTicks / TICKS;
 
-        var sSec = Math.max(0, parseFloat(startSeconds) || 0);
-        var eSec = Math.min(initialSec, parseFloat(endSeconds) || (sSec + 45));
-        if (eSec <= sSec) eSec = Math.min(initialSec, sSec + 30);
+        var segments = [];
+        try {
+            segments = (typeof segmentsJson === "string") ? JSON.parse(segmentsJson) : segmentsJson;
+        } catch (e) {
+            segments = [];
+        }
 
-        // 1. Clone sequence to preserve 100% of cuts, transitions, effects & audio tracks
+        if (!segments || segments.length === 0) {
+            return JSON.stringify({ success: false, error: "No segments provided" });
+        }
+
+        // Validate segments
+        var validSegments = [];
+        for (var s = 0; s < segments.length; s++) {
+            var seg = segments[s];
+            var sSec = Math.max(0, parseFloat(seg.startSeconds) || 0);
+            var eSec = Math.min(initialSec, parseFloat(seg.endSeconds) || (sSec + 10));
+            if (eSec > sSec) {
+                validSegments.push({
+                    role: seg.role || ("SEG_" + (s + 1)),
+                    startSeconds: sSec,
+                    endSeconds: eSec,
+                    durationSeconds: eSec - sSec
+                });
+            }
+        }
+
+        if (validSegments.length === 0) {
+            return JSON.stringify({ success: false, error: "Valid segments could not be parsed" });
+        }
+
+        // Snapshot all unlocked video tracks and clips from the active sequence
+        var videoTrackSnapshots = [];
+        var hasVideoClips = false;
+        for (var v = 0; v < origSeq.videoTracks.numTracks; v++) {
+            var vTrack = origSeq.videoTracks[v];
+            if (vTrack.isLocked()) continue;
+            var vClips = [];
+            for (var vc = 0; vc < vTrack.clips.numItems; vc++) {
+                var vcItem = vTrack.clips[vc];
+                if (!vcItem.projectItem) continue;
+                vClips.push({
+                    projectItem: vcItem.projectItem,
+                    tlStart: (parseFloat(vcItem.start.ticks) - zeroTicks) / TICKS,
+                    tlEnd: (parseFloat(vcItem.end.ticks) - zeroTicks) / TICKS,
+                    srcIn: parseFloat(vcItem.inPoint.ticks) / TICKS,
+                    srcOut: parseFloat(vcItem.outPoint.ticks) / TICKS
+                });
+                hasVideoClips = true;
+            }
+            videoTrackSnapshots.push({ trackIndex: v, clips: vClips });
+        }
+
+        // Snapshot audio tracks if no video clips
+        var audioTrackSnapshots = [];
+        if (!hasVideoClips) {
+            for (var a = 0; a < origSeq.audioTracks.numTracks; a++) {
+                var aTrack = origSeq.audioTracks[a];
+                if (aTrack.isLocked()) continue;
+                var aClips = [];
+                for (var ac = 0; ac < aTrack.clips.numItems; ac++) {
+                    var acItem = aTrack.clips[ac];
+                    if (!acItem.projectItem) continue;
+                    aClips.push({
+                        projectItem: acItem.projectItem,
+                        tlStart: (parseFloat(acItem.start.ticks) - zeroTicks) / TICKS,
+                        tlEnd: (parseFloat(acItem.end.ticks) - zeroTicks) / TICKS,
+                        srcIn: parseFloat(acItem.inPoint.ticks) / TICKS,
+                        srcOut: parseFloat(acItem.outPoint.ticks) / TICKS
+                    });
+                }
+                audioTrackSnapshots.push({ trackIndex: a, clips: aClips });
+            }
+        }
+
+        // 1. Clone sequence to preserve project structure and audio routing
         var cloned = origSeq.clone();
         if (!cloned) {
             return JSON.stringify({ success: false, error: "Sequence clone failed" });
@@ -673,7 +744,7 @@ $._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endS
         }
 
         // Clean title
-        var cleanTitle = (shortTitle || "ViralShort").replace(/[^a-zA-Z0-9_-]/g, "_");
+        var cleanTitle = (shortTitle || "ViralShort").replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, "_");
         var finalName = cleanTitle + "_9x16";
         newSeq.name = finalName;
 
@@ -713,58 +784,122 @@ $._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endS
             }
         } catch (binErr) {}
 
-        // 5. Trim to the short's exact range by ripple-deleting the outside regions
-        var cuts = [];
-        if (eSec < initialSec - 0.05) {
-            cuts.push({
-                startSeconds: eSec,
-                endSeconds: initialSec + 5.0,
-                durationSeconds: (initialSec + 5.0) - eSec
-            });
-        }
-        if (sSec > 0.05) {
-            cuts.push({
-                startSeconds: 0.0,
-                endSeconds: sSec,
-                durationSeconds: sSec
-            });
-        }
-
-        if (cuts.length > 0) {
-            $._prismex.executeCuts(JSON.stringify(cuts));
-        }
-
-        // 6. Add Visual Guidance Timeline Markers (relative to Short start!)
-        if (markersJson) {
-            try {
-                var markers = JSON.parse(markersJson);
-                var seqMarkers = newSeq.markers;
-                for (var m = 0; m < markers.length; m++) {
-                    var mk = markers[m];
-                    var relativeSec = Math.max(0, mk.seconds - sSec);
-                    var mTicks = Math.round(relativeSec * TICKS);
-                    var newMarker = seqMarkers.createMarker(mTicks);
-                    newMarker.name = mk.name || "AI Marker";
-                    newMarker.comments = mk.comment || "";
-                    if (mk.type === "BROLL") newMarker.setColorIndex(0); // Green
-                    else if (mk.type === "EMPHASIS") newMarker.setColorIndex(1); // Red
-                    else newMarker.setColorIndex(6); // Blue
+        // 5. Clear clips in the cloned sequence and layout segments contiguously
+        if (hasVideoClips) {
+            for (var vtIdx = 0; vtIdx < newSeq.videoTracks.numTracks; vtIdx++) {
+                var vTrk = newSeq.videoTracks[vtIdx];
+                if (vTrk.isLocked()) continue;
+                for (var cd = vTrk.clips.numItems - 1; cd >= 0; cd--) {
+                    try { vTrk.clips[cd].remove(0, 0); } catch (e) {}
                 }
-            } catch (markerErr) {}
+            }
+            for (var atIdx = 0; atIdx < newSeq.audioTracks.numTracks; atIdx++) {
+                var aTrk = newSeq.audioTracks[atIdx];
+                if (aTrk.isLocked()) continue;
+                for (var ad = aTrk.clips.numItems - 1; ad >= 0; ad--) {
+                    try { aTrk.clips[ad].remove(0, 0); } catch (e) {}
+                }
+            }
+
+            var currTlSec = 0.0;
+            for (var segIdx = 0; segIdx < validSegments.length; segIdx++) {
+                var curSeg = validSegments[segIdx];
+                var segDuration = curSeg.endSeconds - curSeg.startSeconds;
+
+                for (var snapIdx = 0; snapIdx < videoTrackSnapshots.length; snapIdx++) {
+                    var vSnap = videoTrackSnapshots[snapIdx];
+                    var destTrack = newSeq.videoTracks[vSnap.trackIndex];
+                    if (!destTrack || destTrack.isLocked()) continue;
+
+                    for (var cIdx = 0; cIdx < vSnap.clips.length; cIdx++) {
+                        var cInfo = vSnap.clips[cIdx];
+                        var kStart = Math.max(cInfo.tlStart, curSeg.startSeconds);
+                        var kEnd = Math.min(cInfo.tlEnd, curSeg.endSeconds);
+
+                        if (kEnd > kStart + 0.01) {
+                            var offsetInClip = kStart - cInfo.tlStart;
+                            var sliceDur = kEnd - kStart;
+                            var segSrcIn = cInfo.srcIn + offsetInClip;
+                            var segSrcOut = segSrcIn + sliceDur;
+                            var targetTlPos = currTlSec + (kStart - curSeg.startSeconds);
+
+                            try {
+                                var inT = new Time();
+                                inT.ticks = Math.round(segSrcIn * TICKS).toFixed(0);
+                                var outT = new Time();
+                                outT.ticks = Math.round(segSrcOut * TICKS).toFixed(0);
+                                var tlT = new Time();
+                                tlT.ticks = (zeroTicks + Math.round(targetTlPos * TICKS)).toFixed(0);
+
+                                cInfo.projectItem.setInPoint(inT, 4);
+                                cInfo.projectItem.setOutPoint(outT, 4);
+                                destTrack.overwriteClip(cInfo.projectItem, tlT);
+                            } catch (owE) {}
+
+                            try {
+                                cInfo.projectItem.clearInPoint();
+                                cInfo.projectItem.clearOutPoint();
+                            } catch (clE) {}
+                        }
+                    }
+                }
+                currTlSec += segDuration;
+            }
         }
+
+        // 6. Add Visual Guidance Timeline Markers for Hook, Body, and CTA
+        try {
+            var seqMarkers = newSeq.markers;
+            var markerPos = 0.0;
+            for (var sm = 0; sm < validSegments.length; sm++) {
+                var sItem = validSegments[sm];
+                var mTicks = Math.round(markerPos * TICKS);
+                var newMarker = seqMarkers.createMarker(mTicks);
+                newMarker.name = sItem.role + " (" + Math.round(sItem.durationSeconds) + "s)";
+                newMarker.comments = "Prismex Short Segment: " + sItem.role;
+                if (sItem.role === "HOOK") newMarker.setColorIndex(1); // Red
+                else if (sItem.role === "BODY") newMarker.setColorIndex(0); // Green
+                else newMarker.setColorIndex(6); // Blue
+                markerPos += sItem.durationSeconds;
+            }
+
+            if (markersJson) {
+                var customMarkers = (typeof markersJson === "string") ? JSON.parse(markersJson) : markersJson;
+                for (var cm = 0; cm < customMarkers.length; cm++) {
+                    var cmk = customMarkers[cm];
+                    var cmTicks = Math.round((cmk.seconds || 0) * TICKS);
+                    var cMarker = seqMarkers.createMarker(cmTicks);
+                    cMarker.name = cmk.name || "AI Cue";
+                    cMarker.comments = cmk.comment || "";
+                }
+            }
+        } catch (mErr) {}
 
         try {
             app.project.openSequence(newSeq.sequenceID);
         } catch (e) {}
 
+        var totalDur = 0;
+        for (var d = 0; d < validSegments.length; d++) totalDur += validSegments[d].durationSeconds;
+
         return JSON.stringify({
             success: true,
             sequenceName: finalName,
             sequenceId: newSeq.sequenceID,
-            durationSeconds: Math.round((eSec - sSec) * 100) / 100,
+            durationSeconds: Math.round(totalDur * 100) / 100,
+            segmentCount: validSegments.length,
             bin: "_Prismex_Viral_Shorts"
         });
     } catch (err) {
         return JSON.stringify({ success: false, error: String(err) });
     }
+};
+
+$._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endSeconds, markersJson) {
+    var segs = [{
+        role: "SHORT",
+        startSeconds: startSeconds,
+        endSeconds: endSeconds
+    }];
+    return $._prismex.createMultiSegmentVerticalShortSequence(shortTitle, JSON.stringify(segs), markersJson);
 };
