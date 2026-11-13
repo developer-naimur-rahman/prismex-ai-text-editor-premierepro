@@ -16,6 +16,7 @@ class TestCreativeAI(unittest.TestCase):
             {"word": "the", "start_seconds": 2.81, "end_seconds": 2.95},
             {"word": "download", "start_seconds": 2.96, "end_seconds": 3.4},   # Icon trigger
             {"word": "button.", "start_seconds": 3.42, "end_seconds": 3.9},   # Icon trigger
+            {"word": "iPhone", "start_seconds": 4.0, "end_seconds": 4.4},      # PNG Picture trigger
         ]
         self.sentences = [
             {"text": "Hey guys, look at this insane app.", "start_seconds": 0.0, "end_seconds": 2.2},
@@ -27,10 +28,11 @@ class TestCreativeAI(unittest.TestCase):
         markers = res["markers"]
         self.assertTrue(len(markers) > 0)
         colors = {m["color"] for m in markers}
-        # Verify emphasis, b-roll and icon categories
+        # Verify emphasis, b-roll, icon, and PNG categories
         self.assertTrue(any(m["type"] == "EMPHASIS" and m["color"] == "RED" for m in markers))
         self.assertTrue(any(m["type"] == "BROLL" and m["color"] == "GREEN" for m in markers))
         self.assertTrue(any(m["type"] == "ICON" and m["color"] == "BLUE" for m in markers))
+        self.assertTrue(any(m["type"] == "PNG" and m["color"] == "PURPLE" for m in markers))
 
     def test_viral_shorts_chunking(self):
         shorts = CreativeAI.detect_viral_shorts(self.words, self.sentences, target_count=3, fps=25.0)

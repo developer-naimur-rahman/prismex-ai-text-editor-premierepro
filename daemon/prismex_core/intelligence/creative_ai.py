@@ -6,6 +6,7 @@ and After Effects Kinetic Typography.
 import json
 import re
 import time
+import urllib.parse
 from typing import Any, Dict, List, Optional
 from ..security.keychain_vault import KeychainVault
 
@@ -421,94 +422,183 @@ class CreativeAI:
     def analyze_markers(cls, words: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Deep-analyzes transcript words and classifies timeline moments into
-        3 distinct color-coded marker types with rich contextual suggestions:
-        - RED: Emphasis & high-impact punch words (zoom / scale pop / text callout)
-        - GREEN: B-Roll overlay visual opportunities (stock footage / cutaway)
-        - BLUE: Icons, PNG graphics & UI callouts (overlay graphic / sticker)
-        Each marker includes: suggestion, context, brollQuery/iconSuggestion/emphasisEffect
+        4 distinct color-coded visual cue types with rich contextual suggestions:
+        - PURPLE: PNG, transparent cutout, logo, product photo & device picture
+        - CYAN: B-Roll video footage, cutaways, timelapse & action shots
+        - ORANGE: Icons, UI buttons & motion stickers
+        - RED: Emphasis, high-impact punch words & typography pop
+        Each marker includes: suggestion, context, cleanKeyword, and 1-click external URLs
+        (Google Images PNG, Pexels Video, Flaticon).
         """
         if not words:
             return {"markers": []}
 
         markers: List[Dict[str, Any]] = []
 
-        # --- Expanded trigger dictionaries with contextual suggestions ---
-        # Strict, high-confidence triggers (avoids marking every common word)
+        # 1. PNG Cutouts, Logos, Gadgets & Photo Triggers (পিকচার / পিএনজি / ছবি)
+        png_triggers = {
+            # Software & Tech Apps
+            "photoshop": "Photoshop Logo PNG", "premiere": "Premiere Pro Icon PNG",
+            "aftereffects": "After Effects Icon PNG", "ae": "After Effects Logo PNG",
+            "figma": "Figma Logo PNG", "chrome": "Google Chrome Logo PNG",
+            "chatgpt": "ChatGPT AI Logo PNG", "openai": "OpenAI Logo PNG",
+            "gemini": "Google Gemini Icon PNG", "midjourney": "Midjourney Logo PNG",
+            "apple": "Apple Logo PNG", "google": "Google Logo PNG",
+            "youtube": "YouTube Logo PNG", "facebook": "Facebook Icon PNG",
+            "instagram": "Instagram Logo PNG", "tiktok": "TikTok Logo PNG",
+            "twitter": "X / Twitter Icon PNG", "x": "X Twitter Logo PNG",
+            "linkedin": "LinkedIn Icon PNG", "whatsapp": "WhatsApp Icon PNG",
+            "telegram": "Telegram Icon PNG", "discord": "Discord Logo PNG",
+            "spotify": "Spotify Logo PNG", "netflix": "Netflix Logo PNG",
+            "canva": "Canva Logo PNG", "capcut": "CapCut Logo PNG",
+            "vscode": "VS Code Logo PNG", "notion": "Notion Logo PNG",
+            # Hardware & Devices
+            "iphone": "iPhone Cutout PNG", "android": "Android Logo PNG",
+            "samsung": "Samsung Phone PNG", "camera": "Camera Cutout PNG",
+            "sony": "Sony Camera PNG", "mic": "Studio Microphone PNG",
+            "microphone": "Microphone Cutout PNG", "laptop": "Laptop Cutout PNG",
+            "macbook": "MacBook Cutout PNG", "pc": "Desktop PC PNG",
+            "computer": "Computer Monitor PNG", "monitor": "Display Monitor PNG",
+            "gpu": "NVIDIA GPU Graphic PNG", "nvidia": "NVIDIA Logo PNG",
+            "intel": "Intel Logo PNG", "ipad": "iPad Tablet PNG",
+            "drone": "Drone Cutout PNG", "airpods": "AirPods PNG",
+            "headphone": "Headphones PNG",
+            # Assets, Objects & Documents
+            "money": "Money / Cash PNG", "dollar": "Dollar Bills PNG",
+            "cash": "Cash Money Stack PNG", "crypto": "Cryptocurrency Icon PNG",
+            "bitcoin": "Bitcoin Gold Coin PNG", "card": "Credit Card PNG",
+            "visa": "Visa Card PNG", "mastercard": "Mastercard Logo PNG",
+            "bank": "Bank Building Icon PNG", "passport": "Passport PNG",
+            "contract": "Contract Document PNG", "certificate": "Award Certificate PNG",
+            "book": "Book Cover PNG", "car": "Car Cutout PNG", "tesla": "Tesla Car PNG",
+            "chart": "Financial Growth Chart PNG", "graph": "Analytics Graph PNG",
+            "diagram": "Flow Diagram PNG", "screenshot": "App Screenshot PNG",
+            "logo": "Brand Logo Transparent PNG", "picture": "Picture / Photo",
+            "photo": "Photo Asset", "image": "Image Asset", "png": "Transparent PNG Cutout",
+            # Bengali triggers
+            "ছবি": "ছবি / ফটো পিএনজি", "পিকচার": "পিকচার কাটআউট", "পিএনজি": "ট্রান্সপারেন্ট পিএনজি",
+            "লোগো": "ব্র্যান্ড লোগো পিএনজি", "অ্যাপ": "অ্যাপ আইকন পিএনজি", "মোবাইল": "মোবাইল ফোন কাটআউট",
+            "ফোন": "স্মার্টফোন পিএনজি", "টাকা": "টাকা / কারেন্সি পিএনজি", "ডলার": "ডলার ক্যাশ পিএনজি",
+            "ব্যাংক": "ব্যাংক আইকন", "গ্রাফ": "এনালিটিক্স গ্রাফ পিএনজি", "চার্ট": "গ্রোথ চার্ট পিএনজি",
+            "ল্যাপটপ": "ল্যাপটপ কাটআউট", "ক্যামেরা": "ক্যামেরা কাটআউট পিএনজি", "ইউটিউব": "ইউটিউব লোগো পিএনজি",
+            "ফেসবুক": "ফেসবুক লোগো", "গুগল": "গুগল লোগো পিএনজি", "সফটওয়্যার": "সফটওয়্যার লোগো",
+            "কম্পিউটার": "কম্পিউটার কাটআউট", "মাইক্রোফোন": "মাইক কাটআউট পিএনজি", "স্ক্রিনশট": "স্ক্রিনশট ইমেজ"
+        }
+
+        # 2. B-Roll Video Footage Triggers (ভিডিও ফুটেজ)
         broll_triggers = {
             "look": "Close-up Visual", "footage": "Stock Footage", "broll": "B-Roll Cutaway", "timelapse": "Timelapse",
             "cinematic": "Cinematic B-Roll", "drone": "Drone Aerial", "landscape": "Landscape Shot",
             "background": "Background Plate", "montage": "Visual Montage",
+            "city": "City Skyline Footage", "traffic": "Traffic Timelapse", "nature": "Nature Scenery",
+            "ocean": "Ocean Waves B-Roll", "office": "Office Working B-Roll", "coding": "Typing / Coding Screen",
+            "walking": "Walking Street B-Roll", "travel": "Travel Scenery", "night": "Night City Lights",
+            "sunset": "Sunset Golden Hour", "studio": "Studio Lighting",
             "ফুটেজ": "ফুটেজ", "সিনেমাটিক": "সিনেমাটিক শট", "ড্রোন": "ড্রোন শট", "টাইমলাপ্স": "টাইমলাপ্স",
+            "ভিডিও": "ভিডিও ফুটেজ", "শট": "কাটঅ্যাওয়ে শট", "দৃশ্য": "সিনারি ভিডিও", "অফিস": "অফিস ফুটেজ",
+            "শহর": "শহরের দৃশ্য", "প্রকৃতি": "প্রাকৃতিক দৃশ্য", "রাস্তা": "রাস্তার ট্রাফিক"
         }
+
+        # 3. Icon Triggers (আইকন / ইন্টারঅ্যাকশন)
         icon_triggers = {
-            "app": "App Icon", "click": "Mouse Click Icon", "button": "Button Icon",
+            "click": "Mouse Click Icon", "button": "Button Icon",
             "subscribe": "Subscribe Bell Icon", "download": "Download Icon",
             "notification": "Notification Bell", "website": "Website / URL Badge",
-            "link": "Link Icon", "checklist": "Checklist Icon",
+            "link": "Link Icon", "checklist": "Checklist Icon", "bell": "Notification Bell",
+            "like": "Thumbs Up Like Icon", "share": "Share Arrow Icon", "comment": "Chat Comment Icon",
             "সাবস্ক্রাইব": "সাবস্ক্রাইব বেল", "ডাউনলোড": "ডাউনলোড তীর", "লিংক": "লিংক আইকন",
+            "আইকন": "ভেক্টর আইকন", "লাইক": "লাইক আইকন", "শেয়ার": "শেয়ার আইকন"
         }
+
+        # 4. Emphasis & Punch Triggers (পাঞ্চ জুম / টাইপোগ্রাফি)
         emphasis_triggers = {
             "insane": "Shock Factor", "never": "Strong Negation", "always": "Absolute Emphasis", "secret": "Secret / Reveal",
             "best": "Superlative", "important": "Crucial Point", "game-changer": "Paradigm Shift",
             "revolutionary": "Innovation", "guaranteed": "Certainty",
             "সবচেয়ে": "সর্বোচ্চ", "সেরা": "শ্রেষ্ঠ", "গুরুত্বপূর্ণ": "জরুরি পয়েন্ট",
-            "আসল": "আসল কথা", "রহস্য": "রহস্য",
+            "আসল": "আসল কথা", "রহস্য": "রহস্য", "বিশাল": "বিশাল ব্যাপার",
         }
 
         # Build context fragments
         word_texts = [str(w.get("word", "")) for w in words]
 
         for i, w in enumerate(words):
-            token = re.sub(r"[^\w\u0980-\u09FF']+", "", str(w.get("word", "")).lower())
+            raw_w = str(w.get("word", ""))
+            token = re.sub(r"[^\w\u0980-\u09FF']+", "", raw_w.lower())
             start = float(w.get("start_seconds", 0.0))
             dur = max(0.3, float(w.get("end_seconds", start + 0.3)) - start)
             ctx_start = max(0, i - 4)
             ctx_end = min(len(word_texts), i + 5)
             context = " ".join(word_texts[ctx_start:ctx_end])
 
-            if token in emphasis_triggers:
-                effect_hint = emphasis_triggers[token]
+            if token in png_triggers:
+                png_desc = png_triggers[token]
+                search_q = f"{raw_w} transparent png"
+                quoted = urllib.parse.quote_plus(search_q)
                 markers.append({
-                    "type": "EMPHASIS",
-                    "color": "RED",
-                    "name": f"Emphasis: {w.get('word')}",
-                    "comment": "Punch word - Add scale pop or text highlight",
-                    "suggestion": f"\u26a1 \u09aa\u09be\u099e\u09cd\u099a \u099c\u09c1\u09ae (\u09e7\u09e7\u09ea% \u09b8\u09cd\u0995\u09c7\u09b2) \u2014 {effect_hint}",
-                    "emphasisEffect": effect_hint,
+                    "type": "PNG",
+                    "color": "PURPLE",
+                    "name": f"PNG: {raw_w}",
+                    "comment": f"Overlay PNG cutout / picture for '{raw_w}'",
+                    "suggestion": f"🖼️ PNG / ছবি: {png_desc}",
+                    "pngQuery": search_q,
+                    "cleanKeyword": raw_w,
+                    "googleImagesUrl": f"https://www.google.com/search?tbm=isch&q={quoted}",
                     "context": context,
                     "startSeconds": start,
-                    "durationSeconds": dur
+                    "durationSeconds": 2.0
                 })
             elif token in broll_triggers:
                 broll_desc = broll_triggers[token]
-                search_q = token if len(token) > 2 else w.get("word", token)
+                search_q = f"{raw_w} footage"
+                quoted = urllib.parse.quote_plus(raw_w)
                 markers.append({
                     "type": "BROLL",
                     "color": "GREEN",
-                    "name": f"B-Roll: {w.get('word')}",
-                    "comment": f"Overlay relevant visual footage for '{w.get('word')}'",
-                    "suggestion": f"\U0001f3ac B-Roll: {broll_desc}",
+                    "name": f"B-Roll: {raw_w}",
+                    "comment": f"Overlay relevant visual footage for '{raw_w}'",
+                    "suggestion": f"🎥 B-Roll: {broll_desc}",
                     "brollQuery": search_q,
-                    "brollDescription": broll_desc,
+                    "cleanKeyword": raw_w,
+                    "pexelsUrl": f"https://www.pexels.com/search/videos/{quoted}/",
                     "context": context,
                     "startSeconds": start,
                     "durationSeconds": 2.5
                 })
             elif token in icon_triggers:
                 icon_desc = icon_triggers[token]
+                search_q = f"{raw_w} icon png"
+                quoted = urllib.parse.quote_plus(raw_w)
                 markers.append({
                     "type": "ICON",
                     "color": "BLUE",
-                    "name": f"Icon/PNG: {w.get('word')}",
-                    "comment": f"Drop PNG icon or motion graphic for '{w.get('word')}'",
-                    "suggestion": f"\U0001f3a8 \u0986\u0987\u0995\u09a8: {icon_desc}",
-                    "iconSuggestion": icon_desc,
+                    "name": f"Icon: {raw_w}",
+                    "comment": f"Drop PNG icon or motion graphic for '{raw_w}'",
+                    "suggestion": f"🎨 আইকন: {icon_desc}",
+                    "iconQuery": search_q,
+                    "cleanKeyword": raw_w,
+                    "flaticonUrl": f"https://www.flaticon.com/search?word={quoted}",
+                    "googleImagesUrl": f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote_plus(raw_w + ' icon png')}",
                     "context": context,
                     "startSeconds": start,
                     "durationSeconds": 1.5
                 })
+            elif token in emphasis_triggers:
+                effect_hint = emphasis_triggers[token]
+                markers.append({
+                    "type": "EMPHASIS",
+                    "color": "RED",
+                    "name": f"Emphasis: {raw_w}",
+                    "comment": "Punch word - Add scale pop or text highlight",
+                    "suggestion": f"⚡ পাঞ্চ জুম (১১৪% স্কেল) — {effect_hint}",
+                    "emphasisEffect": effect_hint,
+                    "cleanKeyword": raw_w,
+                    "context": context,
+                    "startSeconds": start,
+                    "durationSeconds": dur
+                })
 
-        return {"markers": markers[:80], "total": len(markers)}
+        return {"markers": markers[:120], "total": len(markers)}
 
     @classmethod
     def extract_typography_keywords(cls, sentence: str) -> Dict[str, Any]:

@@ -68,6 +68,31 @@ export class PremiereHostBridge {
     return this.isCEP;
   }
 
+  /**
+   * Opens an external URL in the system default browser (Chrome, Safari, etc.)
+   * Works across Adobe CEP, UXP, and standard browser dev environments.
+   */
+  public openURLInDefaultBrowser(url: string): void {
+    if (!url) return;
+    try {
+      if (this.csInterface && typeof this.csInterface.openURLInDefaultBrowser === 'function') {
+        this.csInterface.openURLInDefaultBrowser(url);
+        return;
+      }
+      if ((window as any).cep?.util?.openURLInDefaultBrowser) {
+        (window as any).cep.util.openURLInDefaultBrowser(url);
+        return;
+      }
+    } catch (e) {
+      console.warn('[PremiereHostBridge] Failed to open URL via CEP:', e);
+    }
+    try {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      console.error('[PremiereHostBridge] Failed to open URL in browser:', e);
+    }
+  }
+
   private async ensureCEPScriptLoaded(): Promise<void> {
     if (!this.csInterface || this.cepScriptLoaded) return;
     try {

@@ -283,6 +283,14 @@ $._prismex.addTimelineMarkers = function(markersJson) {
                     marker.setColorByIndex(0);
                 } else if (mData.color === "BLUE") {
                     marker.setColorByIndex(6);
+                } else if (mData.color === "PURPLE") {
+                    marker.setColorByIndex(2); // Magenta / Purple in Premiere
+                } else if (mData.color === "ORANGE") {
+                    marker.setColorByIndex(3); // Orange in Premiere
+                } else if (mData.color === "YELLOW") {
+                    marker.setColorByIndex(4); // Yellow in Premiere
+                } else if (mData.color === "CYAN") {
+                    marker.setColorByIndex(7); // Cyan in Premiere
                 }
                 count++;
             }

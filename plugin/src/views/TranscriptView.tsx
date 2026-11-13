@@ -36,7 +36,10 @@ import {
   X,
   AlignLeft,
   Eye,
-  Play
+  Play,
+  Image,
+  ExternalLink,
+  Globe
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 
@@ -222,27 +225,88 @@ export const TranscriptView: React.FC = () => {
     return groups;
   }, [words]);
 
+  const [floatingSelection, setFloatingSelection] = useState<{
+    text: string;
+    cleanQuery: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
   const wordMarkersMap = useMemo(() => {
-    const map: { [wordIdx: number]: { type: 'EMPHASIS' | 'BROLL' | 'ICON'; color: string; label: string; suggestion?: string; context?: string; brollQuery?: string; brollDescription?: string; iconSuggestion?: string; emphasisEffect?: string } } = {};
+    const map: { [wordIdx: number]: {
+      type: 'PNG' | 'BROLL' | 'ICON' | 'EMPHASIS' | string;
+      color: string;
+      label: string;
+      suggestion?: string;
+      context?: string;
+      cleanKeyword?: string;
+      pngQuery?: string;
+      googleImagesUrl?: string;
+      brollQuery?: string;
+      pexelsUrl?: string;
+      iconQuery?: string;
+      flaticonUrl?: string;
+      emphasisEffect?: string;
+    } } = {};
+
     for (const m of aiMarkersList) {
-      const mSec = m.startSeconds;
-      const wIdx = words.findIndex((w) => w.start <= mSec + 0.25 && w.end >= mSec - 0.25);
+      const mSec = m.startSeconds || 0;
+      const wIdx = words.findIndex((w) => w.start <= mSec + 0.35 && w.end >= mSec - 0.35);
       if (wIdx !== -1) {
+        let themeColor = '#10b981';
+        if (m.type === 'PNG') themeColor = '#a855f7';
+        else if (m.type === 'BROLL') themeColor = '#06b6d4';
+        else if (m.type === 'ICON') themeColor = '#f59e0b';
+        else if (m.type === 'EMPHASIS') themeColor = '#ef4444';
+
+        const cleanKw = m.cleanKeyword || m.name?.replace(/^(PNG|B-Roll|Icon|Emphasis):\s*/i, '') || words[wIdx].word;
+        const encodedKw = encodeURIComponent(cleanKw);
+
         map[wIdx] = {
           type: m.type,
-          color: m.color === 'RED' ? '#ef4444' : m.color === 'GREEN' ? '#10b981' : '#38bdf8',
+          color: themeColor,
           label: m.name,
           suggestion: m.suggestion || m.comment || m.name,
           context: m.context || '',
-          brollQuery: m.brollQuery || '',
-          brollDescription: m.brollDescription || '',
-          iconSuggestion: m.iconSuggestion || '',
+          cleanKeyword: cleanKw,
+          pngQuery: m.pngQuery || `${cleanKw} transparent png`,
+          googleImagesUrl: m.googleImagesUrl || `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(cleanKw + ' transparent png')}`,
+          brollQuery: m.brollQuery || `${cleanKw} footage`,
+          pexelsUrl: m.pexelsUrl || `https://www.pexels.com/search/videos/${encodedKw}/`,
+          iconQuery: m.iconQuery || `${cleanKw} icon png`,
+          flaticonUrl: m.flaticonUrl || `https://www.flaticon.com/search?word=${encodedKw}`,
           emphasisEffect: m.emphasisEffect || ''
         };
       }
     }
     return map;
   }, [aiMarkersList, words]);
+
+  const handleCheckTextSelection = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      setFloatingSelection(null);
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text || text.length === 0) {
+      setFloatingSelection(null);
+      return;
+    }
+    try {
+      const range = sel.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const clean = text.replace(/[\r\n\t]+/g, ' ').replace(/[^\w\s\u0980-\u09FF'-]/g, '').trim();
+      setFloatingSelection({
+        text,
+        cleanQuery: clean || text,
+        x: Math.max(10, Math.min(window.innerWidth - 380, rect.left + rect.width / 2 - 160)),
+        y: Math.max(10, rect.top - 46)
+      });
+    } catch {
+      setFloatingSelection(null);
+    }
+  }, []);
 
   const seekAndAutoPlay = useCallback((timeSec: number) => {
     hostBridge.setPlayheadPosition(timeSec);
@@ -253,6 +317,12 @@ export const TranscriptView: React.FC = () => {
   }, [autoPlayOnJump, hostBridge]);
 
   const handleWordClick = (idx: number, e: React.MouseEvent) => {
+    const winSel = window.getSelection();
+    if (winSel && winSel.toString().trim().length > 1) {
+      handleCheckTextSelection();
+      return;
+    }
+
     const token = words[idx];
     if (!token) return;
     seekAndAutoPlay(token.start);
@@ -741,19 +811,26 @@ export const TranscriptView: React.FC = () => {
     }
   };
 
-  const handleAnalyzeMarkers = async () => {
+  const handleAnalyzeMarkers = useCallback(async () => {
+    if (transcriptWords.length === 0) return;
     setIsProcessingCreative(true);
-    setCreativeStatus('Analyzing Emphasis, B-Roll, & Icon triggers...');
+    setCreativeStatus('Analyzing PNG cutouts, B-Roll, & Visual cues...');
     try {
       const res = await client.aiMarkers(transcriptWords);
       if (res && res.markers) {
         setAiMarkersList(res.markers);
-        setCreativeStatus(`Identified ${res.markers.length} visual cues!`);
+        setCreativeStatus(`Identified ${res.markers.length} visual cues (PNG, B-Roll, Icons)!`);
       }
     } finally {
       setIsProcessingCreative(false);
     }
-  };
+  }, [transcriptWords, client]);
+
+  useEffect(() => {
+    if (transcriptWords.length > 0 && aiMarkersList.length === 0) {
+      handleAnalyzeMarkers();
+    }
+  }, [transcriptWords.length, aiMarkersList.length, handleAnalyzeMarkers]);
 
   const handleSendMarkersToPremiere = async () => {
     if (aiMarkersList.length === 0) return;
@@ -2279,7 +2356,52 @@ export const TranscriptView: React.FC = () => {
         </div>
       ) : (
         /* Paragraph Transcript Body (Premiere Pro Text Panel Style - Clean & Natural) */
-        <div className="card" style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px', minHeight: 0 }}>
+          {/* Subtle Visual Cues Legend Bar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '4px 8px',
+            backgroundColor: 'rgba(255, 255, 255, 0.02)',
+            borderRadius: '4px',
+            border: '1px solid var(--border-subtle)',
+            fontSize: '10px',
+            flexWrap: 'wrap',
+            gap: '6px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>
+                {language === 'bn' ? 'ভিজ্যুয়াল কিউ নির্দেশিকা:' : 'Visual Cues Guide:'}
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#c084fc' }} title="পার্পল কালার: ছবি, কাটআউট, লোগো ও ডিভাইস পিকচার">
+                <span style={{ width: '8px', height: '8px', backgroundColor: '#a855f7', borderRadius: '2px' }}></span>
+                🖼️ PNG / ছবি
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#67e8f9' }} title="সায়ান কালার: সিনেম্যাটিক ফুটেজ ও ভিডিও কাটঅ্যাওয়ে">
+                <span style={{ width: '8px', height: '8px', backgroundColor: '#06b6d4', borderRadius: '2px' }}></span>
+                🎥 B-Roll ভিডিও
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#fbbf24' }} title="অরেঞ্জ কালার: ইউআই আইকন, বেল ও বাটন">
+                <span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '2px' }}></span>
+                🎨 আইকন
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#f87171' }} title="রেড কালার: পাঞ্চ জুম ও কি-ওয়ার্ড">
+                <span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '2px' }}></span>
+                ⚡ পাঞ্চ / কি-ওয়ার্ড
+              </span>
+            </div>
+            <span style={{ color: 'var(--text-muted)', fontSize: '9.5px' }}>
+              {language === 'bn' ? '💡 টেক্সট সিলেক্ট করলেই ড্র্যাগ টুলবার এবং ক্লিকে ডাইরেক্ট সার্চ ওপেন হবে' : '💡 Drag text to search PNG/Videos or 1-click word'}
+            </span>
+          </div>
+
+          <div
+            className="card"
+            onMouseUp={handleCheckTextSelection}
+            onKeyUp={handleCheckTextSelection}
+            style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', userSelect: 'text' }}
+          >
           {paragraphs.map((para) => {
             const paraEnd = para.tokens[para.tokens.length - 1]?.end || para.startTime;
             const matchingTake = repeatedTakes.find(
@@ -2481,61 +2603,199 @@ export const TranscriptView: React.FC = () => {
                   </div>
                 </div>
               ) : (
-                <div style={{ flex: 1, lineHeight: 1.85 }}>
+                <div style={{ flex: 1, lineHeight: 1.85, userSelect: 'text' }}>
                   {para.tokens.map((item) => {
                     if (filterMode === 'FILLERS' && !item.isFiller) return null;
                     const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
                     const isSelected = hasSelection && item.globalIdx >= minSel && item.globalIdx <= maxSel;
                     const isPlayingWord = playheadSec > 0 && playheadSec >= item.start && playheadSec <= item.end;
                     const markerInfo = wordMarkersMap[item.globalIdx];
+                    const isPng = markerInfo?.type === 'PNG';
                     const isBroll = markerInfo?.type === 'BROLL';
                     const isEmphasis = markerInfo?.type === 'EMPHASIS';
                     const isIcon = markerInfo?.type === 'ICON';
 
+                    let wordBg = 'transparent';
+                    let wordColor = 'var(--text-primary)';
+                    let wordBorder = '1px solid transparent';
+                    let wordBorderBottom: string | undefined = undefined;
+
+                    if (isPlayingWord) {
+                      wordBg = 'rgba(16, 185, 129, 0.38)';
+                      wordColor = '#fff';
+                      wordBorder = '1px solid #34d399';
+                    } else if (isSelected) {
+                      wordBg = 'rgba(59, 130, 246, 0.45)';
+                      wordBorder = '1px solid #60a5fa';
+                    } else if (matches) {
+                      wordBg = '#3b82f6';
+                    } else if (item.isFiller) {
+                      wordBg = 'rgba(250, 204, 21, 0.25)';
+                      wordColor = '#facc15';
+                      wordBorder = '1px dashed rgba(250, 204, 21, 0.4)';
+                    } else if (isPng) {
+                      wordBg = 'rgba(168, 85, 247, 0.18)';
+                      wordColor = '#f3e8ff';
+                      wordBorderBottom = '2.5px solid #a855f7';
+                    } else if (isBroll) {
+                      wordBg = 'rgba(6, 182, 212, 0.18)';
+                      wordColor = '#cffafe';
+                      wordBorderBottom = '2.5px solid #06b6d4';
+                    } else if (isIcon) {
+                      wordBg = 'rgba(245, 158, 11, 0.18)';
+                      wordColor = '#fef3c7';
+                      wordBorderBottom = '2.5px solid #f59e0b';
+                    } else if (isEmphasis) {
+                      wordBg = 'rgba(239, 68, 68, 0.18)';
+                      wordColor = '#fee2e2';
+                      wordBorderBottom = '2.5px solid #ef4444';
+                    }
+
                     return (
-                      <span
-                        key={item.id}
-                        onClick={(e) => handleWordClick(item.globalIdx, e)}
-                        title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + markerInfo.label + ']' : ''} (ক্লিক করুন AI অ্যাকশনের জন্য, Shift+Click সিলেক্ট)`}
-                        style={{
-                          display: 'inline-block',
-                          margin: '1px 2px',
-                          padding: '1px 4px',
-                          borderRadius: '3px',
-                          cursor: 'pointer',
-                          backgroundColor: isPlayingWord
-                            ? 'rgba(16, 185, 129, 0.38)'
-                            : isSelected
-                            ? 'rgba(59, 130, 246, 0.45)'
-                            : matches
-                            ? '#3b82f6'
-                            : item.isFiller
-                            ? 'rgba(250, 204, 21, 0.25)'
-                            : 'transparent',
-                          color: isPlayingWord
-                            ? '#fff'
-                            : item.isFiller
-                            ? '#facc15'
-                            : 'var(--text-primary)',
-                          border: isPlayingWord
-                            ? '1px solid #34d399'
-                            : isSelected
-                            ? '1px solid #60a5fa'
-                            : item.isFiller
-                            ? '1px dashed rgba(250, 204, 21, 0.4)'
-                            : '1px solid transparent',
-                          borderBottom: isBroll
-                            ? '2px solid #10b981'
-                            : isEmphasis
-                            ? '2px solid #ef4444'
-                            : isIcon
-                            ? '2px solid #38bdf8'
-                            : undefined,
-                          textDecoration: isPlayingWord ? 'underline' : 'none',
-                          fontSize: '12px'
-                        }}
-                      >
-                        {item.word}
+                      <span key={item.id} style={{ display: 'inline-flex', alignItems: 'center', margin: '1px 2px' }}>
+                        <span
+                          onClick={(e) => handleWordClick(item.globalIdx, e)}
+                          title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + (markerInfo.suggestion || markerInfo.label) + ']' : ''} (ক্লিক করুন AI অ্যাকশনের জন্য, Shift+Click সিলেক্ট)`}
+                          style={{
+                            display: 'inline-block',
+                            padding: '1px 4px',
+                            borderRadius: '3px',
+                            cursor: 'pointer',
+                            backgroundColor: wordBg,
+                            color: wordColor,
+                            border: wordBorder,
+                            borderBottom: wordBorderBottom,
+                            textDecoration: isPlayingWord ? 'underline' : 'none',
+                            fontSize: '12px',
+                            fontWeight: (isPng || isBroll || isEmphasis || isIcon) ? 600 : 400
+                          }}
+                        >
+                          {item.word}
+                        </span>
+
+                        {isPng && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPopoverWord({
+                                wordIdx: item.globalIdx,
+                                word: item.word,
+                                start: item.start,
+                                end: item.end,
+                                x: e.clientX,
+                                y: e.clientY
+                              });
+                            }}
+                            title={`🖼️ PNG / ছবি সাজেশন: ${markerInfo?.suggestion} (ক্লিক করে Google Images ও মার্কার অ্যাকশন দেখুন)`}
+                            style={{
+                              fontSize: '8.5px',
+                              fontWeight: 700,
+                              padding: '1px 4px',
+                              backgroundColor: '#9333ea',
+                              color: '#ffffff',
+                              borderRadius: '3px',
+                              marginLeft: '2px',
+                              cursor: 'pointer',
+                              userSelect: 'none',
+                              verticalAlign: 'middle'
+                            }}
+                          >
+                            🖼️ PNG
+                          </span>
+                        )}
+
+                        {isBroll && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPopoverWord({
+                                wordIdx: item.globalIdx,
+                                word: item.word,
+                                start: item.start,
+                                end: item.end,
+                                x: e.clientX,
+                                y: e.clientY
+                              });
+                            }}
+                            title={`🎥 B-Roll ভিডিও সাজেশন: ${markerInfo?.suggestion} (ক্লিক করে Pexels ভিডিও অ্যাকশন দেখুন)`}
+                            style={{
+                              fontSize: '8.5px',
+                              fontWeight: 700,
+                              padding: '1px 4px',
+                              backgroundColor: '#0891b2',
+                              color: '#ffffff',
+                              borderRadius: '3px',
+                              marginLeft: '2px',
+                              cursor: 'pointer',
+                              userSelect: 'none',
+                              verticalAlign: 'middle'
+                            }}
+                          >
+                            🎥 B-Roll
+                          </span>
+                        )}
+
+                        {isIcon && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPopoverWord({
+                                wordIdx: item.globalIdx,
+                                word: item.word,
+                                start: item.start,
+                                end: item.end,
+                                x: e.clientX,
+                                y: e.clientY
+                              });
+                            }}
+                            title={`🎨 আইকন সাজেশন: ${markerInfo?.suggestion}`}
+                            style={{
+                              fontSize: '8.5px',
+                              fontWeight: 700,
+                              padding: '1px 4px',
+                              backgroundColor: '#d97706',
+                              color: '#ffffff',
+                              borderRadius: '3px',
+                              marginLeft: '2px',
+                              cursor: 'pointer',
+                              userSelect: 'none',
+                              verticalAlign: 'middle'
+                            }}
+                          >
+                            🎨 Icon
+                          </span>
+                        )}
+
+                        {isEmphasis && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setPopoverWord({
+                                wordIdx: item.globalIdx,
+                                word: item.word,
+                                start: item.start,
+                                end: item.end,
+                                x: e.clientX,
+                                y: e.clientY
+                              });
+                            }}
+                            title="⚡ পাঞ্চ জুম (১১৪%)"
+                            style={{
+                              fontSize: '8.5px',
+                              fontWeight: 700,
+                              padding: '1px 4px',
+                              backgroundColor: '#dc2626',
+                              color: '#ffffff',
+                              borderRadius: '3px',
+                              marginLeft: '2px',
+                              cursor: 'pointer',
+                              userSelect: 'none',
+                              verticalAlign: 'middle'
+                            }}
+                          >
+                            ⚡ পাঞ্চ
+                          </span>
+                        )}
                       </span>
                     );
                   })}
@@ -2545,6 +2805,7 @@ export const TranscriptView: React.FC = () => {
             );
           })}
         </div>
+      </div>
       )}
 
       {/* ===================== FLOATING WORD-LEVEL AI POPOVER ===================== */}
@@ -2552,40 +2813,75 @@ export const TranscriptView: React.FC = () => {
         <div
           style={{
             position: 'fixed',
-            top: `${Math.max(10, popoverWord.y - 42)}px`,
-            left: `${Math.min(window.innerWidth - 320, Math.max(10, popoverWord.x - 140))}px`,
+            top: `${Math.max(10, popoverWord.y - 44)}px`,
+            left: `${Math.min(window.innerWidth - 380, Math.max(10, popoverWord.x - 160))}px`,
             zIndex: 9999,
             backgroundColor: '#18181b',
             border: '1px solid rgba(255,255,255,0.25)',
             borderRadius: '6px',
             padding: '4px 6px',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.7)',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.85)',
             display: 'flex',
             alignItems: 'center',
             gap: '4px',
             fontFamily: 'inherit'
           }}
         >
+          {/* 🖼️ Google Images PNG */}
           <button
-            onClick={() => handleOpenBrollForWord(popoverWord)}
+            onClick={() => {
+              const activeMarker = wordMarkersMap[popoverWord.wordIdx];
+              const q = activeMarker?.pngQuery || `${popoverWord.word.replace(/[^\w\s\u0980-\u09FF'-]/g, '')} transparent png`;
+              const url = activeMarker?.googleImagesUrl || `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(q)}`;
+              hostBridge.openURLInDefaultBrowser(url);
+              setPopoverWord(null);
+            }}
             style={{
               padding: '3px 7px',
               fontSize: '10px',
-              backgroundColor: 'rgba(16, 185, 129, 0.2)',
-              color: '#34d399',
-              border: '1px solid rgba(16, 185, 129, 0.4)',
+              backgroundColor: 'rgba(168, 85, 247, 0.2)',
+              color: '#d8b4fe',
+              border: '1px solid rgba(168, 85, 247, 0.45)',
               borderRadius: '3px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '3px'
             }}
-            title="B-Roll ফুটেজ খুঁজুন ও V2 ট্র্যাকে বসান"
+            title="গুগল ইমেজ সার্চে এই শব্দের পিএনজি / ছবি সরাসরি ব্রাউজারে খুঁজুন"
           >
-            <Video size={10} />
-            <span>+ B-Roll</span>
+            <Image size={10} />
+            <span>+ PNG ছবি</span>
           </button>
 
+          {/* 🎥 Pexels Video */}
+          <button
+            onClick={() => {
+              const activeMarker = wordMarkersMap[popoverWord.wordIdx];
+              const cleanWord = popoverWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF]/g, '').trim();
+              const url = activeMarker?.pexelsUrl || `https://www.pexels.com/search/videos/${encodeURIComponent(cleanWord || 'cinematic')}/`;
+              hostBridge.openURLInDefaultBrowser(url);
+              handleOpenBrollForWord(popoverWord);
+            }}
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(6, 182, 212, 0.2)',
+              color: '#67e8f9',
+              border: '1px solid rgba(6, 182, 212, 0.45)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title="Pexels.com ভিডিও সার্চ ওপেন করুন ও B-Roll খুঁজুন"
+          >
+            <Video size={10} />
+            <span>+ B-Roll (Pexels)</span>
+          </button>
+
+          {/* ⚡ Punch Zoom */}
           <button
             onClick={() => handleAddPunchForWord(popoverWord)}
             style={{
@@ -2603,17 +2899,18 @@ export const TranscriptView: React.FC = () => {
             title="পাঞ্চ কি-ওয়ার্ড মার্ক করুন এবং ১১৪% জুম প্রয়োগ করুন"
           >
             <Zap size={10} />
-            <span>+ Punch (১১৪%)</span>
+            <span>+ Punch</span>
           </button>
 
+          {/* 🎨 Icon */}
           <button
             onClick={() => handleAddIconForWord(popoverWord)}
             style={{
               padding: '3px 7px',
               fontSize: '10px',
-              backgroundColor: 'rgba(56, 189, 248, 0.2)',
-              color: '#38bdf8',
-              border: '1px solid rgba(56, 189, 248, 0.4)',
+              backgroundColor: 'rgba(245, 158, 11, 0.2)',
+              color: '#fbbf24',
+              border: '1px solid rgba(245, 158, 11, 0.4)',
               borderRadius: '3px',
               cursor: 'pointer',
               display: 'flex',
@@ -2626,6 +2923,32 @@ export const TranscriptView: React.FC = () => {
             <span>+ Icon</span>
           </button>
 
+          {/* 📋 Copy Word */}
+          <button
+            onClick={() => {
+              const cleanWord = popoverWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF]/g, '').trim();
+              navigator.clipboard.writeText(cleanWord);
+              setCreativeStatus(`"${cleanWord}" কপি হয়েছে!`);
+              setTimeout(() => setCreativeStatus(null), 2500);
+            }}
+            style={{
+              padding: '3px 6px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(255,255,255,0.06)',
+              color: '#fff',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title="শব্দটি কপি করুন"
+          >
+            <Copy size={10} />
+          </button>
+
+          {/* ✂️ Cut Word */}
           <button
             onClick={() => {
               deleteTranscriptRange(popoverWord.start, popoverWord.end);
@@ -2645,6 +2968,7 @@ export const TranscriptView: React.FC = () => {
             <Scissors size={10} />
           </button>
 
+          {/* Close */}
           <button
             onClick={() => setPopoverWord(null)}
             style={{
@@ -2657,6 +2981,201 @@ export const TranscriptView: React.FC = () => {
             }}
           >
             ✕
+          </button>
+        </div>
+      )}
+
+      {/* ===================== FLOATING TEXT DRAG SELECTION TOOLBAR ===================== */}
+      {floatingSelection && (
+        <div
+          style={{
+            position: 'fixed',
+            top: `${floatingSelection.y}px`,
+            left: `${floatingSelection.x}px`,
+            zIndex: 10000,
+            backgroundColor: '#18181b',
+            border: '1px solid rgba(255,255,255,0.28)',
+            borderRadius: '6px',
+            padding: '4px 7px',
+            boxShadow: '0 8px 28px rgba(0,0,0,0.9)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontFamily: 'inherit'
+          }}
+        >
+          {/* 📋 Copy */}
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(floatingSelection.text);
+              setExportStatus(`"${floatingSelection.text.slice(0, 25)}..." কপি হয়েছে!`);
+              setTimeout(() => setExportStatus(null), 2500);
+            }}
+            title="সিলেক্টেড টেক্সট কপি করুন"
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              color: '#ffffff',
+              border: '1px solid rgba(255, 255, 255, 0.18)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              fontWeight: 600
+            }}
+          >
+            <Copy size={10} />
+            <span>কপি</span>
+          </button>
+
+          {/* 🖼️ Google Images (PNG) */}
+          <button
+            onClick={() => {
+              const url = `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(floatingSelection.cleanQuery + ' transparent png')}`;
+              hostBridge.openURLInDefaultBrowser(url);
+            }}
+            title="সিলেক্টেড অংশের পিএনজি / ছবি সরাসরি গুগল ইমেজে খুঁজুন"
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(168, 85, 247, 0.25)',
+              color: '#d8b4fe',
+              border: '1px solid rgba(168, 85, 247, 0.5)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              fontWeight: 600
+            }}
+          >
+            <Image size={10} />
+            <span>গুগল ইমেজ (PNG)</span>
+          </button>
+
+          {/* 🎥 Pexels Video Search */}
+          <button
+            onClick={() => {
+              const url = `https://www.pexels.com/search/videos/${encodeURIComponent(floatingSelection.cleanQuery)}/`;
+              hostBridge.openURLInDefaultBrowser(url);
+            }}
+            title="সিলেক্টেড বিষয়ের বি-রোল ফুটেজ Pexels.com-এ খুঁজুন"
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(6, 182, 212, 0.25)',
+              color: '#67e8f9',
+              border: '1px solid rgba(6, 182, 212, 0.5)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              fontWeight: 600
+            }}
+          >
+            <Video size={10} />
+            <span>Pexels ভিডিও</span>
+          </button>
+
+          {/* 🔍 Google Web Search */}
+          <button
+            onClick={() => {
+              const url = `https://www.google.com/search?q=${encodeURIComponent(floatingSelection.cleanQuery)}`;
+              hostBridge.openURLInDefaultBrowser(url);
+            }}
+            title="গুগল সার্চ"
+            style={{
+              padding: '3px 6px',
+              fontSize: '10px',
+              backgroundColor: 'rgba(255, 255, 255, 0.05)',
+              color: 'var(--text-muted)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '2px'
+            }}
+          >
+            <Search size={10} />
+            <span>গুগল</span>
+          </button>
+
+          {/* 📍 Add Purple PNG Marker */}
+          <button
+            onClick={async () => {
+              await hostBridge.addTimelineMarkers([{
+                type: 'PNG' as any,
+                name: `PNG: ${floatingSelection.cleanQuery.slice(0, 20)}`,
+                comment: `Overlay PNG picture for '${floatingSelection.cleanQuery}'`,
+                startSeconds: playheadSec,
+                durationSeconds: 2.0,
+                color: 'PURPLE' as any
+              }]);
+              setCreativeStatus(`টাইমলাইনে পার্পল PNG মার্কার যুক্ত হয়েছে!`);
+              setFloatingSelection(null);
+              setTimeout(() => setCreativeStatus(null), 2500);
+            }}
+            title="টাইমলাইনে পার্পল কালার পিএনজি মার্কার দিন"
+            style={{
+              padding: '3px 6px',
+              fontSize: '9.5px',
+              backgroundColor: 'rgba(168, 85, 247, 0.18)',
+              color: '#c084fc',
+              border: '1px solid rgba(168, 85, 247, 0.35)',
+              borderRadius: '3px',
+              cursor: 'pointer'
+            }}
+          >
+            +PNG মার্কার
+          </button>
+
+          {/* 📍 Add Cyan B-Roll Marker */}
+          <button
+            onClick={async () => {
+              await hostBridge.addTimelineMarkers([{
+                type: 'BROLL' as any,
+                name: `B-Roll: ${floatingSelection.cleanQuery.slice(0, 20)}`,
+                comment: `Overlay B-Roll footage for '${floatingSelection.cleanQuery}'`,
+                startSeconds: playheadSec,
+                durationSeconds: 2.5,
+                color: 'CYAN' as any
+              }]);
+              setCreativeStatus(`টাইমলাইনে সায়ান B-Roll মার্কার যুক্ত হয়েছে!`);
+              setFloatingSelection(null);
+              setTimeout(() => setCreativeStatus(null), 2500);
+            }}
+            title="টাইমলাইনে সায়ান কালার বি-রোল মার্কার দিন"
+            style={{
+              padding: '3px 6px',
+              fontSize: '9.5px',
+              backgroundColor: 'rgba(6, 182, 212, 0.18)',
+              color: '#22d3ee',
+              border: '1px solid rgba(6, 182, 212, 0.35)',
+              borderRadius: '3px',
+              cursor: 'pointer'
+            }}
+          >
+            +B-Roll মার্কার
+          </button>
+
+          {/* Close */}
+          <button
+            onClick={() => setFloatingSelection(null)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: '2px',
+              display: 'flex',
+              alignItems: 'center'
+            }}
+          >
+            <X size={11} />
           </button>
         </div>
       )}
