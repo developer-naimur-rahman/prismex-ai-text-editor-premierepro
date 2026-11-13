@@ -299,6 +299,40 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async getProjectCache(projectId: string, sequenceName: string): Promise<any | null> {
+    try {
+      const p = encodeURIComponent(projectId || 'default_project');
+      const s = encodeURIComponent(sequenceName || 'sequence');
+      const resp = await fetch(`${this.baseUrl}/api/v1/cache/project?project_id=${p}&sequence_name=${s}`);
+      if (resp.ok) {
+        const json = await resp.json();
+        if (json.found && json.data) {
+          return json.data;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async saveProjectCache(projectId: string, sequenceName: string, data: any): Promise<boolean> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/cache/project`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: projectId || 'default_project',
+          sequenceName: sequenceName || 'sequence',
+          data
+        })
+      });
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  }
+
   public connectWebSocket(onEvent: (event: any) => void): () => void {
     this.eventListeners.push(onEvent);
 

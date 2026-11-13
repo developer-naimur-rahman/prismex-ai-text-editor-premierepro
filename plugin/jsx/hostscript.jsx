@@ -85,10 +85,14 @@ $._prismex.getActiveSequenceManifest = function() {
             }
         } catch (e) {}
 
+        var cleanSeqName = seqName.replace(/(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+/g, "");
+
         return JSON.stringify({
             premiereProjectId: app.project.documentID || "current_project",
+            projectPath: app.project.path || "",
             sequenceGuid: seqId,
             sequenceName: seqName,
+            cleanSequenceName: cleanSeqName,
             fps: fps,
             sampleRate: 48000,
             durationSeconds: durationSeconds,
@@ -592,5 +596,50 @@ $._prismex.saveProjectFiles = function(baseFilename, srtContent, txtContent, jso
         });
     } catch (err) {
         return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+$._prismex.saveProjectCache = function(cacheKey, jsonString) {
+    try {
+        var folderPath = $._prismex.getProjectFolderPath();
+        var cacheDir = new Folder(folderPath + "/.prismex_cache");
+        if (!cacheDir.exists) cacheDir.create();
+
+        var safeKey = cacheKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+        var cacheFile = new File(cacheDir.fsName + "/" + safeKey + ".json");
+        cacheFile.encoding = "UTF-8";
+        if (cacheFile.open("w")) {
+            cacheFile.write(jsonString);
+            cacheFile.close();
+            return JSON.stringify({ success: true, path: cacheFile.fsName });
+        }
+        return JSON.stringify({ success: false, error: "Failed to open file for writing" });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+};
+
+$._prismex.loadProjectCache = function(cacheKey) {
+    try {
+        var folderPath = $._prismex.getProjectFolderPath();
+        var safeKey = cacheKey.replace(/[^a-zA-Z0-9_-]/g, "_");
+        var cacheFile = new File(folderPath + "/.prismex_cache/" + safeKey + ".json");
+        if (!cacheFile.exists) {
+            // Also try user data directory fallback
+            var userCache = new File(Folder.userData.fsName + "/PrismexCache/" + safeKey + ".json");
+            if (userCache.exists) cacheFile = userCache;
+        }
+
+        if (cacheFile.exists) {
+            cacheFile.encoding = "UTF-8";
+            if (cacheFile.open("r")) {
+                var content = cacheFile.read();
+                cacheFile.close();
+                return JSON.stringify({ found: true, content: content });
+            }
+        }
+        return JSON.stringify({ found: false });
+    } catch (e) {
+        return JSON.stringify({ found: false, error: String(e) });
     }
 };

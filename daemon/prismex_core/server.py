@@ -318,6 +318,24 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
         })
 
         # Broadcast completion
+        # Save to persistent daemon project cache
+        try:
+            clean_seq_name = re.sub(r"(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+", "", req.sequenceGuid).strip()
+            safe_proj = re.sub(r"[^\w_-]", "_", req.premiereProjectId or "current_project")
+            safe_seq = re.sub(r"[^\w_-]", "_", clean_seq_name or "sequence")
+            cache_file = PROJECT_CACHE_DIR / f"{safe_proj}__{safe_seq}.json"
+            with open(cache_file, "w", encoding="utf-8") as cf:
+                json.dump({
+                    "words": transcript_data.get("words", []),
+                    "sentences": transcript_data.get("sentences", []),
+                    "silences": silence_cuts,
+                    "reviewItems": all_suggestions,
+                    "totalCuts": len(cuts),
+                    "summary": summary_report,
+                }, cf, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.completed",
@@ -463,6 +481,44 @@ def ai_markers(req: MarkerAnalysisRequest):
 def format_ae_typography(req: TypographyRequest):
     """Formats text into multi-line kinetic typography layout with ready-to-paste AE ExtendScript."""
     return CreativeAI.format_after_effects_typography(req.text)
+
+PROJECT_CACHE_DIR = Path.home() / ".prismex" / "project_cache"
+PROJECT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+class ProjectCachePayload(BaseModel):
+    projectId: str
+    sequenceName: str
+    data: Dict[str, Any]
+
+def _get_safe_cache_key(project_id: str, sequence_name: str) -> str:
+    clean_seq = re.sub(r"(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+", "", sequence_name).strip()
+    safe_proj = re.sub(r"[^\w_-]", "_", project_id or "default_project")
+    safe_seq = re.sub(r"[^\w_-]", "_", clean_seq or "default_seq")
+    return f"{safe_proj}__{safe_seq}"
+
+@app.get("/api/v1/cache/project")
+def get_project_cache(project_id: str = "current_project", sequence_name: str = "Sequence"):
+    key = _get_safe_cache_key(project_id, sequence_name)
+    file_path = PROJECT_CACHE_DIR / f"{key}.json"
+    if not file_path.exists():
+        return {"found": False, "key": key}
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {"found": True, "key": key, "data": data}
+    except Exception as e:
+        return {"found": False, "error": str(e)}
+
+@app.post("/api/v1/cache/project")
+def save_project_cache(payload: ProjectCachePayload):
+    key = _get_safe_cache_key(payload.projectId, payload.sequenceName)
+    file_path = PROJECT_CACHE_DIR / f"{key}.json"
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(payload.data, f, ensure_ascii=False, indent=2)
+        return {"saved": True, "key": key}
+    except Exception as e:
+        return {"saved": False, "error": str(e)}
 
 # ----------------- WebSocket Endpoint -----------------
 

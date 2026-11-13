@@ -97,6 +97,138 @@ const client = PrismexDaemonClient.getInstance();
 const hostBridge = PremiereHostBridge.getInstance();
 const timelineEngine = new TimelineEditingEngine();
 
+export function getCleanSequenceKey(seqName?: string): string {
+  if (!seqName) return 'default_sequence';
+  return seqName.replace(/(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+/g, '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+export function rippleShiftWords(words: any[], cuts: { startSeconds: number; endSeconds: number; durationSeconds?: number }[]): any[] {
+  if (!cuts || cuts.length === 0) return words;
+  const sortedCuts = [...cuts].sort((a, b) => a.startSeconds - b.startSeconds);
+
+  return words
+    .filter((w) => {
+      const ws = w.start_seconds ?? w.start ?? 0;
+      const we = w.end_seconds ?? w.end ?? 0;
+      return !sortedCuts.some((c) => ws >= c.startSeconds - 0.03 && we <= c.endSeconds + 0.03);
+    })
+    .map((w) => {
+      let ws = w.start_seconds ?? w.start ?? 0;
+      let we = w.end_seconds ?? w.end ?? 0;
+      for (const c of sortedCuts) {
+        const dur = c.durationSeconds ?? (c.endSeconds - c.startSeconds);
+        if (ws >= c.endSeconds - 0.02) {
+          ws = Math.max(0, ws - dur);
+          we = Math.max(0, we - dur);
+        }
+      }
+      return {
+        ...w,
+        start_seconds: Number(ws.toFixed(4)),
+        end_seconds: Number(we.toFixed(4)),
+        start: Number(ws.toFixed(4)),
+        end: Number(we.toFixed(4))
+      };
+    });
+}
+
+export async function persistProjectData(
+  manifest: any,
+  data: { words: any[]; sentences?: any[]; silences?: any[]; reviewItems?: any[] }
+) {
+  if (!manifest) return;
+  const cleanKey = getCleanSequenceKey(manifest.cleanSequenceName || manifest.sequenceName);
+  const projId = manifest.premiereProjectId || 'current_project';
+  const jsonStr = JSON.stringify(data);
+
+  // 1. ExtendScript Project Folder Cache (.prismex_cache/<key>.json)
+  try {
+    await hostBridge.saveProjectCache(cleanKey, jsonStr);
+  } catch {}
+
+  // 2. Local Daemon Persistent Storage (~/.prismex/project_cache)
+  try {
+    await client.saveProjectCache(projId, cleanKey, data);
+  } catch {}
+
+  // 3. Browser / CEP LocalStorage fallback
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`prismex_proj_${cleanKey}`, jsonStr);
+    } catch {}
+  }
+}
+
+export async function loadPersistedProjectData(manifest: any): Promise<boolean> {
+  if (!manifest) return false;
+  const cleanKey = getCleanSequenceKey(manifest.cleanSequenceName || manifest.sequenceName);
+  const projId = manifest.premiereProjectId || 'current_project';
+
+  // Tier 1: Check ExtendScript Project Folder Cache
+  try {
+    const extRes = await hostBridge.loadProjectCache(cleanKey);
+    if (extRes.found && extRes.content) {
+      const parsed = JSON.parse(extRes.content);
+      if (parsed.words && parsed.words.length > 0) {
+        usePrismexStore.setState({
+          transcriptWords: parsed.words,
+          transcriptSentences: parsed.sentences || [],
+          detectedSilences: parsed.silences || [],
+          reviewItems: parsed.reviewItems || [],
+          jobStatus: 'COMPLETE',
+          jobProgress: 100,
+          jobMessage: 'Loaded from project cache'
+        });
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn('ExtendScript cache load error:', e);
+  }
+
+  // Tier 2: Check Local Daemon Persistent Cache
+  try {
+    const daemonData = await client.getProjectCache(projId, cleanKey);
+    if (daemonData && daemonData.words && daemonData.words.length > 0) {
+      usePrismexStore.setState({
+        transcriptWords: daemonData.words,
+        transcriptSentences: daemonData.sentences || [],
+        detectedSilences: daemonData.silences || [],
+        reviewItems: daemonData.reviewItems || [],
+        jobStatus: 'COMPLETE',
+        jobProgress: 100,
+        jobMessage: 'Loaded from daemon project cache'
+      });
+      return true;
+    }
+  } catch (e) {
+    console.warn('Daemon cache load error:', e);
+  }
+
+  // Tier 3: Check LocalStorage
+  if (typeof window !== 'undefined') {
+    try {
+      const localStr = localStorage.getItem(`prismex_proj_${cleanKey}`);
+      if (localStr) {
+        const parsed = JSON.parse(localStr);
+        if (parsed.words && parsed.words.length > 0) {
+          usePrismexStore.setState({
+            transcriptWords: parsed.words,
+            transcriptSentences: parsed.sentences || [],
+            detectedSilences: parsed.silences || [],
+            reviewItems: parsed.reviewItems || [],
+            jobStatus: 'COMPLETE',
+            jobProgress: 100
+          });
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  return false;
+}
+
 export const usePrismexStore = create<PrismexState>((set, get) => ({
   activeTab: 'transcript',
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -113,20 +245,8 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   refreshSequence: async () => {
     const manifest = await hostBridge.getActiveSequenceManifest();
     set({ sequenceManifest: manifest });
-    if (manifest?.sequenceGuid && get().transcriptWords.length === 0 && typeof window !== 'undefined') {
-      try {
-        const cached = localStorage.getItem(`prismex_tx_${manifest.sequenceGuid}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed.words && parsed.words.length > 0) {
-            set({
-              transcriptWords: parsed.words,
-              transcriptSentences: parsed.sentences || [],
-              detectedSilences: parsed.silences || []
-            });
-          }
-        }
-      } catch {}
+    if (manifest && get().transcriptWords.length === 0) {
+      await loadPersistedProjectData(manifest);
     }
   },
 
@@ -146,17 +266,14 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   detectedSilences: [],
   setTranscriptWords: (words) => {
     set({ transcriptWords: words });
-    if (typeof window !== 'undefined') {
-      try {
-        const seq = get().sequenceManifest;
-        if (seq?.sequenceGuid) {
-          localStorage.setItem(`prismex_tx_${seq.sequenceGuid}`, JSON.stringify({
-            words,
-            sentences: get().transcriptSentences,
-            silences: get().detectedSilences
-          }));
-        }
-      } catch {}
+    const seq = get().sequenceManifest;
+    if (seq) {
+      persistProjectData(seq, {
+        words,
+        sentences: get().transcriptSentences,
+        silences: get().detectedSilences,
+        reviewItems: get().reviewItems
+      });
     }
   },
   setReviewItems: (items) => set({ reviewItems: items }),
@@ -202,9 +319,12 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     const health = await client.checkHealth();
     set({ daemonOnline: health !== null });
 
-    // 2. Load sequence
+    // 2. Load sequence and attempt instant restoration from project cache
     const manifest = await hostBridge.getActiveSequenceManifest();
     set({ sequenceManifest: manifest });
+    if (manifest) {
+      await loadPersistedProjectData(manifest);
+    }
 
     // 3. Load profiles & providers
     const [profiles, providers] = await Promise.all([
@@ -232,17 +352,14 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           detectedSilences: silences || []
         });
 
-        if (typeof window !== 'undefined') {
-          try {
-            const seq = get().sequenceManifest;
-            if (seq?.sequenceGuid) {
-              localStorage.setItem(`prismex_tx_${seq.sequenceGuid}`, JSON.stringify({
-                words: words || [],
-                sentences: sentences || [],
-                silences: silences || []
-              }));
-            }
-          } catch {}
+        const seq = get().sequenceManifest;
+        if (seq) {
+          persistProjectData(seq, {
+            words: words || [],
+            sentences: sentences || [],
+            silences: silences || [],
+            reviewItems: get().reviewItems
+          });
         }
 
         if (executionMode === 'TRANSCRIBE_ONLY') {
@@ -350,7 +467,17 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     await hostBridge.cloneActiveSequence('_SilenceCut');
     const execResult = await timelineEngine.executeCuts(cuts);
     if (execResult.success) {
-      set({ detectedSilences: [] });
+      const remainingWords = rippleShiftWords(get().transcriptWords, cuts);
+      set({ detectedSilences: [], transcriptWords: remainingWords });
+      const currentSeq = get().sequenceManifest;
+      if (currentSeq) {
+        await persistProjectData(currentSeq, {
+          words: remainingWords,
+          sentences: get().transcriptSentences,
+          silences: [],
+          reviewItems: get().reviewItems
+        });
+      }
       await get().refreshSequence();
     }
   },
@@ -387,26 +514,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
     const execResult = await timelineEngine.executeCuts([cut]);
     if (execResult.success) {
-      // Remove deleted words and ripple-shift subsequent timestamps
-      const updatedWords = get().transcriptWords
-        .filter((w: any) => {
-          const wStart = w.start_seconds ?? w.start ?? 0;
-          const wEnd = w.end_seconds ?? w.end ?? 0;
-          return wEnd <= startSeconds + 0.02 || wStart >= endSeconds - 0.02;
-        })
-        .map((w: any) => {
-          const wStart = w.start_seconds ?? w.start ?? 0;
-          const wEnd = w.end_seconds ?? w.end ?? 0;
-          if (wStart >= endSeconds - 0.02) {
-            return {
-              ...w,
-              start_seconds: Math.max(0, wStart - duration),
-              end_seconds: Math.max(0, wEnd - duration)
-            };
-          }
-          return w;
-        });
-
+      const remainingWords = rippleShiftWords(get().transcriptWords, [cut]);
       const updatedSilences = get().detectedSilences
         .filter((s: any) => s.end_seconds <= startSeconds + 0.02 || s.start_seconds >= endSeconds - 0.02)
         .map((s: any) => s.start_seconds >= endSeconds - 0.02
@@ -414,7 +522,16 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           : s
         );
 
-      set({ transcriptWords: updatedWords, detectedSilences: updatedSilences });
+      set({ transcriptWords: remainingWords, detectedSilences: updatedSilences });
+      const currentSeq = get().sequenceManifest;
+      if (currentSeq) {
+        await persistProjectData(currentSeq, {
+          words: remainingWords,
+          sentences: get().transcriptSentences,
+          silences: updatedSilences,
+          reviewItems: get().reviewItems
+        });
+      }
     }
   },
 
@@ -492,6 +609,18 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
     // Apply cuts
     const execResult = await timelineEngine.executeCuts(cutIntervals);
+    if (execResult.success) {
+      const remainingWords = rippleShiftWords(get().transcriptWords, cutIntervals);
+      set({ transcriptWords: remainingWords, reviewItems: [] });
+      if (seq) {
+        await persistProjectData(seq, {
+          words: remainingWords,
+          sentences: get().transcriptSentences,
+          silences: get().detectedSilences,
+          reviewItems: []
+        });
+      }
+    }
 
     const report: RoughCutSummaryReport = {
       jobId: jobId || `local_${Date.now()}`,

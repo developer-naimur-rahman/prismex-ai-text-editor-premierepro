@@ -405,6 +405,39 @@ export class PremiereHostBridge {
     }
   }
 
+  /**
+   * Saves project transcript & metadata cache file directly into project directory.
+   */
+  public async saveProjectCache(cacheKey: string, jsonString: string): Promise<{ success: boolean; path?: string; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const escapedJson = JSON.stringify(jsonString);
+      const res = await this.evalScript(`$._prismex.saveProjectCache("${cacheKey}", ${escapedJson})`);
+      return JSON.parse(res || '{"success":false}');
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  /**
+   * Loads project transcript & metadata cache file directly from project directory.
+   */
+  public async loadProjectCache(cacheKey: string): Promise<{ found: boolean; content?: string; error?: string }> {
+    if (!this.isCEP) {
+      return { found: false };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const res = await this.evalScript(`$._prismex.loadProjectCache("${cacheKey}")`);
+      return JSON.parse(res || '{"found":false}');
+    } catch (err: any) {
+      return { found: false, error: String(err) };
+    }
+  }
+
   private getMockSequenceManifest(): SequenceManifest {
     return {
       premiereProjectId: "mock_project_001",

@@ -20,8 +20,10 @@ export interface SourceClipManifest {
 
 export interface SequenceManifest {
   premiereProjectId: string;
+  projectPath?: string;
   sequenceGuid: string;
   sequenceName: string;
+  cleanSequenceName?: string;
   fps: number;
   sampleRate: number;
   durationSeconds: number;

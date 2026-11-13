@@ -751,8 +751,26 @@ export const TranscriptView: React.FC = () => {
     <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden' }}>
       {/* Top Toolbar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-        <div style={{ fontSize: '12px', fontWeight: 600 }}>
-          Transcript ({words.length} words)
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ fontSize: '12px', fontWeight: 600 }}>
+            {language === 'bn' ? `ট্রান্সক্রিপ্ট (${words.length} শব্দ)` : `Transcript (${words.length} words)`}
+          </div>
+          <span
+            style={{
+              fontSize: '9.5px',
+              color: '#34d399',
+              backgroundColor: 'rgba(52, 211, 153, 0.15)',
+              padding: '1px 6px',
+              borderRadius: '3px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+            title={language === 'bn' ? 'এই প্রজেক্ট ও সিকোয়েন্সের ট্রান্সক্রিপ্ট স্বয়ংক্রিয়ভাবে সংরক্ষিত রয়েছে' : 'Transcript is persistently saved for this project & sequence'}
+          >
+            <CheckCircle2 size={10} />
+            {language === 'bn' ? 'প্রজেক্টে সংরক্ষিত' : 'Project Saved'}
+          </span>
         </div>
         <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
           <button
@@ -762,7 +780,7 @@ export const TranscriptView: React.FC = () => {
             style={{ padding: '4px 7px', fontSize: '10px' }}
           >
             <Mic size={11} />
-            <span>Re-Transcribe</span>
+            <span>{language === 'bn' ? 'পুনরায় ট্রান্সক্রাইব' : 'Re-Transcribe'}</span>
           </button>
           <button
             className="btn-secondary"
