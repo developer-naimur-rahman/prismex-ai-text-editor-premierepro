@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimecodeConverter } from '../host/TimecodeConverter';
@@ -62,6 +62,51 @@ export const SrtEditorView: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'CARDS' | 'RAW'>('CARDS');
+
+  // Real-Time Playhead Tracking & Auto-Follow
+  const [playheadSec, setPlayheadSec] = useState<number>(0);
+  const [followPlayhead, setFollowPlayhead] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('prismex_srt_follow_playhead') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const cuesContainerRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledCueIdx = useRef<number | null>(null);
+  const prevPlayheadSec = useRef<number>(0);
+
+  useEffect(() => {
+    if (cues.length === 0) return;
+    const timer = setInterval(async () => {
+      const pos = await hostBridge.getPlayheadPosition();
+      setPlayheadSec(pos);
+
+      // Check if video is playing in Premiere Pro
+      const isMoving = Math.abs(pos - prevPlayheadSec.current) > 0.04;
+      prevPlayheadSec.current = pos;
+
+      if (followPlayhead && isMoving && cues.length > 0) {
+        const activeCue = cues.find((c) => pos >= c.startSeconds - 0.12 && pos <= c.endSeconds + 0.12);
+        if (activeCue && activeCue.index !== lastScrolledCueIdx.current) {
+          lastScrolledCueIdx.current = activeCue.index;
+          const cueEl = document.getElementById(`srt-cue-${activeCue.index}`);
+          if (cueEl && cuesContainerRef.current) {
+            const containerRect = cuesContainerRef.current.getBoundingClientRect();
+            const elRect = cueEl.getBoundingClientRect();
+            const isComfortable = (
+              elRect.top >= containerRect.top + 35 &&
+              elRect.bottom <= containerRect.bottom - 35
+            );
+            if (!isComfortable) {
+              cueEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, [cues.length, cues, followPlayhead, hostBridge]);
 
   const baseFilename = (sequenceManifest?.sequenceName || 'captions').replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, '_');
 
@@ -552,7 +597,28 @@ export const SrtEditorView: React.FC = () => {
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: '3px' }}>
+        <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
+          <button
+            onClick={() => {
+              const nextVal = !followPlayhead;
+              setFollowPlayhead(nextVal);
+              try { localStorage.setItem('prismex_srt_follow_playhead', String(nextVal)); } catch {}
+            }}
+            title="ভিডিও প্লে হওয়ার সাথে সাথে স্পোকেন কিউ-তে অটোমেটিক স্ক্রোল হবে (অন/অফ করুন)"
+            style={{
+              padding: '3px 8px',
+              fontSize: '10px',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              backgroundColor: followPlayhead ? 'rgba(56, 189, 248, 0.2)' : 'var(--bg-tertiary)',
+              color: followPlayhead ? '#38bdf8' : 'var(--text-muted)',
+              border: followPlayhead ? '1px solid #38bdf8' : '1px solid var(--border-subtle)',
+              fontWeight: 500
+            }}
+          >
+            <span>{followPlayhead ? (language === 'bn' ? '📍 ফলো: চালু' : '📍 Follow: ON') : (language === 'bn' ? '📍 ফলো: বন্ধ' : '📍 Follow: OFF')}</span>
+          </button>
+
           <button
             onClick={() => setViewMode('CARDS')}
             style={{
@@ -663,6 +729,7 @@ export const SrtEditorView: React.FC = () => {
 
           {/* Cue Cards Scrollable Container */}
           <div
+            ref={cuesContainerRef}
             style={{
               flex: 1,
               overflowY: 'auto',
@@ -680,8 +747,12 @@ export const SrtEditorView: React.FC = () => {
                   : (language === 'bn' ? 'অনুসন্ধানের সাথে কোনো কিউ মেলেনি।' : 'No cues matching your search.')}
               </div>
             ) : (
-              filteredCues.map((cue, idx) => (
+              filteredCues.map((cue, idx) => {
+                const isPlayingCue = playheadSec > 0 && playheadSec >= cue.startSeconds && playheadSec <= cue.endSeconds;
+
+                return (
                 <div
+                  id={`srt-cue-${cue.index}`}
                   key={`cue_${cue.index}`}
                   className="card"
                   style={{
@@ -691,9 +762,11 @@ export const SrtEditorView: React.FC = () => {
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '6px',
-                    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-                    borderColor: 'rgba(255, 255, 255, 0.09)',
-                    borderRadius: '5px'
+                    backgroundColor: isPlayingCue ? 'rgba(56, 189, 248, 0.14)' : 'rgba(255, 255, 255, 0.03)',
+                    borderColor: isPlayingCue ? '#38bdf8' : 'rgba(255, 255, 255, 0.09)',
+                    boxShadow: isPlayingCue ? '0 0 14px rgba(56, 189, 248, 0.28)' : 'none',
+                    borderRadius: '5px',
+                    transition: 'background-color 0.15s, border-color 0.15s'
                   }}
                 >
                   {/* Card Header */}
@@ -701,12 +774,12 @@ export const SrtEditorView: React.FC = () => {
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                       <span
                         onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
-                        style={{ color: '#60a5fa', fontWeight: 700, cursor: 'pointer', fontSize: '11px' }}
+                        style={{ color: isPlayingCue ? '#38bdf8' : '#60a5fa', fontWeight: 700, cursor: 'pointer', fontSize: '11px' }}
                         title="Click to seek playhead to cue start"
                       >
-                        #{cue.index}
+                        {isPlayingCue ? '▶ #' : '#'}{cue.index}
                       </span>
-                      <span style={{ color: '#38bdf8', fontFamily: 'monospace', fontWeight: 600, fontSize: '10px' }}>
+                      <span style={{ color: isPlayingCue ? '#e0f2fe' : '#38bdf8', fontFamily: 'monospace', fontWeight: 600, fontSize: '10px' }}>
                         {cue.startSrt} → {cue.endSrt}
                       </span>
                       <span style={{ color: '#a78bfa', fontFamily: 'monospace', fontSize: '9px', backgroundColor: 'rgba(167, 139, 250, 0.1)', padding: '1px 5px', borderRadius: '3px' }}>
@@ -801,7 +874,8 @@ export const SrtEditorView: React.FC = () => {
                     </button>
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>

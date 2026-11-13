@@ -176,14 +176,16 @@ export const TranscriptView: React.FC = () => {
   const fps = sequenceManifest?.fps || 24;
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
 
-  useEffect(() => {
-    if (transcriptWords.length === 0) return;
-    const timer = setInterval(async () => {
-      const pos = await hostBridge.getPlayheadPosition();
-      setPlayheadSec(pos);
-    }, 400);
-    return () => clearInterval(timer);
-  }, [transcriptWords.length]);
+  const [followPlayhead, setFollowPlayhead] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('prismex_follow_playhead') !== 'false';
+    } catch {
+      return true;
+    }
+  });
+  const transcriptContainerRef = useRef<HTMLDivElement | null>(null);
+  const lastScrolledParaIdx = useRef<number | null>(null);
+  const prevPlayheadSec = useRef<number>(0);
 
   const words: WordToken[] = useMemo(() => {
     return transcriptWords.map((w: any, idx: number) => ({
@@ -230,6 +232,44 @@ export const TranscriptView: React.FC = () => {
     }
     return groups;
   }, [words]);
+
+  // Auto-Follow Playhead: Track Premiere timeline playhead and smoothly scroll to spoken text
+  useEffect(() => {
+    if (transcriptWords.length === 0) return;
+    const timer = setInterval(async () => {
+      const pos = await hostBridge.getPlayheadPosition();
+      setPlayheadSec(pos);
+
+      // Detect if video is actively playing / playhead is advancing
+      const isMoving = Math.abs(pos - prevPlayheadSec.current) > 0.04;
+      prevPlayheadSec.current = pos;
+
+      if (followPlayhead && isMoving && paragraphs.length > 0) {
+        // Find currently spoken paragraph
+        const activePara = paragraphs.find((p) => {
+          const pEnd = p.tokens[p.tokens.length - 1]?.end || (p.startTime + 2.5);
+          return pos >= p.startTime - 0.15 && pos <= pEnd + 0.15;
+        });
+
+        if (activePara && activePara.startIdx !== lastScrolledParaIdx.current) {
+          lastScrolledParaIdx.current = activePara.startIdx;
+          const el = document.getElementById(`para-${activePara.startIdx}`);
+          if (el && transcriptContainerRef.current) {
+            const containerRect = transcriptContainerRef.current.getBoundingClientRect();
+            const elRect = el.getBoundingClientRect();
+            const isComfortablyVisible = (
+              elRect.top >= containerRect.top + 35 &&
+              elRect.bottom <= containerRect.bottom - 35
+            );
+            if (!isComfortablyVisible) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          }
+        }
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, [transcriptWords.length, paragraphs, followPlayhead, hostBridge]);
 
   const [floatingSelection, setFloatingSelection] = useState<{
     text: string;
@@ -2248,6 +2288,30 @@ export const TranscriptView: React.FC = () => {
 
         <button
           onClick={() => {
+            const nextVal = !followPlayhead;
+            setFollowPlayhead(nextVal);
+            try { localStorage.setItem('prismex_follow_playhead', String(nextVal)); } catch {}
+          }}
+          title="ভিডিও প্লে হওয়ার সাথে সাথে স্পোকেন টেক্সটে অটোমেটিক স্ক্রোল হবে (অন/অফ করুন)"
+          style={{
+            marginLeft: 'auto',
+            padding: '4px 8px',
+            fontSize: '10px',
+            borderRadius: 'var(--radius-sm)',
+            border: followPlayhead ? '1px solid #38bdf8' : '1px solid var(--border-subtle)',
+            backgroundColor: followPlayhead ? 'rgba(56, 189, 248, 0.2)' : 'var(--bg-tertiary)',
+            color: followPlayhead ? '#38bdf8' : 'var(--text-muted)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px'
+          }}
+        >
+          <span>{followPlayhead ? (language === 'bn' ? '📍 প্লেহেড ফলো: চালু' : '📍 Follow: ON') : (language === 'bn' ? '📍 প্লেহেড ফলো: বন্ধ' : '📍 Follow: OFF')}</span>
+        </button>
+
+        <button
+          onClick={() => {
             const nextVal = !autoPlayOnJump;
             setAutoPlayOnJump(nextVal);
             try {
@@ -2256,7 +2320,6 @@ export const TranscriptView: React.FC = () => {
           }}
           title="জাম্প বা শব্দে ক্লিক করলেই সরাসরি ভিডিও প্লে হবে (অন/অফ করুন)"
           style={{
-            marginLeft: 'auto',
             padding: '4px 8px',
             fontSize: '10px',
             borderRadius: 'var(--radius-sm)',
@@ -2270,7 +2333,7 @@ export const TranscriptView: React.FC = () => {
           }}
         >
           <Zap size={10} />
-          <span>{autoPlayOnJump ? (language === 'bn' ? '⚡ জাম্পে অটো-প্লে: চালু' : '⚡ Auto-Play: ON') : (language === 'bn' ? '⚡ জাম্পে অটো-প্লে: বন্ধ' : '⚡ Auto-Play: OFF')}</span>
+          <span>{autoPlayOnJump ? (language === 'bn' ? '⚡ অটো-প্লে: চালু' : '⚡ Auto-Play: ON') : (language === 'bn' ? '⚡ অটো-প্লে: বন্ধ' : '⚡ Auto-Play: OFF')}</span>
         </button>
       </div>
 
@@ -2460,6 +2523,7 @@ export const TranscriptView: React.FC = () => {
 
           <div
             className="card"
+            ref={transcriptContainerRef}
             onMouseUp={handleCheckTextSelection}
             onKeyUp={handleCheckTextSelection}
             style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '12px', userSelect: 'text' }}
@@ -2476,10 +2540,15 @@ export const TranscriptView: React.FC = () => {
               (d: any) => d.startSeconds <= paraEnd && d.endSeconds >= para.startTime
             );
 
+            const isPlayingPara = playheadSec > 0 && playheadSec >= para.startTime && playheadSec <= paraEnd;
+
             let cardBg = matchingTake ? 'rgba(139, 92, 246, 0.08)' : 'transparent';
             let cardBorderLeft = matchingTake ? '2px solid #a78bfa' : 'none';
 
-            if (directive && directive.visualType !== 'NONE') {
+            if (isPlayingPara) {
+              cardBg = 'rgba(16, 185, 129, 0.14)';
+              cardBorderLeft = '3px solid #10b981';
+            } else if (directive && directive.visualType !== 'NONE') {
               if (directive.visualType === 'BROLL') {
                 cardBg = 'rgba(6, 182, 212, 0.07)';
                 cardBorderLeft = '3px solid #06b6d4';
@@ -2497,15 +2566,18 @@ export const TranscriptView: React.FC = () => {
 
             return (
             <div
+              id={`para-${para.startIdx}`}
               key={para.startIdx}
               style={{
                 display: 'flex',
                 flexDirection: 'column',
                 gap: '4px',
-                padding: matchingTake || (directive && directive.visualType !== 'NONE') ? '6px 8px' : '4px 0',
-                borderRadius: matchingTake || (directive && directive.visualType !== 'NONE') ? '4px' : '0',
+                padding: matchingTake || (directive && directive.visualType !== 'NONE') || isPlayingPara ? '6px 8px' : '4px 0',
+                borderRadius: matchingTake || (directive && directive.visualType !== 'NONE') || isPlayingPara ? '4px' : '0',
                 backgroundColor: cardBg,
-                borderLeft: cardBorderLeft
+                borderLeft: cardBorderLeft,
+                boxShadow: isPlayingPara ? '0 0 12px rgba(16, 185, 129, 0.22)' : 'none',
+                transition: 'background-color 0.15s, border-left 0.15s'
               }}
             >
               <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
