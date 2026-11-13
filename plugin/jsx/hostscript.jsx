@@ -528,3 +528,69 @@ $._prismex.importSrtAndCreateCaptionTrack = function(srtFilePath) {
         return JSON.stringify({ success: false, error: String(err) });
     }
 };
+
+$._prismex.getProjectFolderPath = function() {
+    try {
+        if (app.project && app.project.path) {
+            var p = app.project.path;
+            var lastSlash = p.lastIndexOf('/');
+            if (lastSlash === -1) lastSlash = p.lastIndexOf('\\');
+            if (lastSlash !== -1) {
+                return p.substring(0, lastSlash);
+            }
+        }
+    } catch (e) {}
+    try {
+        return Folder.myDocuments.fsName + "/PrismexExports";
+    } catch (e2) {
+        return "/tmp";
+    }
+};
+
+$._prismex.saveProjectFiles = function(baseFilename, srtContent, txtContent, jsonContent) {
+    try {
+        var folder = $._prismex.getProjectFolderPath();
+        var fObj = new Folder(folder);
+        if (!fObj.exists) fObj.create();
+
+        var savedFiles = [];
+
+        if (srtContent) {
+            var srtFile = new File(folder + "/" + baseFilename + ".srt");
+            srtFile.encoding = "UTF-8";
+            if (srtFile.open("w")) {
+                srtFile.write(srtContent);
+                srtFile.close();
+                savedFiles.push(srtFile.fsName);
+            }
+        }
+
+        if (txtContent) {
+            var txtFile = new File(folder + "/" + baseFilename + ".txt");
+            txtFile.encoding = "UTF-8";
+            if (txtFile.open("w")) {
+                txtFile.write(txtContent);
+                txtFile.close();
+                savedFiles.push(txtFile.fsName);
+            }
+        }
+
+        if (jsonContent) {
+            var jsonFile = new File(folder + "/" + baseFilename + ".json");
+            jsonFile.encoding = "UTF-8";
+            if (jsonFile.open("w")) {
+                jsonFile.write(jsonContent);
+                jsonFile.close();
+                savedFiles.push(jsonFile.fsName);
+            }
+        }
+
+        return JSON.stringify({
+            success: savedFiles.length > 0,
+            folder: folder,
+            files: savedFiles
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};

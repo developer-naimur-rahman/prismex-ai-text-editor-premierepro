@@ -11,6 +11,7 @@ import { ProvidersView } from './views/ProvidersView';
 import { ProfilesView } from './views/ProfilesView';
 import { SettingsView } from './views/SettingsView';
 import { HistoryView } from './views/HistoryView';
+import { SrtEditorView } from './views/SrtEditorView';
 
 export const App: React.FC = () => {
   const { activeTab, initApp } = usePrismexStore();
@@ -23,12 +24,13 @@ export const App: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100vw', backgroundColor: 'var(--bg-primary)' }}>
       <NavigationHeader />
       <main style={{ flex: 1, overflow: 'hidden' }}>
-        {activeTab === 'dashboard' && <DashboardView />}
-        {activeTab === 'magic-cut' && <MagicRoughCutView />}
-        {activeTab === 'review-queue' && <ReviewQueueView />}
         {activeTab === 'transcript' && <TranscriptView />}
+        {activeTab === 'magic-cut' && <MagicRoughCutView />}
         {activeTab === 'silence' && <SilenceView />}
         {activeTab === 'takes' && <TakesView />}
+        {activeTab === 'review-queue' && <ReviewQueueView />}
+        {activeTab === 'srt-editor' && <SrtEditorView />}
+        {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'providers' && <ProvidersView />}
         {activeTab === 'profiles' && <ProfilesView />}
         {activeTab === 'settings' && <SettingsView />}

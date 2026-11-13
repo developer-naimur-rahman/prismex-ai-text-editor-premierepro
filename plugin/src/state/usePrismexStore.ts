@@ -20,12 +20,13 @@ import { TimelineEditingEngine } from '../host/TimelineEditingEngine';
 import { AppLanguage } from '../i18n/translations';
 
 export type ActiveTab = 
-  | 'dashboard' 
+  | 'transcript'
   | 'magic-cut' 
-  | 'transcript' 
-  | 'review-queue' 
-  | 'takes' 
   | 'silence' 
+  | 'takes' 
+  | 'review-queue' 
+  | 'srt-editor'
+  | 'dashboard' 
   | 'providers' 
   | 'profiles' 
   | 'settings' 

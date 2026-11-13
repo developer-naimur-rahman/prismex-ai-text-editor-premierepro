@@ -13,7 +13,8 @@ import {
   Settings, 
   History, 
   RefreshCw,
-  RotateCcw 
+  RotateCcw,
+  Subtitles 
 } from 'lucide-react';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
@@ -38,6 +39,7 @@ export const NavigationHeader: React.FC = () => {
     { id: 'silence', label: t.tabSilence, icon: <Sliders size={12} /> },
     { id: 'takes', label: t.tabTakes, icon: <Layers size={12} /> },
     { id: 'review-queue', label: t.tabReviewQueue, icon: <CheckSquare size={12} />, badge: pendingReviewCount },
+    { id: 'srt-editor', label: t.tabSrtEditor, icon: <Subtitles size={12} /> },
     { id: 'dashboard', label: t.tabDashboard, icon: <LayoutDashboard size={12} /> },
     { id: 'providers', label: t.tabProviders, icon: <Cpu size={12} /> },
     { id: 'settings', label: t.tabSettings, icon: <Settings size={12} /> },

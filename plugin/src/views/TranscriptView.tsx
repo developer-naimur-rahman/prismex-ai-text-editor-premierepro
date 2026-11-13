@@ -13,6 +13,7 @@ import {
   Trash2,
   VolumeX,
   Download,
+  Save,
   Bot,
   Key,
   Subtitles,
@@ -556,6 +557,62 @@ export const TranscriptView: React.FC = () => {
     setTimeout(() => setExportStatus(null), 3500);
   };
 
+  const handleSaveAll3ToProject = async () => {
+    const srt = smartSrtText || buildSrtContent();
+    const txt = paragraphs
+      .map((p) => `[${TimecodeConverter.formatTimecode(p.startTime, fps)}] ` + p.tokens.map((tok) => tok.word).join(' '))
+      .join('\n\n');
+    const alignedSegments = paragraphs.map((p, idx) => {
+      const pEnd = p.tokens[p.tokens.length - 1]?.end || p.startTime;
+      const startFrame = Math.round(p.startTime * fps);
+      const endFrame = Math.round(pEnd * fps);
+      return {
+        segmentIndex: idx,
+        startSeconds: Number((startFrame / fps).toFixed(4)),
+        endSeconds: Number((endFrame / fps).toFixed(4)),
+        startFrame,
+        endFrame,
+        startTimecode: TimecodeConverter.formatTimecode(p.startTime, fps),
+        endTimecode: TimecodeConverter.formatTimecode(pEnd, fps),
+        text: p.tokens.map((tok) => tok.word).join(' ')
+      };
+    });
+    const alignedWords = words.map((w) => {
+      const startFrame = Math.round(w.start * fps);
+      const endFrame = Math.max(startFrame + 1, Math.round(w.end * fps));
+      return {
+        word: w.word,
+        startSeconds: Number((startFrame / fps).toFixed(4)),
+        endSeconds: Number((endFrame / fps).toFixed(4)),
+        startFrame,
+        endFrame,
+        startTimecode: TimecodeConverter.formatTimecode(w.start, fps),
+        endTimecode: TimecodeConverter.formatTimecode(w.end, fps),
+        isFiller: w.isFiller
+      };
+    });
+    const payload = {
+      sequenceName: sequenceManifest?.sequenceName || 'Unknown',
+      fps,
+      totalWords: alignedWords.length,
+      segments: alignedSegments,
+      words: alignedWords
+    };
+    const jsonStr = JSON.stringify(payload, null, 2);
+    setExportStatus(language === 'bn' ? 'প্রজেক্ট ফোল্ডারে সেভ হচ্ছে...' : 'Saving to project folder...');
+    const res = await hostBridge.saveAllProjectFiles(baseFilename, srt, txt, jsonStr);
+    if (res.success) {
+      setExportStatus(
+        language === 'bn'
+          ? `৩টি ফাইল প্রজেক্টে সেভ হয়েছে! (.srt, .txt, .json)`
+          : `Saved 3 files to project directory! (.srt, .txt, .json)`
+      );
+    } else {
+      setExportStatus(res.error || 'Failed to save files');
+    }
+    setTimeout(() => setExportStatus(null), 4000);
+  };
+
   const handleRunAi = async () => {
     setShowAiPanel(true);
     setAiLoading(true);
@@ -740,8 +797,48 @@ export const TranscriptView: React.FC = () => {
 
       {/* Export Row (TXT / SRT / JSON) + Quick Silence Cut */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px' }}>
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={handleSaveAll3ToProject}
+            className="btn-primary"
+            title={language === 'bn' ? 'প্রজেক্ট ফোল্ডারে এক ক্লিকে SRT, TXT এবং JSON ফাইল সেভ করুন' : '1-Click Save SRT, TXT & JSON directly to active project directory'}
+            style={{
+              padding: '3px 8px',
+              fontSize: '10px',
+              backgroundColor: '#059669',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            <Save size={11} />
+            <span>{language === 'bn' ? 'প্রজেক্টে ৩টি ফাইল সেভ (SRT+TXT+JSON)' : 'Save 3 to Project (SRT+TXT+JSON)'}</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('srt-editor')}
+            className="btn-secondary"
+            title={language === 'bn' ? 'পূর্ণাঙ্গ ডেডিকেটেড SRT এডিটরে যান' : 'Go to dedicated full-featured Smart SRT Editor'}
+            style={{
+              padding: '3px 7px',
+              fontSize: '10px',
+              color: '#60a5fa',
+              borderColor: 'rgba(96, 165, 250, 0.4)',
+              backgroundColor: 'rgba(96, 165, 250, 0.1)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              cursor: 'pointer'
+            }}
+          >
+            <Subtitles size={11} />
+            <span>{language === 'bn' ? '৬. SRT এডিটর খুলুন' : 'Open SRT Editor'}</span>
+          </button>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px', marginLeft: '4px' }}>
             <Download size={10} /> Export:
           </span>
           <button onClick={handleExportTxt} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>

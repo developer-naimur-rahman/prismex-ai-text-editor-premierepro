@@ -298,6 +298,33 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Automatically saves all 3 files (SRT, TXT, JSON) directly into the Premiere Pro project directory.
+   */
+  public async saveAllProjectFiles(
+    baseFilename: string,
+    srtContent: string,
+    txtContent: string,
+    jsonContent: string
+  ): Promise<{ success: boolean; folder?: string; files?: string[]; error?: string }> {
+    if (this.isCEP) {
+      try {
+        const escapedBase = baseFilename.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const escapedSrt = encodeURIComponent(srtContent || '');
+        const escapedTxt = encodeURIComponent(txtContent || '');
+        const escapedJson = encodeURIComponent(jsonContent || '');
+
+        const res = await this.evalScript(
+          `$._prismex.saveProjectFiles('${escapedBase}', decodeURIComponent('${escapedSrt}'), decodeURIComponent('${escapedTxt}'), decodeURIComponent('${escapedJson}'))`
+        );
+        return JSON.parse(res);
+      } catch (e: any) {
+        return { success: false, error: String(e) };
+      }
+    }
+    return { success: true, folder: 'Browser', files: [`${baseFilename}.srt`, `${baseFilename}.txt`, `${baseFilename}.json`] };
+  }
+
+  /**
    * Saves a text/JSON/SRT file reliably inside Adobe CEP (native macOS Save dialog) or browser.
    */
   public async saveFileWithDialog(
