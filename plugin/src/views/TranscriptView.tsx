@@ -179,6 +179,15 @@ export const TranscriptView: React.FC = () => {
   });
   const [compareTakesItem, setCompareTakesItem] = useState<any | null>(null);
 
+  // Paragraph Grouping Mode: 'SENTENCE' (complete sentence grouping) or 'PAUSE' (legacy pause/word-limit)
+  const [paragraphGroupingMode, setParagraphGroupingMode] = useState<'SENTENCE' | 'PAUSE'>(() => {
+    try {
+      return (localStorage.getItem('prismex_para_grouping_mode') as 'SENTENCE' | 'PAUSE') || 'SENTENCE';
+    } catch {
+      return 'SENTENCE';
+    }
+  });
+
   // Full Script Contextual AI Directives (B-Roll, PNG, Typography, Punch & Bengali Explanations)
   const [isAnalyzingScript, setIsAnalyzingScript] = useState<boolean>(false);
   const [expandedDirectiveIdx, setExpandedDirectiveIdx] = useState<number | null>(null);
@@ -213,26 +222,83 @@ export const TranscriptView: React.FC = () => {
   const fillerCount = useMemo(() => words.filter((w) => w.isFiller).length, [words]);
   const repeatedTakes = useMemo(() => reviewItems.filter((i) => i.category === 'REPEATED_TAKE'), [reviewItems]);
 
-  // Group words into paragraph chunks (~15 words or > 0.75s pause) for Premiere Pro Text Panel layout
+  // Group words into paragraph chunks: either full sentences ('SENTENCE') or pause-based ('PAUSE')
   const paragraphs = useMemo(() => {
+    const isSentenceTerminator = (word: string): boolean => {
+      if (!word) return false;
+      const clean = word.trim();
+      return /[.?!।]["'”’)]*$/.test(clean);
+    };
+
+    const isAbbreviation = (word: string): boolean => {
+      const clean = word.trim().toLowerCase().replace(/[()]/g, '');
+      return /^(mr|mrs|ms|dr|prof|vs|etc|e\.g|i\.e|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec|st|ave|rd|gen|col|sgt)\.$/.test(clean);
+    };
+
     const groups: Array<{ startIdx: number; endIdx: number; startTime: number; tokens: Array<WordToken & { globalIdx: number }> }> = [];
     let current: Array<WordToken & { globalIdx: number }> = [];
 
-    for (let i = 0; i < words.length; i++) {
-      const w = words[i];
-      const prev = i > 0 ? words[i - 1] : null;
-      const gap = prev ? w.start - prev.end : 0;
+    if (paragraphGroupingMode === 'PAUSE') {
+      // Classic mode: splits on > 0.75s pause or 16 words
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        const prev = i > 0 ? words[i - 1] : null;
+        const gap = prev ? w.start - prev.end : 0;
 
-      if (current.length > 0 && (gap > 0.75 || current.length >= 16)) {
-        groups.push({
-          startIdx: current[0].globalIdx,
-          endIdx: current[current.length - 1].globalIdx,
-          startTime: current[0].start,
-          tokens: current
-        });
-        current = [];
+        if (current.length > 0 && (gap > 0.75 || current.length >= 16)) {
+          groups.push({
+            startIdx: current[0].globalIdx,
+            endIdx: current[current.length - 1].globalIdx,
+            startTime: current[0].start,
+            tokens: current
+          });
+          current = [];
+        }
+        current.push({ ...w, globalIdx: i });
       }
-      current.push({ ...w, globalIdx: i });
+    } else {
+      // Sentence mode: groups 1-3 complete sentences without breaking mid-sentence
+      let sentenceCountInCurrent = 0;
+
+      for (let i = 0; i < words.length; i++) {
+        const w = words[i];
+        current.push({ ...w, globalIdx: i });
+
+        const isTerm = isSentenceTerminator(w.word) && !isAbbreviation(w.word);
+        if (isTerm) {
+          sentenceCountInCurrent++;
+        }
+
+        const next = i + 1 < words.length ? words[i + 1] : null;
+        const gapToNext = next ? next.start - w.end : 0;
+
+        let shouldBreak = false;
+        if (isTerm) {
+          if (sentenceCountInCurrent >= 2) {
+            shouldBreak = true;
+          } else if (sentenceCountInCurrent >= 1 && (current.length >= 12 || gapToNext >= 0.9)) {
+            shouldBreak = true;
+          }
+        } else {
+          // Fallback if speaker gives a very long run-on without punctuation
+          if (current.length >= 28 && gapToNext >= 1.2) {
+            shouldBreak = true;
+          } else if (gapToNext >= 2.5 && current.length >= 8) {
+            shouldBreak = true;
+          }
+        }
+
+        if (shouldBreak && next) {
+          groups.push({
+            startIdx: current[0].globalIdx,
+            endIdx: current[current.length - 1].globalIdx,
+            startTime: current[0].start,
+            tokens: current
+          });
+          current = [];
+          sentenceCountInCurrent = 0;
+        }
+      }
     }
 
     if (current.length > 0) {
@@ -244,7 +310,7 @@ export const TranscriptView: React.FC = () => {
       });
     }
     return groups;
-  }, [words]);
+  }, [words, paragraphGroupingMode]);
 
   // Auto-translate surrounding paragraphs to maintain a genuine continuous Bengali narrative
   useEffect(() => {
@@ -2599,6 +2665,37 @@ export const TranscriptView: React.FC = () => {
           {t.doubleLines} ({repeatedTakes.length})
         </button>
 
+        {/* Paragraph Grouping Mode: Sentence-Complete vs Pause-Based */}
+        <button
+          onClick={() => {
+            const nextMode = paragraphGroupingMode === 'SENTENCE' ? 'PAUSE' : 'SENTENCE';
+            setParagraphGroupingMode(nextMode);
+            try { localStorage.setItem('prismex_para_grouping_mode', nextMode); } catch {}
+          }}
+          title={
+            paragraphGroupingMode === 'SENTENCE'
+              ? (language === 'bn' ? 'বর্তমান মোড: পূর্ণ বাক্যভিত্তিক (ক্লিক করে পজভিত্তিক করতে পারেন)' : 'Mode: Complete Sentences (Click to switch to pause-based)')
+              : (language === 'bn' ? 'বর্তমান মোড: পজভিত্তিক (ক্লিক করে পূর্ণ বাক্যভিত্তিক করতে পারেন)' : 'Mode: Pause-Based (Click to switch to sentence-based)')
+          }
+          style={{
+            marginLeft: 'auto',
+            height: '24px',
+            padding: '2px 8px',
+            fontSize: '9.5px',
+            fontWeight: 600,
+            borderRadius: '4px',
+            border: paragraphGroupingMode === 'SENTENCE' ? '1px solid #10b981' : '1px solid #a855f7',
+            backgroundColor: paragraphGroupingMode === 'SENTENCE' ? 'rgba(16, 185, 129, 0.18)' : 'rgba(168, 85, 247, 0.18)',
+            color: paragraphGroupingMode === 'SENTENCE' ? '#34d399' : '#d8b4fe',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px'
+          }}
+        >
+          <span>{paragraphGroupingMode === 'SENTENCE' ? (language === 'bn' ? '🎯 পূর্ণ বাক্য' : '🎯 Sentences') : (language === 'bn' ? '⏱️ পজভিত্তিক' : '⏱️ Pauses')}</span>
+        </button>
+
         <button
           onClick={() => {
             const nextVal = !followPlayhead;
@@ -2607,7 +2704,6 @@ export const TranscriptView: React.FC = () => {
           }}
           title="ভিডিও প্লে হওয়ার সাথে সাথে স্পোকেন টেক্সটে অটোমেটিক স্ক্রোল হবে"
           style={{
-            marginLeft: 'auto',
             height: '24px',
             padding: '2px 7px',
             fontSize: '9.5px',
