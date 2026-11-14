@@ -256,11 +256,11 @@ export const TranscriptView: React.FC = () => {
     nearbyParas.forEach(p => {
       const pText = p.tokens.map(t => t.word).join(' ').trim();
       const existingMeaning = scriptDirectives[p.startIdx]?.meaningBn;
-      const isBadMeaning = !existingMeaning || existingMeaning.includes('বক্তব্যে বিশেষ জোর') || existingMeaning.includes('ইমপ্যাক্ট তৈরি');
+      const isBadMeaning = !existingMeaning || existingMeaning.includes('বক্তব্যে বিশেষ জোর') || existingMeaning.includes('ইমপ্যাক্ট তৈরি') || existingMeaning.includes('মূল বক্তব্য: "') || existingMeaning.includes('মূল বক্তব্য:');
 
       if ((isBadMeaning || !liveTranslations[p.startIdx]) && pText) {
         client.translateSentence(pText).then(translated => {
-          if (translated && translated.trim()) {
+          if (translated && translated.trim() && !translated.includes('মূল বক্তব্য: "')) {
             setLiveTranslations(prev => ({ ...prev, [p.startIdx]: translated.trim() }));
             updateScriptDirective(p.startIdx, { meaningBn: translated.trim() });
           }
@@ -555,8 +555,12 @@ export const TranscriptView: React.FC = () => {
   const handleAnalyzeScriptDirectives = useCallback(async () => {
     if (words.length === 0) return;
     setIsAnalyzingScript(true);
-    setCreativeStatus('AI দিয়ে পুরো স্ক্রিপ্ট বিশ্লেষণ করা হচ্ছে...');
+    setCreativeStatus('AI দিয়ে পুরো স্ক্রিপ্ট নতুন করে টিউন করা হচ্ছে...');
     try {
+      // CLEAR old directives so stale cache and dummy text are completely purged
+      setScriptDirectives({});
+      setLiveTranslations({});
+
       const res = await client.getScriptDirectives(transcriptWords, transcriptSentences);
       if (res && res.directives) {
         const dMap: Record<number, any> = {};
@@ -575,7 +579,7 @@ export const TranscriptView: React.FC = () => {
           }
         }
         setScriptDirectives(dMap);
-        setCreativeStatus(`স্ক্রিপ্ট টিউন সম্পন্ন! ${res.totalDirectives}টি ভিজ্যুয়াল ডিরেকশন তৈরি হয়েছে (${res.engine})।`);
+        setCreativeStatus(`স্ক্রিপ্ট টিউন সম্পন্ন! ${res.totalDirectives}টি খাঁটি বাংলা অনুবাদ ও ভিজ্যুয়াল ডিরেকশন তৈরি হয়েছে (${res.engine})।`);
         setTimeout(() => setCreativeStatus(null), 3500);
       }
     } catch (err) {
@@ -3337,18 +3341,26 @@ export const TranscriptView: React.FC = () => {
                 const precedingParas = currentParaPos > 0 ? paragraphs.slice(Math.max(0, currentParaPos - 3), currentParaPos) : [];
                 const succeedingParas = currentParaPos < paragraphs.length - 1 ? paragraphs.slice(currentParaPos + 1, Math.min(paragraphs.length, currentParaPos + 4)) : [];
 
-                // Clean semantic query strictly filtering out camera jargon
+                // Clean semantic query strictly filtering out camera jargon and generic 'cinematic scene'
                 const cleanQuery = (() => {
                   const q = (directive.query || '').trim();
-                  if (!q || q.toLowerCase().includes('zoom') || q.toLowerCase().includes('punch')) {
-                    const contentWords = paraLineText.replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2 && !['the','and','for','that','this','with','from','have','they','what','about','reach','time','today'].includes(w.toLowerCase()));
-                    return contentWords.slice(0, 2).join(' ') || 'cinematic communication';
+                  const lower = q.toLowerCase();
+                  if (!q || lower.includes('zoom') || lower.includes('punch') || lower.includes('cinematic') || lower.includes('scene')) {
+                    const rawWords = paraLineText.replace(/[^\w\s]/g, '').toLowerCase().split(/\s+/);
+                    const stop = new Set(['the','and','for','that','this','with','from','have','they','what','about','reach','time','today','when','tell','someone','must','almost','well','hate','like','think','said','just','really']);
+                    const content = rawWords.filter(w => !stop.has(w) && w.length > 2);
+                    if (content.includes('california')) return 'love california';
+                    if (content.includes('washington')) return 'washington state';
+                    if (content.includes('desert')) return 'desert landscape';
+                    if (content.includes('contact')) return 'contact information';
+                    if (content.includes('politics') || content.includes('political')) return 'politics discussion';
+                    return content.slice(0, 2).join(' ') || 'travel scenery';
                   }
                   return q;
                 })();
 
                 const brollKws: string[] = ((directive.brollKeywords && directive.brollKeywords.length > 0)
-                  ? directive.brollKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch'))
+                  ? directive.brollKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch') && !k.toLowerCase().includes('cinematic') && !k.toLowerCase().includes('scene'))
                   : []
                 );
                 if (brollKws.length === 0) {
@@ -3356,7 +3368,7 @@ export const TranscriptView: React.FC = () => {
                 }
 
                 const pngKws: string[] = ((directive.pngKeywords && directive.pngKeywords.length > 0)
-                  ? directive.pngKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch'))
+                  ? directive.pngKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch') && !k.toLowerCase().includes('cinematic') && !k.toLowerCase().includes('scene'))
                   : []
                 );
                 if (pngKws.length === 0) {
@@ -3364,8 +3376,8 @@ export const TranscriptView: React.FC = () => {
                 }
 
                 const activeMeaningBn = liveTranslations[para.startIdx]
-                  || ((directive.meaningBn && !directive.meaningBn.includes('বক্তব্যে বিশেষ জোর')) ? directive.meaningBn : '')
-                  || 'বাংলা অনুবাদ লোড হচ্ছে...';
+                  || ((directive.meaningBn && !directive.meaningBn.includes('বক্তব্যে বিশেষ জোর') && !directive.meaningBn.includes('মূল বক্তব্য: "')) ? directive.meaningBn : '')
+                  || 'অনুবাদ প্রস্তুত হচ্ছে...';
 
                 return (
                   <div
@@ -3403,21 +3415,59 @@ export const TranscriptView: React.FC = () => {
                           এআই ডিরেক্টর নির্দেশিকা ও সাবটাইটেল গাইড
                         </span>
                       </div>
-                      <button
-                        onClick={() => setExpandedDirectiveIdx(null)}
-                        style={{
-                          background: 'rgba(255,255,255,0.06)',
-                          border: '1px solid rgba(255,255,255,0.12)',
-                          borderRadius: '4px',
-                          color: 'var(--text-muted)',
-                          cursor: 'pointer',
-                          padding: '2px 6px',
-                          fontSize: '11px'
-                        }}
-                        title="প্যানেল বন্ধ করুন"
-                      >
-                        ✕
-                      </button>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        {/* 🔄 Re-Tune this specific sentence on-demand */}
+                        <button
+                          onClick={async () => {
+                            setCreativeStatus('এই লাইনটি রিফ্রেশ হচ্ছে...');
+                            const trans = await client.translateSentence(paraLineText);
+                            if (trans) {
+                              setLiveTranslations(prev => ({ ...prev, [para.startIdx]: trans }));
+                              updateScriptDirective(para.startIdx, {
+                                meaningBn: trans,
+                                banglaExplanation: trans,
+                                query: cleanQuery,
+                                brollKeywords: brollKws,
+                                pngKeywords: pngKws
+                              });
+                            }
+                            setCreativeStatus('লাইন রিফ্রেশ সম্পন্ন!');
+                            setTimeout(() => setCreativeStatus(null), 2500);
+                          }}
+                          style={{
+                            background: 'rgba(56, 189, 248, 0.15)',
+                            border: '1px solid rgba(56, 189, 248, 0.35)',
+                            borderRadius: '4px',
+                            color: '#38bdf8',
+                            cursor: 'pointer',
+                            padding: '2px 8px',
+                            fontSize: '10px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            fontWeight: 600
+                          }}
+                          title="এই লাইনের বাংলা অর্থ ও কী-ওয়ার্ড নতুন করে রিফ্রেশ করুন"
+                        >
+                          <RefreshCw size={10} />
+                          <span>রিফ্রেশ</span>
+                        </button>
+                        <button
+                          onClick={() => setExpandedDirectiveIdx(null)}
+                          style={{
+                            background: 'rgba(255,255,255,0.06)',
+                            border: '1px solid rgba(255,255,255,0.12)',
+                            borderRadius: '4px',
+                            color: 'var(--text-muted)',
+                            cursor: 'pointer',
+                            padding: '2px 6px',
+                            fontSize: '11px'
+                          }}
+                          title="প্যানেল বন্ধ করুন"
+                        >
+                          ✕
+                        </button>
+                      </div>
                     </div>
 
                     {/* 📖 CONTEXTUAL SCRIPT & BENGALI TRANSLATION STREAM */}
