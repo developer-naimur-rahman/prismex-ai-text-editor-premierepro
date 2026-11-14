@@ -31,6 +31,8 @@ export const NavigationHeader: React.FC = () => {
     setLanguage
   } = usePrismexStore();
 
+  const [undoStatus, setUndoStatus] = React.useState<string | null>(null);
+
   const t = translations[language];
   const pendingReviewCount = reviewItems.filter(i => i.status === 'PENDING').length;
 
@@ -122,17 +124,22 @@ export const NavigationHeader: React.FC = () => {
 
           <button
             onClick={async () => {
+              setUndoStatus('...');
               const res = await PremiereHostBridge.getInstance().undoLastCut();
               if (res.success) {
+                setUndoStatus(language === 'bn' ? '✓ সফল' : '✓ Done');
                 await refreshSequence();
+              } else {
+                setUndoStatus(language === 'bn' ? 'ইতিহাস নেই' : 'No history');
               }
+              setTimeout(() => setUndoStatus(null), 2500);
             }}
             title={language === 'bn' ? 'পূর্ববর্তী সিকোয়েন্সে ফিরে যান (Undo)' : 'Revert to previous un-cut sequence (Undo)'}
             style={{
-              backgroundColor: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid rgba(239, 68, 68, 0.35)',
+              backgroundColor: undoStatus ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.15)',
+              border: undoStatus ? '1px solid #10b981' : '1px solid rgba(239, 68, 68, 0.35)',
               borderRadius: '10px',
-              color: '#fca5a5',
+              color: undoStatus ? '#34d399' : '#fca5a5',
               fontSize: '9.5px',
               fontWeight: 600,
               padding: '2px 7px',
@@ -143,7 +150,7 @@ export const NavigationHeader: React.FC = () => {
             }}
           >
             <RotateCcw size={10} />
-            <span>{language === 'bn' ? 'আনডু' : 'Undo'}</span>
+            <span>{undoStatus || (language === 'bn' ? 'আনডু' : 'Undo')}</span>
           </button>
 
           <button

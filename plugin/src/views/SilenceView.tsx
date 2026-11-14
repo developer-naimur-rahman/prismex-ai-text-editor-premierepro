@@ -147,7 +147,10 @@ export const SilenceView: React.FC = () => {
               <button
                 className="btn-secondary"
                 style={{ padding: '2px 6px', fontSize: '9.5px' }}
-                onClick={() => hostBridge.setPlayheadPosition(s.start_seconds)}
+                onClick={() => {
+                  hostBridge.setPlayheadPosition(s.start_seconds);
+                  hostBridge.startPlayback(1);
+                }}
               >
                 <Play size={10} />
                 <span>Seek</span>

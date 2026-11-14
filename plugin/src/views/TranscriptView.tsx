@@ -622,6 +622,7 @@ export const TranscriptView: React.FC = () => {
         color: 'GREEN'
       }]);
       setCreativeStatus(`B-Roll মার্কার ও V2 প্লেসহোল্ডার সফলভাবে টাইমলাইনে যুক্ত হয়েছে!`);
+      setExportStatus(language === 'bn' ? 'B-Roll মার্কার ও V2 প্লেসহোল্ডার টাইমলাইনে যুক্ত হয়েছে!' : 'B-Roll marker placed on timeline!');
       setShowBrollModal(false);
     } catch (e: any) {
       setCreativeStatus(String(e));

@@ -837,15 +837,18 @@ export const SrtEditorView: React.FC = () => {
                       }}
                     />
 
-                    {/* Seek Button */}
+                    {/* Seek & Play Button */}
                     <button
-                      onClick={() => hostBridge.setPlayheadPosition(cue.startSeconds)}
+                      onClick={() => {
+                        hostBridge.setPlayheadPosition(cue.startSeconds);
+                        hostBridge.startPlayback(1);
+                      }}
                       className="btn-secondary"
                       style={{ padding: '5px 8px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '3px' }}
-                      title={language === 'bn' ? 'টাইমলাইন প্লেহেড এই কিউ-তে নিন' : 'Seek playhead in Premiere Pro'}
+                      title={language === 'bn' ? 'টাইমলাইন প্লেহেড এই কিউ-তে নিন এবং প্লে করুন' : 'Seek playhead in Premiere Pro & play'}
                     >
                       <Play size={10} />
-                      <span>{language === 'bn' ? 'প্লে' : 'Seek'}</span>
+                      <span>{language === 'bn' ? 'প্লে' : 'Play'}</span>
                     </button>
 
                     {/* Merge Down */}

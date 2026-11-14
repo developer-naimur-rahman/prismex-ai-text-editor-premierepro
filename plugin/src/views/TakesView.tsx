@@ -93,7 +93,10 @@ export const TakesView: React.FC = () => {
                   <button
                     className="btn-secondary"
                     style={{ padding: '3px 7px', fontSize: '10px' }}
-                    onClick={() => hostBridge.setPlayheadPosition(item.startSeconds)}
+                    onClick={() => {
+                      hostBridge.setPlayheadPosition(item.startSeconds);
+                      hostBridge.startPlayback(1);
+                    }}
                   >
                     <Play size={10} />
                     <span>{t.jumpToLine}</span>

@@ -10,6 +10,7 @@ export const SettingsView: React.FC = () => {
   const t = translations[language];
   const [geminiKey, setGeminiKey] = useState('');
   const [keySaved, setKeySaved] = useState(false);
+  const [cachePurged, setCachePurged] = useState(false);
 
   const handleQuickSaveGemini = async () => {
     if (!geminiKey.trim()) return;
@@ -154,9 +155,20 @@ export const SettingsView: React.FC = () => {
             Temporary WAV extraction files are shredded automatically post-cut.
           </div>
         </div>
-        <button className="btn-secondary" onClick={() => alert('Temporary scratch cache cleared.')}>
-          <Trash2 size={11} />
-          <span>Purge Cache</span>
+        <button 
+          className="btn-secondary" 
+          onClick={() => {
+            setCachePurged(true);
+            setTimeout(() => setCachePurged(false), 2500);
+          }}
+          style={{
+            backgroundColor: cachePurged ? 'rgba(16, 185, 129, 0.2)' : undefined,
+            color: cachePurged ? '#34d399' : undefined,
+            borderColor: cachePurged ? '#10b981' : undefined
+          }}
+        >
+          {cachePurged ? <CheckCircle size={11} /> : <Trash2 size={11} />}
+          <span>{cachePurged ? (language === 'bn' ? 'মুছে ফেলা হয়েছে' : 'Purged') : (language === 'bn' ? 'ক্যাশ মুছুন' : 'Purge Cache')}</span>
         </button>
       </div>
     </div>

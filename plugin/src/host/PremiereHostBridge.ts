@@ -443,13 +443,7 @@ export class PremiereHostBridge {
    * Opens a URL in the user's default system browser (Chrome/Safari).
    */
   public openExternalUrl(url: string): void {
-    if (this.isCEP && this.csInterface?.openURLInDefaultBrowser) {
-      this.csInterface.openURLInDefaultBrowser(url);
-      return;
-    }
-    if (typeof window !== 'undefined') {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    }
+    this.openURLInDefaultBrowser(url);
   }
 
   /**
