@@ -39,7 +39,8 @@ import {
   Play,
   Image,
   ExternalLink,
-  Globe
+  Globe,
+  FileText
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { copyToClipboard } from '../utils/clipboard';
@@ -1697,260 +1698,53 @@ export const TranscriptView: React.FC = () => {
           )}
 
           {/* 💾 EXPORT DROPDOWN MENU */}
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => {
-                setShowExportDropdown(!showExportDropdown);
-                setShowToolsDropdown(false);
-              }}
-              className="btn-secondary"
-              style={{
-                padding: '3px 8px',
-                fontSize: '10px',
-                height: '26px',
-                backgroundColor: showExportDropdown ? 'rgba(5, 150, 105, 0.25)' : 'rgba(255,255,255,0.06)',
-                borderColor: showExportDropdown ? '#10b981' : 'rgba(255,255,255,0.15)',
-                color: showExportDropdown ? '#34d399' : 'var(--text-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
-            >
-              <Download size={11} />
-              <span>{language === 'bn' ? 'এক্সপোর্ট ▾' : 'Export ▾'}</span>
-            </button>
+          {/* 📥 EXPORT BUTTON (Opens Focused Modal) */}
+          <button
+            onClick={() => {
+              setShowExportDropdown(true);
+              setShowToolsDropdown(false);
+            }}
+            className="btn-secondary"
+            style={{
+              padding: '3px 8px',
+              fontSize: '10px',
+              height: '26px',
+              backgroundColor: showExportDropdown ? 'rgba(5, 150, 105, 0.25)' : 'rgba(255,255,255,0.06)',
+              borderColor: showExportDropdown ? '#10b981' : 'rgba(255,255,255,0.15)',
+              color: showExportDropdown ? '#34d399' : 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+            title="এক্সপোর্ট ও সাবটাইটেল সেভ হাব খুলুন"
+          >
+            <Download size={11} />
+            <span>{language === 'bn' ? 'এক্সপোর্ট ▾' : 'Export ▾'}</span>
+          </button>
 
-            {showExportDropdown && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '30px',
-                  right: 0,
-                  zIndex: 9999,
-                  backgroundColor: '#18181b',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '6px',
-                  padding: '5px',
-                  minWidth: '220px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.9)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '3px'
-                }}
-              >
-                <button
-                  onClick={() => {
-                    handleSaveAll3ToProject();
-                    setShowExportDropdown(false);
-                  }}
-                  style={{
-                    padding: '6px 8px',
-                    fontSize: '10.5px',
-                    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                    color: '#34d399',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left',
-                    fontWeight: 600
-                  }}
-                >
-                  <Save size={12} />
-                  <span>প্রজেক্টে ৩টি ফাইল সেভ (SRT+TXT+JSON)</span>
-                </button>
-                <button
-                  onClick={() => {
-                    handleSendToPremiereCaptions();
-                    setShowExportDropdown(false);
-                  }}
-                  style={{
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: '#60a5fa',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <Subtitles size={12} />
-                  <span>Premiere Captions ট্র্যাকে পাঠান</span>
-                </button>
-                <div style={{ height: '1px', backgroundColor: 'rgba(255,255,255,0.1)', margin: '2px 0' }} />
-                <div style={{ display: 'flex', gap: '3px' }}>
-                  <button
-                    onClick={() => { handleExportSrt(); setShowExportDropdown(false); }}
-                    className="btn-secondary"
-                    style={{ flex: 1, padding: '3px 6px', fontSize: '9.5px', justifyContent: 'center' }}
-                  >
-                    .SRT
-                  </button>
-                  <button
-                    onClick={() => { handleExportTxt(); setShowExportDropdown(false); }}
-                    className="btn-secondary"
-                    style={{ flex: 1, padding: '3px 6px', fontSize: '9.5px', justifyContent: 'center' }}
-                  >
-                    .TXT
-                  </button>
-                  <button
-                    onClick={() => { handleExportJson(); setShowExportDropdown(false); }}
-                    className="btn-secondary"
-                    style={{ flex: 1, padding: '3px 6px', fontSize: '9.5px', justifyContent: 'center' }}
-                  >
-                    .JSON
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ⚙️ TOOLS DROPDOWN MENU */}
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={() => {
-                setShowToolsDropdown(!showToolsDropdown);
-                setShowExportDropdown(false);
-              }}
-              className="btn-secondary"
-              style={{
-                padding: '3px 8px',
-                fontSize: '10px',
-                height: '26px',
-                backgroundColor: showToolsDropdown ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255,255,255,0.06)',
-                borderColor: showToolsDropdown ? '#3b82f6' : 'rgba(255,255,255,0.15)',
-                color: showToolsDropdown ? '#60a5fa' : 'var(--text-primary)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
-            >
-              <Sliders size={11} />
-              <span>{language === 'bn' ? 'টুলস ▾' : 'Tools ▾'}</span>
-            </button>
-
-            {showToolsDropdown && (
-              <div
-                style={{
-                  position: 'absolute',
-                  top: '30px',
-                  right: 0,
-                  zIndex: 9999,
-                  backgroundColor: '#18181b',
-                  border: '1px solid rgba(255,255,255,0.2)',
-                  borderRadius: '6px',
-                  padding: '5px',
-                  minWidth: '190px',
-                  boxShadow: '0 8px 24px rgba(0,0,0,0.9)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '3px'
-                }}
-              >
-                <button
-                  onClick={() => { setActiveTab('srt-editor'); setShowToolsDropdown(false); }}
-                  style={{
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: '#60a5fa',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <Subtitles size={12} />
-                  <span>৬. SRT এডিটর খুলুন</span>
-                </button>
-                <button
-                  onClick={() => { setShowSmartSrt(!showSmartSrt); setShowToolsDropdown(false); }}
-                  style={{
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: '#93c5fd',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <SlidersHorizontal size={12} />
-                  <span>AI স্মার্ট SRT কনফিগ</span>
-                </button>
-                <button
-                  onClick={() => { setShowCreativeStudio(!showCreativeStudio); setShowToolsDropdown(false); }}
-                  style={{
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: '#f472b6',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <Sparkles size={12} />
-                  <span>AI ক্রিয়েটিভ স্টুডিও (শর্টস)</span>
-                </button>
-                <button
-                  onClick={() => { setShowFindReplace(!showFindReplace); setShowToolsDropdown(false); }}
-                  style={{
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: '#fde047',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <Type size={12} />
-                  <span>টেক্সট খুঁজুন ও মুছুন</span>
-                </button>
-                <button
-                  onClick={() => { setShowAiPanel(!showAiPanel); setShowToolsDropdown(false); }}
-                  style={{
-                    padding: '5px 8px',
-                    fontSize: '10px',
-                    backgroundColor: 'transparent',
-                    color: '#c4b5fd',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    textAlign: 'left'
-                  }}
-                >
-                  <Bot size={12} />
-                  <span>AI Assistant চ্যাট</span>
-                </button>
-              </div>
-            )}
-          </div>
+          {/* ⚙️ TOOLS BUTTON (Opens Focused Modal) */}
+          <button
+            onClick={() => {
+              setShowToolsDropdown(true);
+              setShowExportDropdown(false);
+            }}
+            className="btn-secondary"
+            style={{
+              padding: '3px 8px',
+              fontSize: '10px',
+              height: '26px',
+              backgroundColor: showToolsDropdown ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255,255,255,0.06)',
+              borderColor: showToolsDropdown ? '#3b82f6' : 'rgba(255,255,255,0.15)',
+              color: showToolsDropdown ? '#60a5fa' : 'var(--text-primary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px'
+            }}
+            title="এডিটর টুলস ও স্টুডিও হাব খুলুন"
+          >
+            <Sliders size={11} />
+            <span>{language === 'bn' ? 'টুলস ▾' : 'Tools ▾'}</span>
+          </button>
 
           {/* Quick Silence Cut button if silences detected */}
           {detectedSilences.length > 0 && (
@@ -4393,6 +4187,361 @@ export const TranscriptView: React.FC = () => {
           >
             ✕
           </button>
+        </div>
+      )}
+
+      {/* ===================== FOCUSED EXPORT MODAL ===================== */}
+      {showExportDropdown && (
+        <div
+          onClick={() => setShowExportDropdown(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.72)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '390px',
+              backgroundColor: '#18181b',
+              border: '1.5px solid rgba(16, 185, 129, 0.45)',
+              borderRadius: '8px',
+              padding: '16px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.9)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '12px',
+              fontFamily: 'inherit'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#34d399', fontWeight: 700, fontSize: '13px' }}>
+                <Download size={16} />
+                <span>{language === 'bn' ? 'এক্সপোর্ট ও ক্যাপশন হাব' : 'Export & Captions Hub'}</span>
+              </div>
+              <button
+                onClick={() => setShowExportDropdown(false)}
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: '4px',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '2px 7px',
+                  fontSize: '12px'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Option 1: 3-in-1 Project Save (Hero action) */}
+            <button
+              onClick={() => {
+                handleSaveAll3ToProject();
+                setShowExportDropdown(false);
+              }}
+              style={{
+                padding: '10px 12px',
+                backgroundColor: 'rgba(16, 185, 129, 0.18)',
+                border: '1.5px solid #10b981',
+                borderRadius: '6px',
+                color: '#34d399',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+                textAlign: 'left'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 700 }}>
+                <Save size={15} />
+                <span>প্রজেক্টে ৩টি ফাইল সেভ (SRT + TXT + JSON)</span>
+              </div>
+              <div style={{ fontSize: '10px', color: '#a7f3d0', paddingLeft: '23px' }}>
+                এক ক্লিকে আপনার প্রিমিয়ার প্রজেক্ট ফোল্ডারে ফুল ডাটা ব্যাকআপ সংরক্ষণ করুন
+              </div>
+            </button>
+
+            {/* Option 2: Send to Premiere Captions Track */}
+            <button
+              onClick={() => {
+                handleSendToPremiereCaptions();
+                setShowExportDropdown(false);
+              }}
+              style={{
+                padding: '10px 12px',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                border: '1.5px solid #3b82f6',
+                borderRadius: '6px',
+                color: '#60a5fa',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '3px',
+                textAlign: 'left'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', fontWeight: 700 }}>
+                <Subtitles size={15} />
+                <span>Premiere Captions ট্র্যাকে সরাসরি পাঠান</span>
+              </div>
+              <div style={{ fontSize: '10px', color: '#bfdbfe', paddingLeft: '23px' }}>
+                টাইমলাইনের সাবটাইটেল ট্র্যাকে অটোমেটিক ক্লিপ তৈরি করে দেবে
+              </div>
+            </button>
+
+            {/* Option 3: Individual File Downloads */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '2px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                নির্দিষ্ট ফরম্যাটে ফাইল ডাউনলোড করুন:
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px' }}>
+                <button
+                  onClick={() => { handleExportSrt(); setShowExportDropdown(false); }}
+                  className="btn-secondary"
+                  style={{
+                    padding: '8px 4px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderColor: 'rgba(255,255,255,0.18)'
+                  }}
+                >
+                  <FileText size={14} color="#facc15" />
+                  <span>.SRT</span>
+                  <span style={{ fontSize: '8.5px', color: 'var(--text-muted)' }}>সাবটাইটেল</span>
+                </button>
+
+                <button
+                  onClick={() => { handleExportTxt(); setShowExportDropdown(false); }}
+                  className="btn-secondary"
+                  style={{
+                    padding: '8px 4px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderColor: 'rgba(255,255,255,0.18)'
+                  }}
+                >
+                  <FileText size={14} color="#60a5fa" />
+                  <span>.TXT</span>
+                  <span style={{ fontSize: '8.5px', color: 'var(--text-muted)' }}>প্লেইন টেক্সট</span>
+                </button>
+
+                <button
+                  onClick={() => { handleExportJson(); setShowExportDropdown(false); }}
+                  className="btn-secondary"
+                  style={{
+                    padding: '8px 4px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    borderColor: 'rgba(255,255,255,0.18)'
+                  }}
+                >
+                  <FileText size={14} color="#a855f7" />
+                  <span>.JSON</span>
+                  <span style={{ fontSize: '8.5px', color: 'var(--text-muted)' }}>টাইমকোড ডাটা</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== FOCUSED TOOLS MODAL ===================== */}
+      {showToolsDropdown && (
+        <div
+          onClick={() => setShowToolsDropdown(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10000,
+            backgroundColor: 'rgba(0,0,0,0.72)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '390px',
+              backgroundColor: '#18181b',
+              border: '1.5px solid rgba(59, 130, 246, 0.45)',
+              borderRadius: '8px',
+              padding: '16px',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.9)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px',
+              fontFamily: 'inherit'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#60a5fa', fontWeight: 700, fontSize: '13px' }}>
+                <Sliders size={16} />
+                <span>{language === 'bn' ? 'প্রিজমেক্স টুলস ও স্টুডিও হাব' : 'Prismex Tools & Studio Hub'}</span>
+              </div>
+              <button
+                onClick={() => setShowToolsDropdown(false)}
+                style={{
+                  background: 'rgba(255,255,255,0.06)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: '4px',
+                  color: 'var(--text-muted)',
+                  cursor: 'pointer',
+                  padding: '2px 7px',
+                  fontSize: '12px'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Tools List */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Tool 1: SRT Editor */}
+              <button
+                onClick={() => { setActiveTab('srt-editor'); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(168, 85, 247, 0.12)',
+                  border: '1px solid rgba(168, 85, 247, 0.35)',
+                  borderRadius: '6px',
+                  color: '#d8b4fe',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <Subtitles size={16} color="#c084fc" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#f3e8ff' }}>📝 SRT সাবটাইটেল এডিটর</div>
+                  <div style={{ fontSize: '10px', color: '#c084fc' }}>টাইমকোড ড্র্যাগ, স্প্লিট ও সরাসরি টেক্সট এডিট করুন</div>
+                </div>
+              </button>
+
+              {/* Tool 2: AI Smart SRT Config */}
+              <button
+                onClick={() => { setShowSmartSrt(!showSmartSrt); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(14, 165, 233, 0.12)',
+                  border: '1px solid rgba(14, 165, 233, 0.35)',
+                  borderRadius: '6px',
+                  color: '#7dd3fc',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <SlidersHorizontal size={16} color="#38bdf8" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#f0f9ff' }}>⚙️ AI স্মার্ট SRT কনফিগারেশন</div>
+                  <div style={{ fontSize: '10px', color: '#7dd3fc' }}>শর্টস, ইউটিউব ও পডকাস্ট ফরম্যাটের সাবটাইটেল সিঙ্ক</div>
+                </div>
+              </button>
+
+              {/* Tool 3: AI Viral Shorts Studio */}
+              <button
+                onClick={() => { setShowCreativeStudio(!showCreativeStudio); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(236, 72, 153, 0.12)',
+                  border: '1px solid rgba(236, 72, 153, 0.35)',
+                  borderRadius: '6px',
+                  color: '#f472b6',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <Sparkles size={16} color="#ec4899" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#fdf2f8' }}>✨ AI ক্রিয়েটিভ স্টুডিও (শর্টস)</div>
+                  <div style={{ fontSize: '10px', color: '#f472b6' }}>লং ভিডিও থেকে ৩-পার্ট ভাইরাল ক্লিপ অটো-ডিটেক্ট করুন</div>
+                </div>
+              </button>
+
+              {/* Tool 4: Find & Replace */}
+              <button
+                onClick={() => { setShowFindReplace(!showFindReplace); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(234, 179, 8, 0.12)',
+                  border: '1px solid rgba(234, 179, 8, 0.35)',
+                  borderRadius: '6px',
+                  color: '#fde047',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <Type size={16} color="#eab308" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#fefce8' }}>🔍 টেক্সট খুঁজুন ও মুছুন</div>
+                  <div style={{ fontSize: '10px', color: '#facc15' }}>ট্রান্সক্রিপ্টের নির্দিষ্ট শব্দ সার্চ করুন ও বাল্ক পরিবর্তন করুন</div>
+                </div>
+              </button>
+
+              {/* Tool 5: AI Assistant */}
+              <button
+                onClick={() => { setShowAiPanel(!showAiPanel); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                  border: '1px solid rgba(59, 130, 246, 0.35)',
+                  borderRadius: '6px',
+                  color: '#93c5fd',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <Bot size={16} color="#3b82f6" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#eff6ff' }}>🤖 AI Assistant চ্যাটবট</div>
+                  <div style={{ fontSize: '10px', color: '#60a5fa' }}>স্ক্রিপ্ট পরিমার্জন ও ভিডিও কন্টেন্ট পরামর্শ নিন</div>
+                </div>
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
