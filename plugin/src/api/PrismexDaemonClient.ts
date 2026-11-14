@@ -246,6 +246,21 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async tuneSingleLine(text: string, contextBefore?: string, contextAfter?: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/tune-single-line`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, contextBefore: contextBefore || '', contextAfter: contextAfter || '' })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] tuneSingleLine failed:', err);
+      return null;
+    }
+  }
+
   public async formatAeTypography(text: string): Promise<{ formattedText: string; lines: string[]; aeSnippet: string } | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/transcript/ae-typography`, {

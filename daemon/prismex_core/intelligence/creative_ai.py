@@ -21,11 +21,11 @@ class CreativeAI:
         openrouter_key = KeychainVault.get_api_key("openrouter")
         if openrouter_key:
             openrouter_models = [
-                "google/gemini-2.5-flash",
-                "google/gemini-2.0-flash-001",
                 "deepseek/deepseek-chat",
+                "google/gemini-flash-1.5",
                 "meta-llama/llama-3.3-70b-instruct",
-                "anthropic/claude-3.5-haiku"
+                "anthropic/claude-3.5-haiku",
+                "google/gemini-2.0-flash-001"
             ]
             for om in openrouter_models:
                 try:
@@ -1017,8 +1017,10 @@ class CreativeAI:
                 primary = f"{priority_entities[0]} {priority_entities[1]}"
         elif content_words:
             primary = " ".join(content_words[:2])
+        elif raw_words:
+            primary = raw_words[0]
         else:
-            primary = "travel road story"
+            primary = "story topic"
 
         broll_kws: List[str] = [primary]
         if "california" in content_words:
@@ -1458,6 +1460,93 @@ class CreativeAI:
         }
 
     @classmethod
+    def analyze_single_line_directive(
+        cls,
+        sentence_text: str,
+        context_before: str = "",
+        context_after: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Deep contextual LLM analysis for a single sentence from the transcript.
+        Analyzes the full meaning, literal action, mood/atmosphere, cutouts/PNGs,
+        and camera/pacing advice.
+        """
+        clean_text = sentence_text.strip()
+        sem_primary, sem_broll_kws, sem_png_kws, sem_icon_idea = cls.extract_semantic_search_keywords(clean_text)
+        translated_bn = cls.translate_to_bengali(clean_text)
+
+        prompt = f"""You are an Elite Video Director and YouTube Editor analyzing a video transcript.
+The creator is speaking this exact line:
+"{clean_text}"
+
+Context before: "{context_before.strip()}"
+Context after: "{context_after.strip()}"
+
+Analyze the deep visual story, actions, environment, and objects in this line.
+Return a strictly valid JSON object with these exact keys:
+{{
+  "meaningBn": "বাক্যটির ১০০% খাঁটি, প্রাঞ্জল ও স্বাভাবিক বাংলা অনুবাদ",
+  "actionBrollKeywords": [
+    "2-3 specific English stock video search terms for literal action (e.g. 'person walking in heavy rain', 'walking wet street')"
+  ],
+  "moodBrollKeywords": [
+    "2-3 atmospheric, environmental, or cinematic landscape search terms (e.g. 'washington state moody rain', 'rain drops on street reflections 4k')"
+  ],
+  "pngKeywords": [
+    "2-3 search terms for transparent PNGs, stickers, cutout photos, or vector icons (e.g. 'rain cloud transparent png', 'umbrella cutout sticker', 'washington state map outline png')"
+  ],
+  "editingIdea": "ক্যামেরা মুভমেন্ট, জাম্প কাট, স্লো-মোশন ৬০fps বা পেসিং সংক্রান্ত প্রফেশনাল এডিটিং পরামর্শ",
+  "typographyGuide": "অন-স্ক্রিন কাইনেটিক সাবটাইটেল বা কী-ওয়ার্ড হাইলাইট অ্যানিমেশন পরামর্শ",
+  "iconIdea": "পর্দায় ফ্ল্যাশ করার মতো মোশন গ্রাফিক্স বা পিএনজি আইকন আইডিয়া"
+}}"""
+
+        ai_res = cls._call_gemini_json(prompt)
+        if isinstance(ai_res, dict) and (ai_res.get("meaningBn") or ai_res.get("actionBrollKeywords") or ai_res.get("pngKeywords")):
+            action_kws = [str(k).strip() for k in ai_res.get("actionBrollKeywords", []) if str(k).strip()]
+            mood_kws = [str(k).strip() for k in ai_res.get("moodBrollKeywords", []) if str(k).strip()]
+            png_kws = [str(k).strip() for k in ai_res.get("pngKeywords", []) if str(k).strip()]
+            meaning_bn = str(ai_res.get("meaningBn") or translated_bn).strip()
+            editing_idea = str(ai_res.get("editingIdea") or "বক্তব্যের মুড অনুযায়ী সিনেমাটিক পেসিং ও জাম্প কাট বজায় রাখুন।").strip()
+            typography_guide = str(ai_res.get("typographyGuide") or "অন-স্ক্রিন কাইনেটিক সাবটাইটেল ও কী-ওয়ার্ড বোল্ড হাইলাইট।").strip()
+            icon_idea = str(ai_res.get("iconIdea") or sem_icon_idea).strip()
+
+            combined_broll = list(dict.fromkeys(action_kws + mood_kws))[:4] or sem_broll_kws
+            combined_png = png_kws[:3] or sem_png_kws
+
+            return {
+                "text": clean_text,
+                "meaningBn": meaning_bn,
+                "banglaExplanation": meaning_bn,
+                "actionBrollKeywords": action_kws or sem_broll_kws,
+                "moodBrollKeywords": mood_kws or [f"{sem_primary} landscape 4k"],
+                "brollKeywords": combined_broll,
+                "pngKeywords": combined_png,
+                "editingIdea": editing_idea,
+                "editingSuggestion": editing_idea,
+                "typographyGuide": typography_guide,
+                "iconIdea": icon_idea,
+                "query": action_kws[0] if action_kws else sem_primary,
+                "engine": "llm-deep-director"
+            }
+
+        # Fallback to intelligent semantic entity extraction
+        return {
+            "text": clean_text,
+            "meaningBn": translated_bn,
+            "banglaExplanation": translated_bn,
+            "actionBrollKeywords": sem_broll_kws,
+            "moodBrollKeywords": [f"{sem_primary} landscape 4k"],
+            "brollKeywords": sem_broll_kws,
+            "pngKeywords": sem_png_kws,
+            "editingIdea": "বক্তব্যের মূল মেসেজ অনুযায়ী জাম্প কাট ও সঠিক পেসিং বজায় রাখুন।",
+            "editingSuggestion": "বক্তব্যের মূল মেসেজ অনুযায়ী জাম্প কাট ও সঠিক পেসিং বজায় রাখুন।",
+            "typographyGuide": "অন-স্ক্রিন কাইনেটিক সাবটাইটেল ও কী-ওয়ার্ড বোল্ড হাইলাইট।",
+            "iconIdea": sem_icon_idea,
+            "query": sem_primary,
+            "engine": "semantic-heuristic"
+        }
+
+    @classmethod
     def analyze_script_visual_directives(
         cls,
         words: List[Dict[str, Any]],
@@ -1512,43 +1601,59 @@ class CreativeAI:
         if not norm_sentences:
             return {"directives": [], "totalDirectives": 0, "engine": "none"}
 
-        # 2. Try LLM Call (Gemini / OpenRouter / OpenAI)
-        script_snippet = "\n".join(
-            f"[{s['sentenceIndex']}] ({s['startSeconds']}s-{s['endSeconds']}s): {s['text']}"
-            for s in norm_sentences[:40]
-        )
-
-        prompt = (
-            "You are an Elite Video Director and YouTube Editor analyzing a video transcript.\n"
-            "Goal: Maximize viewer retention by providing detailed video editing suggestions, typography guidance, icons, and exact Bengali translations for every sentence!\n\n"
-            "Visual Cue Types:\n"
-            "- 'BROLL': Cinematic footage, action, scenery, environment, or real-world example.\n"
-            "- 'PNG': Transparent image, gadget, logo, brand, app, dollar/cash, chart, or cutout picture.\n"
-            "- 'TEXT_ANIMATION': Kinetic typography, statistics, numbers, or powerful memorable punchlines.\n"
-            "- 'PUNCH': 114% camera snap zoom for dramatic emphasis.\n"
-            "- 'NONE': Keep focus on speaker without overlay.\n\n"
-            f"User Instruction (if any): {user_prompt or 'Analyze for high engagement'}\n\n"
-            f"Transcript Sentences:\n{script_snippet}\n\n"
-            "Return a strictly valid JSON array of objects with keys:\n"
-            "[\n"
-            "  {\n"
-            '    "sentenceIndex": 0,\n'
-            '    "visualType": "BROLL" | "PNG" | "TEXT_ANIMATION" | "PUNCH" | "NONE",\n'
-            '    "query": "primary concise search query in English for stock or PNG",\n'
-            '    "meaningBn": "এই পুরো ইংরেজি লাইনের সঠিক ও সাবলীল বাংলা অর্থ",\n'
-            '    "editingIdea": "এই বাক্যের জন্য ক্যামেরা মুভমেন্ট, কাট, ১১৪% পাঞ্চ ইন বা পেসিংয়ের স্পষ্ট এডিটিং পরামর্শ",\n'
-            '    "typographyGuide": "অন-স্ক্রিন কাইনেটিক সাবটাইটেল, ফন্ট হাইলাইট বা টেক্সট পপ-ইন অ্যানিমেশন নির্দেশিকা",\n'
-            '    "iconIdea": "এই বক্তব্যের সাথে মানানসই অন-স্ক্রিন আইকন বা মোশন গ্রাফিক্স আইডিয়া (যেমন: ফোন, লোকেশন পিন, ইমেল, ডলার)",\n'
-            '    "brollKeywords": ["keyword 1", "keyword 2"],\n'
-            '    "pngKeywords": ["png keyword 1", "png keyword 2"]\n'
-            "  }\n"
-            "]"
-        )
-
-        ai_res = cls._call_gemini_json(prompt)
+        # 2. Try LLM Call (Batched so full script is analyzed by LLM)
         llm_map: Dict[int, Dict[str, Any]] = {}
-        if isinstance(ai_res, list) and len(ai_res) > 0:
-            for item in ai_res:
+        batch_size = 25
+        num_batches = (len(norm_sentences) + batch_size - 1) // batch_size
+        max_batches = min(num_batches, 8)  # Analyze up to 200 sentences with LLM
+
+        for b_idx in range(max_batches):
+            batch = norm_sentences[b_idx * batch_size : (b_idx + 1) * batch_size]
+            if not batch:
+                break
+            script_snippet = "\n".join(
+                f"[{s['sentenceIndex']}] ({s['startSeconds']}s-{s['endSeconds']}s): {s['text']}"
+                for s in batch
+            )
+
+            prompt = (
+                "You are an Elite Video Director and YouTube Editor analyzing a video transcript.\n"
+                "Goal: Maximize viewer retention with authentic visual cues, specific action B-roll, mood scenery, transparent PNGs, and clear Bengali translations!\n\n"
+                "Visual Cue Types:\n"
+                "- 'BROLL': Cinematic footage, literal action, scenery, environment, or real-world example.\n"
+                "- 'PNG': Transparent image, gadget, logo, brand, app, dollar/cash, chart, or cutout picture.\n"
+                "- 'TEXT_ANIMATION': Kinetic typography, statistics, numbers, or powerful memorable punchlines.\n"
+                "- 'PUNCH': 114% camera snap zoom for dramatic emphasis.\n"
+                "- 'NONE': Keep focus on speaker without overlay.\n\n"
+                f"User Instruction (if any): {user_prompt or 'Analyze for high engagement'}\n\n"
+                f"Transcript Sentences:\n{script_snippet}\n\n"
+                "Return a strictly valid JSON object with key 'directives' containing an array of objects:\n"
+                "{\n"
+                '  "directives": [\n'
+                "    {\n"
+                '      "sentenceIndex": 0,\n'
+                '      "visualType": "BROLL" | "PNG" | "TEXT_ANIMATION" | "PUNCH" | "NONE",\n'
+                '      "query": "primary concise search query in English for stock or PNG",\n'
+                '      "meaningBn": "এই পুরো ইংরেজি লাইনের সঠিক ও সাবলীল বাংলা অর্থ",\n'
+                '      "editingIdea": "এই বাক্যের জন্য ক্যামেরা মুভমেন্ট, কাট, ১১৪% পাঞ্চ ইন বা পেসিংয়ের স্পষ্ট এডিটিং পরামর্শ",\n'
+                '      "typographyGuide": "অন-স্ক্রিন কাইনেটিক সাবটাইটেল, ফন্ট হাইলাইট বা টেক্সট পপ-ইন অ্যানিমেশন নির্দেশিকা",\n'
+                '      "iconIdea": "এই বক্তব্যের সাথে মানানসই অন-স্ক্রিন আইকন বা মোশন গ্রাফিক্স আইডিয়া",\n'
+                '      "actionBrollKeywords": ["specific action footage query 1", "action query 2"],\n'
+                '      "moodBrollKeywords": ["atmospheric scenery query 1", "moody landscape query 2"],\n'
+                '      "pngKeywords": ["cutout sticker png 1", "vector icon png 2"]\n'
+                "    }\n"
+                "  ]\n"
+                "}"
+            )
+
+            ai_res = cls._call_gemini_json(prompt)
+            raw_items = []
+            if isinstance(ai_res, list):
+                raw_items = ai_res
+            elif isinstance(ai_res, dict):
+                raw_items = ai_res.get("directives") or ai_res.get("items") or ai_res.get("sentences") or []
+
+            for item in raw_items:
                 if isinstance(item, dict) and "sentenceIndex" in item:
                     try:
                         idx = int(item["sentenceIndex"])
@@ -1729,6 +1834,16 @@ class CreativeAI:
             g_url = f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote(clean_q + ' transparent png')}"
             p_url = f"https://www.pexels.com/search/videos/{urllib.parse.quote(clean_q)}/"
 
+            action_kws = []
+            mood_kws = []
+            if llm_item:
+                action_kws = [str(k).strip() for k in llm_item.get("actionBrollKeywords", []) if str(k).strip()]
+                mood_kws = [str(k).strip() for k in llm_item.get("moodBrollKeywords", []) if str(k).strip()]
+            if not action_kws:
+                action_kws = broll_kws[:2]
+            if not mood_kws:
+                mood_kws = [f"{clean_q} atmospheric landscape"]
+
             directive_obj = {
                 "sentenceIndex": s_idx,
                 "text": s_text,
@@ -1747,6 +1862,8 @@ class CreativeAI:
                 "editingIdea": editing_idea,
                 "typographyGuide": typography_guide,
                 "iconIdea": icon_idea,
+                "actionBrollKeywords": action_kws[:3],
+                "moodBrollKeywords": mood_kws[:3],
                 "brollKeywords": broll_kws[:4],
                 "pngKeywords": png_kws[:3],
                 "googleImagesUrl": g_url,

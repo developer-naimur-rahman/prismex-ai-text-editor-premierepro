@@ -3445,20 +3445,27 @@ export const TranscriptView: React.FC = () => {
                     const rawWords = paraLineText.replace(/[^\w\s]/g, '').toLowerCase().split(/\s+/);
                     const stop = new Set(['the','and','for','that','this','with','from','have','they','what','about','reach','time','today','when','tell','someone','must','almost','well','hate','like','think','said','just','really']);
                     const content = rawWords.filter(w => !stop.has(w) && w.length > 2);
-                    if (content.includes('california')) return 'love california';
-                    if (content.includes('washington')) return 'washington state';
-                    if (content.includes('desert')) return 'desert landscape';
-                    if (content.includes('contact')) return 'contact information';
-                    if (content.includes('politics') || content.includes('political')) return 'politics discussion';
-                    return content.slice(0, 2).join(' ') || 'travel scenery';
+                    if (content.length > 0) return content.slice(0, 2).join(' ');
+                    return rawWords[0] || 'visual scene';
                   }
                   return q;
                 })();
 
-                const brollKws: string[] = ((directive.brollKeywords && directive.brollKeywords.length > 0)
-                  ? directive.brollKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch') && !k.toLowerCase().includes('cinematic') && !k.toLowerCase().includes('scene'))
-                  : []
-                );
+                const actionBrollKws: string[] = ((directive.actionBrollKeywords && directive.actionBrollKeywords.length > 0)
+                  ? directive.actionBrollKeywords
+                  : (directive.brollKeywords && directive.brollKeywords.length > 0)
+                    ? directive.brollKeywords.slice(0, 2)
+                    : [cleanQuery]
+                ).filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch') && !k.toLowerCase().includes('cinematic') && !k.toLowerCase().includes('scene'));
+
+                const moodBrollKws: string[] = ((directive.moodBrollKeywords && directive.moodBrollKeywords.length > 0)
+                  ? directive.moodBrollKeywords
+                  : (directive.brollKeywords && directive.brollKeywords.length > 2)
+                    ? directive.brollKeywords.slice(2, 4)
+                    : [`${cleanQuery} atmospheric mood`]
+                ).filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch') && !k.toLowerCase().includes('cinematic') && !k.toLowerCase().includes('scene'));
+
+                const brollKws: string[] = Array.from(new Set([...actionBrollKws, ...moodBrollKws])).filter(Boolean);
                 if (brollKws.length === 0) {
                   brollKws.push(cleanQuery, `${cleanQuery} 4k footage`);
                 }
@@ -3512,23 +3519,40 @@ export const TranscriptView: React.FC = () => {
                         </span>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        {/* 🔄 Re-Tune this specific sentence on-demand */}
+                        {/* 🔄 Re-Tune this specific sentence on-demand with deep LLM Director */}
                         <button
                           onClick={async () => {
-                            setCreativeStatus('এই লাইনটি রিফ্রেশ হচ্ছে...');
-                            const trans = await client.translateSentence(paraLineText);
-                            if (trans) {
-                              setLiveTranslations(prev => ({ ...prev, [para.startIdx]: trans }));
+                            setCreativeStatus('এআই এই লাইনটির ডিপ ভিজ্যুয়াল অ্যানালাইসিস করছে...');
+                            const prevP = precedingParas.length > 0 ? precedingParas[precedingParas.length - 1].tokens.map((t: any) => t.word).join(' ') : '';
+                            const nextP = succeedingParas.length > 0 ? succeedingParas[0].tokens.map((t: any) => t.word).join(' ') : '';
+                            const tuned = await client.tuneSingleLine(paraLineText, prevP, nextP);
+                            if (tuned) {
+                              if (tuned.meaningBn) {
+                                setLiveTranslations(prev => ({ ...prev, [para.startIdx]: tuned.meaningBn }));
+                              }
                               updateScriptDirective(para.startIdx, {
-                                meaningBn: trans,
-                                banglaExplanation: trans,
-                                query: cleanQuery,
-                                brollKeywords: brollKws,
-                                pngKeywords: pngKws
+                                ...directive,
+                                meaningBn: tuned.meaningBn,
+                                banglaExplanation: tuned.meaningBn,
+                                actionBrollKeywords: tuned.actionBrollKeywords || [],
+                                moodBrollKeywords: tuned.moodBrollKeywords || [],
+                                brollKeywords: tuned.brollKeywords || [],
+                                pngKeywords: tuned.pngKeywords || [],
+                                query: tuned.query || cleanQuery,
+                                editingIdea: tuned.editingIdea,
+                                editingSuggestion: tuned.editingIdea,
+                                typographyGuide: tuned.typographyGuide,
+                                iconIdea: tuned.iconIdea
                               });
+                              setCreativeStatus('লাইন এআই টিউন সম্পন্ন!');
+                            } else {
+                              const trans = await client.translateSentence(paraLineText);
+                              if (trans) {
+                                setLiveTranslations(prev => ({ ...prev, [para.startIdx]: trans }));
+                              }
+                              setCreativeStatus('লাইন অনুবাদ সম্পন্ন!');
                             }
-                            setCreativeStatus('লাইন রিফ্রেশ সম্পন্ন!');
-                            setTimeout(() => setCreativeStatus(null), 2500);
+                            setTimeout(() => setCreativeStatus(null), 3000);
                           }}
                           style={{
                             background: 'rgba(56, 189, 248, 0.15)',
@@ -3543,10 +3567,10 @@ export const TranscriptView: React.FC = () => {
                             gap: '4px',
                             fontWeight: 600
                           }}
-                          title="এই লাইনের বাংলা অর্থ ও কী-ওয়ার্ড নতুন করে রিফ্রেশ করুন"
+                          title="এই লাইনের জন্য এআই ডিরেক্টর দিয়ে ডিপ অ্যাকশন ও মুড বি-রোল এবং পিএনজি নতুন করে বিশ্লেষণ করুন"
                         >
                           <RefreshCw size={10} />
-                          <span>রিফ্রেশ</span>
+                          <span>এআই টিউন</span>
                         </button>
                         <button
                           onClick={() => setExpandedDirectiveIdx(null)}
@@ -3762,9 +3786,22 @@ export const TranscriptView: React.FC = () => {
                               gap: '5px'
                             }}>
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
-                                <span style={{ fontSize: '11px', fontWeight: 600, color: '#ffffff' }}>
-                                  🔍 কি-ওয়ার্ড: <span style={{ color: '#67e8f9' }}>"{bKw}"</span>
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <span style={{
+                                    fontSize: '9px',
+                                    fontWeight: 700,
+                                    padding: '1px 5px',
+                                    borderRadius: '3px',
+                                    backgroundColor: actionBrollKws.includes(bKw) ? 'rgba(56, 189, 248, 0.2)' : 'rgba(16, 185, 129, 0.2)',
+                                    color: actionBrollKws.includes(bKw) ? '#38bdf8' : '#34d399',
+                                    border: `1px solid ${actionBrollKws.includes(bKw) ? '#38bdf8' : '#34d399'}44`
+                                  }}>
+                                    {actionBrollKws.includes(bKw) ? '🎬 সরাসরি অ্যাকশন' : '🌧️ মুড ও পরিবেশ'}
+                                  </span>
+                                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#ffffff' }}>
+                                    কি-ওয়ার্ড: <span style={{ color: '#67e8f9' }}>"{bKw}"</span>
+                                  </span>
+                                </div>
                                 {/* 🚀 OPEN ALL IN TABS */}
                                 <button
                                   onClick={() => handleOpenAllBrollSites(bKw)}

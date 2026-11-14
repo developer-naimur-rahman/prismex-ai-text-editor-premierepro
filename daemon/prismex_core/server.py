@@ -622,6 +622,20 @@ class TranslateSentenceRequest(BaseModel):
     text: str
     targetLang: Optional[str] = "bn"
 
+class SingleLineDirectiveRequest(BaseModel):
+    text: str
+    contextBefore: Optional[str] = ""
+    contextAfter: Optional[str] = ""
+
+@app.post("/api/v1/transcript/tune-single-line")
+def tune_single_line_endpoint(req: SingleLineDirectiveRequest):
+    """Deep LLM contextual analysis of a single sentence for action/mood B-Roll, PNGs, and editor advice."""
+    return CreativeAI.analyze_single_line_directive(
+        sentence_text=req.text,
+        context_before=req.contextBefore or "",
+        context_after=req.contextAfter or ""
+    )
+
 @app.post("/api/v1/transcript/translate-sentence")
 def translate_sentence_endpoint(req: TranslateSentenceRequest):
     """Translates an English sentence into accurate, natural Bengali."""
