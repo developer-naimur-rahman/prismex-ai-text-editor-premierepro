@@ -131,6 +131,11 @@ export const TranscriptView: React.FC = () => {
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
 
+  // Top Bar Dropdowns & Legend State
+  const [showExportDropdown, setShowExportDropdown] = useState(false);
+  const [showToolsDropdown, setShowToolsDropdown] = useState(false);
+  const [showLegend, setShowLegend] = useState(false);
+
   // AI Creative Studio State (Shorts, Markers, Spell, AE Typography)
   const [showCreativeStudio, setShowCreativeStudio] = useState(false);
   const [creativeTab, setCreativeTab] = useState<'SHORTS' | 'MARKERS' | 'SPELL' | 'AE'>('SHORTS');
@@ -485,6 +490,43 @@ export const TranscriptView: React.FC = () => {
     }
   };
 
+  const getMultiSiteBrollLinks = (kw: string) => {
+    const clean = encodeURIComponent(kw.trim());
+    return [
+      { name: 'Pexels', url: `https://www.pexels.com/search/videos/${clean}/`, color: '#06b6d4' },
+      { name: 'Pixabay', url: `https://pixabay.com/videos/search/${clean}/`, color: '#10b981' },
+      { name: 'Mixkit', url: `https://mixkit.co/free-stock-video/${clean}/`, color: '#8b5cf6' },
+      { name: 'Coverr', url: `https://coverr.co/s?q=${clean}`, color: '#f59e0b' },
+      { name: 'Videezy', url: `https://www.videezy.com/free-video/${clean}`, color: '#3b82f6' },
+      { name: 'YouTube 4K', url: `https://www.youtube.com/results?search_query=${clean}+4k+b-roll+free+stock+footage`, color: '#ef4444' }
+    ];
+  };
+
+  const getMultiSitePngLinks = (kw: string) => {
+    const clean = encodeURIComponent(kw.trim());
+    return [
+      { name: 'Google PNG', url: `https://www.google.com/search?tbm=isch&q=${clean}+transparent+png`, color: '#3b82f6' },
+      { name: 'Flaticon', url: `https://www.flaticon.com/search?word=${clean}`, color: '#10b981' },
+      { name: 'Iconfinder', url: `https://www.iconfinder.com/search?q=${clean}&price=free`, color: '#f59e0b' },
+      { name: 'PNGWing', url: `https://www.pngwing.com/en/search?q=${clean}`, color: '#8b5cf6' },
+      { name: 'Freepik', url: `https://www.freepik.com/search?format=search&query=${clean}&type=icon`, color: '#06b6d4' }
+    ];
+  };
+
+  const handleOpenAllBrollSites = (kw: string) => {
+    const links = getMultiSiteBrollLinks(kw).map(l => l.url);
+    hostBridge.openMultipleUrls(links);
+    setExportStatus(language === 'bn' ? `"${kw}" এর জন্য ৬টি ভিডিও সাইট ব্রাউজার ট্যাবে খোলা হয়েছে!` : `Opened 6 video sites for "${kw}" in tabs!`);
+    setTimeout(() => setExportStatus(null), 3500);
+  };
+
+  const handleOpenAllPngSites = (kw: string) => {
+    const links = getMultiSitePngLinks(kw).map(l => l.url);
+    hostBridge.openMultipleUrls(links);
+    setExportStatus(language === 'bn' ? `"${kw}" এর জন্য ৫টি PNG/আইকন সাইট ব্রাউজার ট্যাবে খোলা হয়েছে!` : `Opened 5 PNG/icon sites for "${kw}" in tabs!`);
+    setTimeout(() => setExportStatus(null), 3500);
+  };
+
   const handleAnalyzeScriptDirectives = useCallback(async () => {
     if (words.length === 0) return;
     setIsAnalyzingScript(true);
@@ -495,6 +537,17 @@ export const TranscriptView: React.FC = () => {
         const dMap: Record<number, any> = {};
         for (const d of res.directives) {
           dMap[d.sentenceIndex] = d;
+        }
+        for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+          const p = paragraphs[pIdx];
+          const pEnd = p.tokens[p.tokens.length - 1]?.end || p.startTime;
+          const match = res.directives.find((d: any) =>
+            d.sentenceIndex === pIdx ||
+            (d.startSeconds <= pEnd && d.endSeconds >= p.startTime)
+          );
+          if (match) {
+            dMap[p.startIdx] = { ...match, sentenceIndex: pIdx };
+          }
         }
         setScriptDirectives(dMap);
         setCreativeStatus(`স্ক্রিপ্ট টিউন সম্পন্ন! ${res.totalDirectives}টি ভিজ্যুয়াল ডিরেকশন তৈরি হয়েছে (${res.engine})।`);
@@ -775,14 +828,18 @@ export const TranscriptView: React.FC = () => {
           sentenceIndex: paraStartIdx,
           startSeconds: startTime,
           endSeconds: endTime,
-          visualType: 'PNG',
-          badgeLabel: '🖼️ PNG ছবি',
-          accentColor: '#a855f7',
-          explanationBn: `"${lineText}" লাইনটির জন্য প্রাসঙ্গিক স্বচ্ছ PNG গ্রাফিক্স বা ছবি দেখান।`,
-          directorAdvice: `On-screen graphic visual for "${cleanKw}"`,
-          primaryKeyword: cleanKw,
-          searchUrl: `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(cleanKw + ' transparent png')}`,
-          platform: 'Google PNG'
+          visualType: 'BROLL',
+          badgeLabel: '🎥 B-Roll',
+          accentColor: '#06b6d4',
+          query: cleanKw,
+          meaningBn: `"${lineText}" - এই বক্তব্যের মূল অর্থ ও আলোচনা তুলে ধরা হয়েছে।`,
+          editingIdea: 'বক্তব্যের সাথে সামঞ্জস্যপূর্ণ ১১৪% ক্যামেরা পাঞ্চ ইন বা জাম্প কাট দিন।',
+          typographyGuide: 'অন-স্ক্রিন কাইনেটিক সাবটাইটেল ও কী-ওয়ার্ড বোল্ড হাইলাইট অ্যানিমেশন।',
+          iconIdea: 'বক্তব্যের মূল ধারণার একটি ক্লিন ভেক্টর আইকন বা ফ্ল্যাশ গ্রাফিক্স ব্যবহার করুন।',
+          brollKeywords: [cleanKw, `${cleanKw} 4k footage`],
+          pngKeywords: [`${cleanKw} transparent png`, `${cleanKw} icon`],
+          banglaExplanation: `"${lineText}" - এই বক্তব্যের মূল অর্থ ও আলোচনা।`,
+          editingSuggestion: 'বক্তব্যের সাথে মিলিয়ে প্রাসঙ্গিক সিনেমাটিক বি-রোল ফুটেজ বা গ্রাফিক্স ওভারলে করুন।'
         });
         setExpandedDirectiveIdx(paraStartIdx);
         setExportStatus(language === 'bn' ? 'AI নির্দেশিকা তৈরি হয়েছে!' : 'AI visual directive created!');
@@ -1518,47 +1575,45 @@ export const TranscriptView: React.FC = () => {
         </div>
       )}
 
-      {/* Top Toolbar */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
+      {/* Top Toolbar (Compact Single-Row Unified Bar) */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600 }}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: '#fff' }}>
             {language === 'bn' ? `ট্রান্সক্রিপ্ট (${words.length} শব্দ)` : `Transcript (${words.length} words)`}
           </div>
           <span
             style={{
-              fontSize: '9.5px',
+              fontSize: '9px',
               color: '#34d399',
               backgroundColor: 'rgba(52, 211, 153, 0.15)',
-              padding: '1px 6px',
-              borderRadius: '3px',
+              padding: '2px 6px',
+              borderRadius: '4px',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px'
+              gap: '3px',
+              fontWeight: 600
             }}
             title={language === 'bn' ? 'এই প্রজেক্ট ও সিকোয়েন্সের ট্রান্সক্রিপ্ট স্বয়ংক্রিয়ভাবে সংরক্ষিত রয়েছে' : 'Transcript is persistently saved for this project & sequence'}
           >
             <CheckCircle2 size={10} />
-            {language === 'bn' ? 'প্রজেক্টে সংরক্ষিত' : 'Project Saved'}
+            {language === 'bn' ? 'সংরক্ষিত' : 'Saved'}
           </span>
         </div>
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Re-Transcribe */}
           <button
             className="btn-secondary"
             disabled={isRunning}
             onClick={transcribeSequence}
-            style={{ padding: '4px 7px', fontSize: '10px' }}
+            style={{ padding: '3px 8px', fontSize: '10px', height: '26px' }}
+            title="পুনরায় ট্রান্সক্রাইব করুন"
           >
             <Mic size={11} />
-            <span>{language === 'bn' ? 'পুনরায় ট্রান্সক্রাইব' : 'Re-Transcribe'}</span>
+            <span>{language === 'bn' ? 'ট্রান্সক্রাইব' : 'Transcribe'}</span>
           </button>
-          <button
-            className="btn-secondary"
-            onClick={handleRunAi}
-            style={{ padding: '4px 7px', fontSize: '10px', borderColor: 'rgba(139, 92, 246, 0.5)', color: '#c4b5fd' }}
-          >
-            <Bot size={11} />
-            <span>AI Assistant</span>
-          </button>
+
+          {/* Auto Cut */}
           <button
             className="btn-primary"
             disabled={isRunning}
@@ -1566,153 +1621,314 @@ export const TranscriptView: React.FC = () => {
               setExecutionMode('AUTO_EDIT');
               startMagicRoughCut();
             }}
-            style={{ padding: '4px 8px', fontSize: '10px' }}
+            style={{ padding: '3px 9px', fontSize: '10px', height: '26px', fontWeight: 600 }}
           >
             <Sparkles size={11} />
             <span>Auto Cut</span>
           </button>
-          <button
-            className="btn-secondary"
-            onClick={() => setActiveTab('review-queue')}
-            style={{ padding: '4px 7px', fontSize: '10px' }}
-          >
-            <CheckSquare size={11} />
-            <span>Review ({reviewItems.length})</span>
-          </button>
-        </div>
-      </div>
 
-      {/* Export Row (TXT / SRT / JSON) + Quick Silence Cut */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* ✨ AI Tune */}
           <button
-            onClick={handleSaveAll3ToProject}
-            className="btn-primary"
-            title={language === 'bn' ? 'প্রজেক্ট ফোল্ডারে এক ক্লিকে SRT, TXT এবং JSON ফাইল সেভ করুন' : '1-Click Save SRT, TXT & JSON directly to active project directory'}
+            onClick={handleAnalyzeScriptDirectives}
+            disabled={isAnalyzingScript || words.length === 0}
+            title="AI দিয়ে পুরো স্ক্রিপ্ট বিশ্লেষণ করে B-Roll, PNG, টাইপোগ্রাফি ও বাংলা অর্থ একবারে সেভ করুন"
             style={{
-              padding: '3px 8px',
+              padding: '3px 9px',
               fontSize: '10px',
-              backgroundColor: '#059669',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '4px',
+              height: '26px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid rgba(168, 85, 247, 0.5)',
+              backgroundColor: isAnalyzingScript ? 'rgba(168, 85, 247, 0.35)' : 'rgba(168, 85, 247, 0.18)',
+              color: '#d8b4fe',
+              cursor: isAnalyzingScript ? 'wait' : 'pointer',
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
-              fontWeight: 600,
-              cursor: 'pointer'
+              fontWeight: 700
             }}
           >
-            <Save size={11} />
-            <span>{language === 'bn' ? 'প্রজেক্টে ৩টি ফাইল সেভ (SRT+TXT+JSON)' : 'Save 3 to Project (SRT+TXT+JSON)'}</span>
+            {isAnalyzingScript ? <RefreshCw size={11} style={{ animation: 'spin 1s linear infinite' }} /> : <Sparkles size={11} />}
+            <span>{isAnalyzingScript ? 'টিউন হচ্ছে...' : '✨ AI টিউন'}</span>
           </button>
-          <button
-            onClick={() => setActiveTab('srt-editor')}
-            className="btn-secondary"
-            title={language === 'bn' ? 'পূর্ণাঙ্গ ডেডিকেটেড SRT এডিটরে যান' : 'Go to dedicated full-featured Smart SRT Editor'}
-            style={{
-              padding: '3px 7px',
-              fontSize: '10px',
-              color: '#60a5fa',
-              borderColor: 'rgba(96, 165, 250, 0.4)',
-              backgroundColor: 'rgba(96, 165, 250, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-              cursor: 'pointer'
-            }}
-          >
-            <Subtitles size={11} />
-            <span>{language === 'bn' ? '৬. SRT এডিটর খুলুন' : 'Open SRT Editor'}</span>
-          </button>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '3px', marginLeft: '4px' }}>
-            <Download size={10} /> Export:
-          </span>
-          <button onClick={handleExportTxt} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
-            .TXT
-          </button>
-          <button onClick={handleExportSrt} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
-            .SRT
-          </button>
-          <button onClick={handleExportJson} className="btn-secondary" style={{ padding: '3px 7px', fontSize: '10px' }}>
-            .JSON ({fps}fps)
-          </button>
-          <button
-            onClick={() => setShowSmartSrt(!showSmartSrt)}
-            className="btn-secondary"
-            title="Configure AI Smart Flexible SRT with 0-Frame Drift"
-            style={{
-              padding: '3px 7px',
-              fontSize: '10px',
-              color: showSmartSrt ? '#bfdbfe' : '#60a5fa',
-              backgroundColor: showSmartSrt ? 'rgba(59, 130, 246, 0.25)' : 'transparent',
-              borderColor: 'rgba(59, 130, 246, 0.5)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-          >
-            <Subtitles size={10} />
-            <span>{language === 'bn' ? 'AI স্মার্ট SRT' : 'Smart SRT'}</span>
-          </button>
-          <button
-            onClick={() => setShowFindReplace(!showFindReplace)}
-            className="btn-secondary"
-            title="Find & Replace text and strip punctuation"
-            style={{
-              padding: '3px 7px',
-              fontSize: '10px',
-              color: showFindReplace ? '#fef08a' : '#facc15',
-              backgroundColor: showFindReplace ? 'rgba(250, 204, 21, 0.2)' : 'transparent',
-              borderColor: 'rgba(250, 204, 21, 0.4)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-          >
-            <Type size={10} />
-            <span>{language === 'bn' ? 'খুঁজুন/মুছুন' : 'Find/Clean'}</span>
-          </button>
-          <button
-            onClick={() => setShowCreativeStudio(!showCreativeStudio)}
-            className="btn-secondary"
-            title="Viral Shorts (9:16), Colored Timeline Markers, Spell Check, AE Typography"
-            style={{
-              padding: '3px 7px',
-              fontSize: '10px',
-              color: showCreativeStudio ? '#f472b6' : '#ec4899',
-              backgroundColor: showCreativeStudio ? 'rgba(236, 72, 153, 0.2)' : 'transparent',
-              borderColor: 'rgba(236, 72, 153, 0.4)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-          >
-            <Sparkles size={10} />
-            <span>{language === 'bn' ? 'AI স্টুডিও' : 'AI Studio'}</span>
-          </button>
-          <button
-            onClick={handleSendToPremiereCaptions}
-            className="btn-secondary"
-            title="Create Caption Track in Premiere Pro & populate Text Panel Captions"
-            style={{ padding: '3px 7px', fontSize: '10px', color: '#34d399', borderColor: 'rgba(16, 185, 129, 0.4)' }}
-          >
-            {language === 'bn' ? 'Premiere Captions-এ পাঠান' : 'Send to Premiere Captions'}
-          </button>
-        </div>
 
-        <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          {exportStatus && (
-            <span style={{ fontSize: '10px', color: '#34d399', fontWeight: 600 }}>{exportStatus}</span>
+          {/* Review Queue Jump */}
+          {reviewItems.length > 0 && (
+            <button
+              className="btn-secondary"
+              onClick={() => setActiveTab('review-queue')}
+              style={{ padding: '3px 7px', fontSize: '10px', height: '26px' }}
+            >
+              <CheckSquare size={11} />
+              <span>রিভিউ ({reviewItems.length})</span>
+            </button>
           )}
+
+          {/* 💾 EXPORT DROPDOWN MENU */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => {
+                setShowExportDropdown(!showExportDropdown);
+                setShowToolsDropdown(false);
+              }}
+              className="btn-secondary"
+              style={{
+                padding: '3px 8px',
+                fontSize: '10px',
+                height: '26px',
+                backgroundColor: showExportDropdown ? 'rgba(5, 150, 105, 0.25)' : 'rgba(255,255,255,0.06)',
+                borderColor: showExportDropdown ? '#10b981' : 'rgba(255,255,255,0.15)',
+                color: showExportDropdown ? '#34d399' : 'var(--text-primary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              <Download size={11} />
+              <span>{language === 'bn' ? 'এক্সপোর্ট ▾' : 'Export ▾'}</span>
+            </button>
+
+            {showExportDropdown && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '30px',
+                  right: 0,
+                  zIndex: 9999,
+                  backgroundColor: '#18181b',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  borderRadius: '6px',
+                  padding: '5px',
+                  minWidth: '220px',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.9)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '3px'
+                }}
+              >
+                <button
+                  onClick={() => {
+                    handleSaveAll3ToProject();
+                    setShowExportDropdown(false);
+                  }}
+                  style={{
+                    padding: '6px 8px',
+                    fontSize: '10.5px',
+                    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                    color: '#34d399',
+                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left',
+                    fontWeight: 600
+                  }}
+                >
+                  <Save size={12} />
+                  <span>প্রজেক্টে ৩টি ফাইল সেভ (SRT+TXT+JSON)</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleSendToPremiereCaptions();
+                    setShowExportDropdown(false);
+                  }}
+                  style={{
+                    padding: '5px 8px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: '#60a5fa',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <Subtitles size={12} />
+                  <span>Premiere Captions ট্র্যাকে পাঠান</span>
+                </button>
+                <div style={{ height: '1px', backgroundColor: 'rgba(255,255,255,0.1)', margin: '2px 0' }} />
+                <div style={{ display: 'flex', gap: '3px' }}>
+                  <button
+                    onClick={() => { handleExportSrt(); setShowExportDropdown(false); }}
+                    className="btn-secondary"
+                    style={{ flex: 1, padding: '3px 6px', fontSize: '9.5px', justifyContent: 'center' }}
+                  >
+                    .SRT
+                  </button>
+                  <button
+                    onClick={() => { handleExportTxt(); setShowExportDropdown(false); }}
+                    className="btn-secondary"
+                    style={{ flex: 1, padding: '3px 6px', fontSize: '9.5px', justifyContent: 'center' }}
+                  >
+                    .TXT
+                  </button>
+                  <button
+                    onClick={() => { handleExportJson(); setShowExportDropdown(false); }}
+                    className="btn-secondary"
+                    style={{ flex: 1, padding: '3px 6px', fontSize: '9.5px', justifyContent: 'center' }}
+                  >
+                    .JSON
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ⚙️ TOOLS DROPDOWN MENU */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => {
+                setShowToolsDropdown(!showToolsDropdown);
+                setShowExportDropdown(false);
+              }}
+              className="btn-secondary"
+              style={{
+                padding: '3px 8px',
+                fontSize: '10px',
+                height: '26px',
+                backgroundColor: showToolsDropdown ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255,255,255,0.06)',
+                borderColor: showToolsDropdown ? '#3b82f6' : 'rgba(255,255,255,0.15)',
+                color: showToolsDropdown ? '#60a5fa' : 'var(--text-primary)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}
+            >
+              <Sliders size={11} />
+              <span>{language === 'bn' ? 'টুলস ▾' : 'Tools ▾'}</span>
+            </button>
+
+            {showToolsDropdown && (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: '30px',
+                  right: 0,
+                  zIndex: 9999,
+                  backgroundColor: '#18181b',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  borderRadius: '6px',
+                  padding: '5px',
+                  minWidth: '190px',
+                  boxShadow: '0 8px 24px rgba(0,0,0,0.9)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '3px'
+                }}
+              >
+                <button
+                  onClick={() => { setActiveTab('srt-editor'); setShowToolsDropdown(false); }}
+                  style={{
+                    padding: '5px 8px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: '#60a5fa',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <Subtitles size={12} />
+                  <span>৬. SRT এডিটর খুলুন</span>
+                </button>
+                <button
+                  onClick={() => { setShowSmartSrt(!showSmartSrt); setShowToolsDropdown(false); }}
+                  style={{
+                    padding: '5px 8px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: '#93c5fd',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <SlidersHorizontal size={12} />
+                  <span>AI স্মার্ট SRT কনফিগ</span>
+                </button>
+                <button
+                  onClick={() => { setShowCreativeStudio(!showCreativeStudio); setShowToolsDropdown(false); }}
+                  style={{
+                    padding: '5px 8px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: '#f472b6',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <Sparkles size={12} />
+                  <span>AI ক্রিয়েটিভ স্টুডিও (শর্টস)</span>
+                </button>
+                <button
+                  onClick={() => { setShowFindReplace(!showFindReplace); setShowToolsDropdown(false); }}
+                  style={{
+                    padding: '5px 8px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: '#fde047',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <Type size={12} />
+                  <span>টেক্সট খুঁজুন ও মুছুন</span>
+                </button>
+                <button
+                  onClick={() => { setShowAiPanel(!showAiPanel); setShowToolsDropdown(false); }}
+                  style={{
+                    padding: '5px 8px',
+                    fontSize: '10px',
+                    backgroundColor: 'transparent',
+                    color: '#c4b5fd',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    textAlign: 'left'
+                  }}
+                >
+                  <Bot size={12} />
+                  <span>AI Assistant চ্যাট</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Quick Silence Cut button if silences detected */}
           {detectedSilences.length > 0 && (
             <button
               onClick={cutAllSilencesNow}
               className="btn-secondary"
-              style={{ padding: '3px 8px', fontSize: '10px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+              style={{ padding: '3px 7px', fontSize: '10px', height: '26px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+              title="সব নীরবতা কাটুন"
             >
               <Scissors size={10} />
-              <span>Cut {detectedSilences.length} Silence(s)</span>
+              <span>Cut {detectedSilences.length}</span>
             </button>
           )}
         </div>
@@ -2471,21 +2687,23 @@ export const TranscriptView: React.FC = () => {
         </div>
       )}
 
-      {/* Search & Filter Row */}
-      <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+      {/* Search & Filter Row (Slim & Uniform Height) */}
+      <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
         <div
           style={{
             flex: 1,
+            minWidth: '130px',
             display: 'flex',
             alignItems: 'center',
-            gap: '6px',
+            gap: '5px',
             backgroundColor: 'var(--bg-tertiary)',
-            padding: '5px 8px',
-            borderRadius: 'var(--radius-sm)',
-            border: '1px solid var(--border-subtle)'
+            padding: '2px 7px',
+            borderRadius: '4px',
+            border: '1px solid var(--border-subtle)',
+            height: '24px'
           }}
         >
-          <Search size={12} color="var(--text-muted)" />
+          <Search size={11} color="var(--text-muted)" />
           <input
             type="text"
             placeholder="Search transcript..."
@@ -2495,7 +2713,7 @@ export const TranscriptView: React.FC = () => {
               background: 'transparent',
               border: 'none',
               color: 'var(--text-primary)',
-              fontSize: '11px',
+              fontSize: '10.5px',
               outline: 'none',
               width: '100%'
             }}
@@ -2505,9 +2723,10 @@ export const TranscriptView: React.FC = () => {
         <button
           onClick={() => setFilterMode(filterMode === 'FILLERS' ? 'ALL' : 'FILLERS')}
           style={{
-            padding: '5px 7px',
-            fontSize: '10px',
-            borderRadius: 'var(--radius-sm)',
+            height: '24px',
+            padding: '2px 7px',
+            fontSize: '9.5px',
+            borderRadius: '4px',
             border: '1px solid var(--border-subtle)',
             backgroundColor: filterMode === 'FILLERS' ? 'rgba(250, 204, 21, 0.2)' : 'var(--bg-tertiary)',
             color: filterMode === 'FILLERS' ? '#facc15' : 'var(--text-secondary)',
@@ -2520,9 +2739,10 @@ export const TranscriptView: React.FC = () => {
         <button
           onClick={() => setFilterMode(filterMode === 'PAUSES' ? 'ALL' : 'PAUSES')}
           style={{
-            padding: '5px 7px',
-            fontSize: '10px',
-            borderRadius: 'var(--radius-sm)',
+            height: '24px',
+            padding: '2px 7px',
+            fontSize: '9.5px',
+            borderRadius: '4px',
             border: '1px solid var(--border-subtle)',
             backgroundColor: filterMode === 'PAUSES' ? 'rgba(239, 68, 68, 0.2)' : 'var(--bg-tertiary)',
             color: filterMode === 'PAUSES' ? '#f87171' : 'var(--text-secondary)',
@@ -2535,9 +2755,10 @@ export const TranscriptView: React.FC = () => {
         <button
           onClick={() => setFilterMode(filterMode === 'TAKES' ? 'ALL' : 'TAKES')}
           style={{
-            padding: '5px 7px',
-            fontSize: '10px',
-            borderRadius: 'var(--radius-sm)',
+            height: '24px',
+            padding: '2px 7px',
+            fontSize: '9.5px',
+            borderRadius: '4px',
             border: '1px solid var(--border-subtle)',
             backgroundColor: filterMode === 'TAKES' ? 'rgba(139, 92, 246, 0.25)' : 'var(--bg-tertiary)',
             color: filterMode === 'TAKES' ? '#c4b5fd' : 'var(--text-secondary)',
@@ -2548,49 +2769,28 @@ export const TranscriptView: React.FC = () => {
         </button>
 
         <button
-          onClick={handleAnalyzeScriptDirectives}
-          disabled={isAnalyzingScript || words.length === 0}
-          title="AI দিয়ে পুরো স্ক্রিপ্ট বিশ্লেষণ করে ঘন ঘন B-Roll, PNG, এবং টেক্সট অ্যানিমেশন টিউন করুন"
-          style={{
-            padding: '5px 8px',
-            fontSize: '10px',
-            borderRadius: 'var(--radius-sm)',
-            border: '1px solid rgba(168, 85, 247, 0.45)',
-            backgroundColor: isAnalyzingScript ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.15)',
-            color: '#d8b4fe',
-            cursor: isAnalyzingScript ? 'wait' : 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-            fontWeight: 600
-          }}
-        >
-          <Sparkles size={11} />
-          <span>{isAnalyzingScript ? 'এনালাইজ হচ্ছে...' : '✨ AI টিউন'}</span>
-        </button>
-
-        <button
           onClick={() => {
             const nextVal = !followPlayhead;
             setFollowPlayhead(nextVal);
             try { localStorage.setItem('prismex_follow_playhead', String(nextVal)); } catch {}
           }}
-          title="ভিডিও প্লে হওয়ার সাথে সাথে স্পোকেন টেক্সটে অটোমেটিক স্ক্রোল হবে (অন/অফ করুন)"
+          title="ভিডিও প্লে হওয়ার সাথে সাথে স্পোকেন টেক্সটে অটোমেটিক স্ক্রোল হবে"
           style={{
             marginLeft: 'auto',
-            padding: '4px 8px',
-            fontSize: '10px',
-            borderRadius: 'var(--radius-sm)',
+            height: '24px',
+            padding: '2px 7px',
+            fontSize: '9.5px',
+            borderRadius: '4px',
             border: followPlayhead ? '1px solid #38bdf8' : '1px solid var(--border-subtle)',
             backgroundColor: followPlayhead ? 'rgba(56, 189, 248, 0.2)' : 'var(--bg-tertiary)',
             color: followPlayhead ? '#38bdf8' : 'var(--text-muted)',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: '4px'
+            gap: '3px'
           }}
         >
-          <span>{followPlayhead ? (language === 'bn' ? '📍 প্লেহেড ফলো: চালু' : '📍 Follow: ON') : (language === 'bn' ? '📍 প্লেহেড ফলো: বন্ধ' : '📍 Follow: OFF')}</span>
+          <span>{followPlayhead ? (language === 'bn' ? '📍 ফলো: চালু' : '📍 Follow: ON') : (language === 'bn' ? '📍 ফলো: বন্ধ' : '📍 Follow: OFF')}</span>
         </button>
 
         <button
@@ -2601,22 +2801,44 @@ export const TranscriptView: React.FC = () => {
               localStorage.setItem('prismex_auto_play_on_jump', String(nextVal));
             } catch {}
           }}
-          title="জাম্প বা শব্দে ক্লিক করলেই সরাসরি ভিডিও প্লে হবে (অন/অফ করুন)"
+          title="জাম্প বা শব্দে ক্লিক করলেই সরাসরি ভিডিও প্লে হবে"
           style={{
-            padding: '4px 8px',
-            fontSize: '10px',
-            borderRadius: 'var(--radius-sm)',
+            height: '24px',
+            padding: '2px 7px',
+            fontSize: '9.5px',
+            borderRadius: '4px',
             border: autoPlayOnJump ? '1px solid #10b981' : '1px solid var(--border-subtle)',
             backgroundColor: autoPlayOnJump ? 'rgba(16, 185, 129, 0.2)' : 'var(--bg-tertiary)',
             color: autoPlayOnJump ? '#34d399' : 'var(--text-muted)',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
-            gap: '4px'
+            gap: '3px'
           }}
         >
-          <Zap size={10} />
-          <span>{autoPlayOnJump ? (language === 'bn' ? '⚡ অটো-প্লে: চালু' : '⚡ Auto-Play: ON') : (language === 'bn' ? '⚡ অটো-প্লে: বন্ধ' : '⚡ Auto-Play: OFF')}</span>
+          <Zap size={9} />
+          <span>{autoPlayOnJump ? (language === 'bn' ? '⚡ অটো-প্লে: চালু' : '⚡ Auto: ON') : (language === 'bn' ? '⚡ অটো-প্লে: বন্ধ' : '⚡ Auto: OFF')}</span>
+        </button>
+
+        {/* Legend Toggle Button */}
+        <button
+          onClick={() => setShowLegend(!showLegend)}
+          style={{
+            height: '24px',
+            padding: '2px 7px',
+            fontSize: '9.5px',
+            borderRadius: '4px',
+            border: showLegend ? '1px solid #a855f7' : '1px solid var(--border-subtle)',
+            backgroundColor: showLegend ? 'rgba(168, 85, 247, 0.2)' : 'var(--bg-tertiary)',
+            color: showLegend ? '#d8b4fe' : 'var(--text-muted)',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '3px'
+          }}
+          title="কালার কিউ নির্দেশিকা দেখান/লুকান"
+        >
+          <span>ℹ️ নির্দেশিকা</span>
         </button>
       </div>
 
@@ -2765,44 +2987,46 @@ export const TranscriptView: React.FC = () => {
       ) : (
         /* Paragraph Transcript Body (Premiere Pro Text Panel Style - Clean & Natural) */
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px', minHeight: 0 }}>
-          {/* Subtle Visual Cues Legend Bar */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '4px 8px',
-            backgroundColor: 'rgba(255, 255, 255, 0.02)',
-            borderRadius: '4px',
-            border: '1px solid var(--border-subtle)',
-            fontSize: '10px',
-            flexWrap: 'wrap',
-            gap: '6px'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-              <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>
-                {language === 'bn' ? 'ভিজ্যুয়াল কিউ নির্দেশিকা:' : 'Visual Cues Guide:'}
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#c084fc' }} title="পার্পল কালার: ছবি, কাটআউট, লোগো ও ডিভাইস পিকচার">
-                <span style={{ width: '8px', height: '8px', backgroundColor: '#a855f7', borderRadius: '2px' }}></span>
-                🖼️ PNG / ছবি
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#67e8f9' }} title="সায়ান কালার: সিনেম্যাটিক ফুটেজ ও ভিডিও কাটঅ্যাওয়ে">
-                <span style={{ width: '8px', height: '8px', backgroundColor: '#06b6d4', borderRadius: '2px' }}></span>
-                🎥 B-Roll ভিডিও
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#fbbf24' }} title="অরেঞ্জ কালার: ইউআই আইকন, বেল ও বাটন">
-                <span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '2px' }}></span>
-                🎨 আইকন
-              </span>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#f87171' }} title="রেড কালার: পাঞ্চ জুম ও কি-ওয়ার্ড">
-                <span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '2px' }}></span>
-                ⚡ পাঞ্চ / কি-ওয়ার্ড
+          {/* Subtle Visual Cues Legend Bar (Collapsible to save 100% space) */}
+          {showLegend && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '4px 8px',
+              backgroundColor: 'rgba(255, 255, 255, 0.02)',
+              borderRadius: '4px',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '10px',
+              flexWrap: 'wrap',
+              gap: '6px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                <span style={{ color: 'var(--text-muted)', fontWeight: 600 }}>
+                  {language === 'bn' ? 'ভিজ্যুয়াল কিউ নির্দেশিকা:' : 'Visual Cues Guide:'}
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#c084fc' }} title="পার্পল কালার: ছবি, কাটআউট, লোগো ও ডিভাইস পিকচার">
+                  <span style={{ width: '8px', height: '8px', backgroundColor: '#a855f7', borderRadius: '2px' }}></span>
+                  🖼️ PNG / ছবি
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#67e8f9' }} title="সায়ান কালার: সিনেম্যাটিক ফুটেজ ও ভিডিও কাটঅ্যাওয়ে">
+                  <span style={{ width: '8px', height: '8px', backgroundColor: '#06b6d4', borderRadius: '2px' }}></span>
+                  🎥 B-Roll ভিডিও
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#fbbf24' }} title="অরেঞ্জ কালার: ইউআই আইকন, বেল ও বাটন">
+                  <span style={{ width: '8px', height: '8px', backgroundColor: '#f59e0b', borderRadius: '2px' }}></span>
+                  🎨 আইকন
+                </span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '3px', color: '#f87171' }} title="রেড কালার: পাঞ্চ জুম ও কি-ওয়ার্ড">
+                  <span style={{ width: '8px', height: '8px', backgroundColor: '#ef4444', borderRadius: '2px' }}></span>
+                  ⚡ পাঞ্চ / কি-ওয়ার্ড
+                </span>
+              </div>
+              <span style={{ color: 'var(--text-muted)', fontSize: '9.5px' }}>
+                {language === 'bn' ? '💡 টেক্সট সিলেক্ট করলেই ড্র্যাগ টুলবার এবং ক্লিকে ডাইরেক্ট সার্চ ওপেন হবে' : '💡 Drag text to search PNG/Videos or 1-click word'}
               </span>
             </div>
-            <span style={{ color: 'var(--text-muted)', fontSize: '9.5px' }}>
-              {language === 'bn' ? '💡 টেক্সট সিলেক্ট করলেই ড্র্যাগ টুলবার এবং ক্লিকে ডাইরেক্ট সার্চ ওপেন হবে' : '💡 Drag text to search PNG/Videos or 1-click word'}
-            </span>
-          </div>
+          )}
 
           <div
             className="card"
@@ -3280,147 +3504,417 @@ export const TranscriptView: React.FC = () => {
               )}
               </div>
 
-              {/* Expandable Inline AI Directive Card (Explanation & Editing Suggestions) */}
-              {expandedDirectiveIdx === para.startIdx && directive && (
-                <div
-                  style={{
-                    marginTop: '4px',
-                    padding: '8px 10px',
-                    borderRadius: '4px',
-                    backgroundColor: '#18181b',
-                    border: `1px solid ${directive.accentColor || 'rgba(255,255,255,0.2)'}`,
-                    boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                    fontSize: '11px'
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                      <span
+              {/* Expandable Inline AI Directive Card (Spacious, Centered, Context-Aware Multi-Site Hub) */}
+              {expandedDirectiveIdx === para.startIdx && directive && (() => {
+                const currentParaPos = paragraphs.findIndex(p => p.startIdx === para.startIdx);
+                const precedingParas = currentParaPos > 0 ? paragraphs.slice(Math.max(0, currentParaPos - 3), currentParaPos) : [];
+                const succeedingParas = currentParaPos < paragraphs.length - 1 ? paragraphs.slice(currentParaPos + 1, Math.min(paragraphs.length, currentParaPos + 4)) : [];
+
+                const brollKws: string[] = (directive.brollKeywords && directive.brollKeywords.length > 0)
+                  ? directive.brollKeywords
+                  : [directive.query, `${directive.query} 4k footage`].filter(Boolean);
+
+                const pngKws: string[] = (directive.pngKeywords && directive.pngKeywords.length > 0)
+                  ? directive.pngKeywords
+                  : [`${directive.query} transparent png`, `${directive.query} icon`].filter(Boolean);
+
+                return (
+                  <div
+                    style={{
+                      marginTop: '8px',
+                      padding: '12px 14px',
+                      borderRadius: '8px',
+                      backgroundColor: '#16161a',
+                      border: `1.5px solid ${directive.accentColor || '#38bdf8'}`,
+                      boxShadow: '0 8px 30px rgba(0,0,0,0.85)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '10px',
+                      fontSize: '11px',
+                      fontFamily: 'inherit'
+                    }}
+                  >
+                    {/* Drawer Header */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span
+                          style={{
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            fontSize: '10.5px',
+                            fontWeight: 700,
+                            backgroundColor: `${directive.accentColor || '#38bdf8'}25`,
+                            color: directive.accentColor || '#38bdf8',
+                            border: `1px solid ${directive.accentColor || '#38bdf8'}`
+                          }}
+                        >
+                          {directive.badgeLabel}
+                        </span>
+                        <span style={{ color: '#fff', fontSize: '11.5px', fontWeight: 600 }}>
+                          এআই ডিরেক্টর নির্দেশিকা ও সাবটাইটেল গাইড
+                        </span>
+                      </div>
+                      <button
+                        onClick={() => setExpandedDirectiveIdx(null)}
                         style={{
-                          padding: '1px 6px',
-                          borderRadius: '3px',
-                          fontSize: '9px',
-                          fontWeight: 700,
-                          backgroundColor: `${directive.accentColor}25`,
-                          color: directive.accentColor,
-                          border: `1px solid ${directive.accentColor}`
+                          background: 'rgba(255,255,255,0.06)',
+                          border: '1px solid rgba(255,255,255,0.12)',
+                          borderRadius: '4px',
+                          color: 'var(--text-muted)',
+                          cursor: 'pointer',
+                          padding: '2px 6px',
+                          fontSize: '11px'
                         }}
+                        title="প্যানেল বন্ধ করুন"
                       >
-                        {directive.badgeLabel}
-                      </span>
-                      <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>
-                        সাজেশন: {directive.query}
-                      </span>
+                        ✕
+                      </button>
                     </div>
-                    <button
-                      onClick={() => setExpandedDirectiveIdx(null)}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}
-                    >
-                      ✕
-                    </button>
-                  </div>
 
-                  <div style={{ color: '#e4e4e7', lineHeight: 1.5 }}>
-                    <span style={{ color: '#38bdf8', fontWeight: 600 }}>📖 বাংলা অর্থ: </span>
-                    {directive.banglaExplanation || 'এই বাক্যে মূল আলোচনা উপস্থাপন করা হয়েছে।'}
-                  </div>
+                    {/* 📖 CONTEXTUAL SCRIPT & BENGALI TRANSLATION STREAM */}
+                    <div style={{
+                      backgroundColor: 'rgba(0,0,0,0.4)',
+                      borderRadius: '6px',
+                      border: '1px solid rgba(255,255,255,0.08)',
+                      padding: '10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '8px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <BookOpen size={13} />
+                          <span>কনটেক্সট ধারাবাহিকতা ও বাংলা অর্থ</span>
+                        </span>
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                          (আগের ও পরের বক্তব্য স্ক্রোল করে পড়তে পারেন)
+                        </span>
+                      </div>
 
-                  <div style={{ color: '#fef08a', lineHeight: 1.5 }}>
-                    <span style={{ color: '#facc15', fontWeight: 600 }}>🎬 এডিটিং সাজেশন: </span>
-                    {directive.editingSuggestion || 'বক্তব্যের সাথে সামঞ্জস্যপূর্ণ বি-রোল বা টেক্সট ব্যবহার করুন।'}
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '2px', flexWrap: 'wrap' }}>
-                    <button
-                      onClick={() => hostBridge.openURLInDefaultBrowser(directive.googleImagesUrl)}
-                      style={{
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        backgroundColor: 'rgba(168, 85, 247, 0.2)',
-                        color: '#d8b4fe',
-                        border: '1px solid rgba(168, 85, 247, 0.4)',
-                        borderRadius: '3px',
-                        cursor: 'pointer',
+                      {/* Scrollable Context Stream */}
+                      <div style={{
+                        maxHeight: '170px',
+                        overflowY: 'auto',
                         display: 'flex',
-                        alignItems: 'center',
-                        gap: '3px'
-                      }}
-                    >
-                      <Image size={10} />
-                      <span>গুগলে PNG খুঁজুন</span>
-                    </button>
+                        flexDirection: 'column',
+                        gap: '6px',
+                        paddingRight: '4px'
+                      }}>
+                        {/* Preceding Paragraphs (Muted Tone) */}
+                        {precedingParas.map((prevP) => {
+                          const prevText = prevP.tokens.map(t => t.word).join(' ');
+                          const prevDir = scriptDirectives[prevP.startIdx];
+                          return (
+                            <div key={`prev_${prevP.startIdx}`} style={{ opacity: 0.45, fontSize: '10.5px', borderLeft: '2px solid rgba(255,255,255,0.2)', paddingLeft: '8px' }}>
+                              <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-muted)' }}>
+                                {TimecodeConverter.formatTimecode(prevP.startTime, fps)}
+                              </div>
+                              <div style={{ color: '#d4d4d8', fontStyle: 'italic' }}>"{prevText}"</div>
+                              {prevDir?.meaningBn && (
+                                <div style={{ color: '#93c5fd', fontSize: '10px', marginTop: '1px' }}>↳ {prevDir.meaningBn}</div>
+                              )}
+                            </div>
+                          );
+                        })}
 
-                    <button
-                      onClick={() => hostBridge.openURLInDefaultBrowser(directive.pexelsUrl)}
-                      style={{
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        backgroundColor: 'rgba(6, 182, 212, 0.2)',
-                        color: '#67e8f9',
-                        border: '1px solid rgba(6, 182, 212, 0.4)',
-                        borderRadius: '3px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '3px'
-                      }}
-                    >
-                      <Video size={10} />
-                      <span>Pexels B-Roll</span>
-                    </button>
+                        {/* TARGET FOCUSED PARAGRAPH (Center Highlighted with Bright Contrast & Badge) */}
+                        <div style={{
+                          backgroundColor: 'rgba(56, 189, 248, 0.12)',
+                          border: '1.5px solid #38bdf8',
+                          borderRadius: '6px',
+                          padding: '8px 10px',
+                          boxShadow: '0 0 16px rgba(56, 189, 248, 0.15)'
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '10px', fontWeight: 700, color: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.2)', padding: '1px 6px', borderRadius: '3px' }}>
+                              🎯 মূল ফোকাস বাক্য • {TimecodeConverter.formatTimecode(para.startTime, fps)}
+                            </span>
+                            <span style={{ fontSize: '9.5px', color: '#93c5fd', fontFamily: 'monospace' }}>
+                              ~{(paraEnd - para.startTime).toFixed(1)}s
+                            </span>
+                          </div>
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: '#ffffff', lineHeight: 1.5 }}>
+                            "{paraLineText}"
+                          </div>
+                          <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid rgba(56, 189, 248, 0.25)', fontSize: '12px', fontWeight: 600, color: '#7dd3fc', lineHeight: 1.6 }}>
+                            <span style={{ color: '#38bdf8', fontWeight: 700 }}>🇧🇩 বাংলা অর্থ: </span>
+                            {directive.meaningBn || directive.banglaExplanation || 'এই বাক্যে মূল আলোচনা উপস্থাপন করা হয়েছে।'}
+                          </div>
+                        </div>
 
-                    <button
-                      onClick={async () => {
-                        const kwStr = directive.keyWords ? directive.keyWords.join(' ') : directive.query;
-                        await copyToClipboard(kwStr);
-                        setCreativeStatus(`"${kwStr}" টাইপোগ্রাফি কপি হয়েছে!`);
-                        setTimeout(() => setCreativeStatus(null), 2500);
-                      }}
-                      style={{
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        backgroundColor: 'rgba(245, 158, 11, 0.2)',
-                        color: '#fbbf24',
-                        border: '1px solid rgba(245, 158, 11, 0.4)',
-                        borderRadius: '3px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '3px'
-                      }}
-                    >
-                      <Sparkles size={10} />
-                      <span>কাইনেটিক কি-ওয়ার্ড কপি</span>
-                    </button>
+                        {/* Succeeding Paragraphs (Muted Tone) */}
+                        {succeedingParas.map((nextP) => {
+                          const nextText = nextP.tokens.map(t => t.word).join(' ');
+                          const nextDir = scriptDirectives[nextP.startIdx];
+                          return (
+                            <div key={`next_${nextP.startIdx}`} style={{ opacity: 0.45, fontSize: '10.5px', borderLeft: '2px solid rgba(255,255,255,0.2)', paddingLeft: '8px' }}>
+                              <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-muted)' }}>
+                                {TimecodeConverter.formatTimecode(nextP.startTime, fps)}
+                              </div>
+                              <div style={{ color: '#d4d4d8', fontStyle: 'italic' }}>"{nextText}"</div>
+                              {nextDir?.meaningBn && (
+                                <div style={{ color: '#93c5fd', fontSize: '10px', marginTop: '1px' }}>↳ {nextDir.meaningBn}</div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
 
-                    <button
-                      onClick={async () => {
-                        await copyToClipboard(paraLineText);
-                        setCopiedLineIdx(para.startIdx);
-                        setTimeout(() => setCopiedLineIdx(null), 2000);
-                      }}
-                      style={{
-                        padding: '2px 6px',
-                        fontSize: '10px',
-                        backgroundColor: 'rgba(255,255,255,0.06)',
-                        color: '#fff',
-                        border: '1px solid rgba(255,255,255,0.15)',
-                        borderRadius: '3px',
-                        cursor: 'pointer',
+                    {/* 🎬 VIDEO EDITING, TYPOGRAPHY & ICON GUIDANCE */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+                      {/* Editing & Typography Guide */}
+                      <div style={{
+                        backgroundColor: 'rgba(250, 204, 21, 0.08)',
+                        border: '1px solid rgba(250, 204, 21, 0.25)',
+                        borderRadius: '6px',
+                        padding: '8px 10px',
                         display: 'flex',
-                        alignItems: 'center',
-                        gap: '3px'
-                      }}
-                    >
-                      <Copy size={10} />
-                      <span>বাক্য কপি</span>
-                    </button>
+                        flexDirection: 'column',
+                        gap: '4px'
+                      }}>
+                        <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#facc15', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Sparkles size={11} />
+                          <span>🎬 এডিটিং ও টাইপোগ্রাফি পরামর্শ</span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#fef08a', lineHeight: 1.5 }}>
+                          {directive.editingIdea || directive.editingSuggestion || 'বক্তব্যের মূল মেসেজ অনুযায়ী জাম্প কাট বা ক্যামেরা পাঞ্চ দিন।'}
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#fde047', fontStyle: 'italic', marginTop: '2px' }}>
+                          ↳ {directive.typographyGuide || 'অন-স্ক্রিন কাইনেটিক সাবটাইটেল ও কী-ওয়ার্ড বোল্ড হাইলাইট অ্যানিমেশন।'}
+                        </div>
+                      </div>
+
+                      {/* Motion Graphics & Icon Guide */}
+                      <div style={{
+                        backgroundColor: 'rgba(168, 85, 247, 0.08)',
+                        border: '1px solid rgba(168, 85, 247, 0.25)',
+                        borderRadius: '6px',
+                        padding: '8px 10px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px'
+                      }}>
+                        <div style={{ fontSize: '10.5px', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <Image size={11} />
+                          <span>📱 মোশন গ্রাফিক্স ও আইকন আইডিয়া</span>
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#e9d5ff', lineHeight: 1.5 }}>
+                          {directive.iconIdea || 'বক্তব্যের ধারণার সাথে মানানসই মিনিমালিস্ট ভেক্টর আইকন বা স্টিকার লোয়ার-থার্ডে ফ্ল্যাশ করুন।'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 🎥 WHOLE PARAGRAPH B-ROLL SEARCH HUB (MULTI-SITE + YOUTUBE) */}
+                    <div style={{
+                      backgroundColor: 'rgba(6, 182, 212, 0.07)',
+                      border: '1px solid rgba(6, 182, 212, 0.25)',
+                      borderRadius: '6px',
+                      padding: '8px 10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: '#22d3ee', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Video size={12} />
+                          <span>🎥 B-Roll ভিডিও সার্চ হাব (৬টি ফ্রি সাইট + YouTube)</span>
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {brollKws.map((bKw: string, kIdx: number) => {
+                          const sites = getMultiSiteBrollLinks(bKw);
+                          return (
+                            <div key={`bkw_${kIdx}`} style={{
+                              backgroundColor: 'rgba(0,0,0,0.25)',
+                              borderRadius: '5px',
+                              padding: '6px 8px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '5px'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                                <span style={{ fontSize: '11px', fontWeight: 600, color: '#ffffff' }}>
+                                  🔍 কি-ওয়ার্ড: <span style={{ color: '#67e8f9' }}>"{bKw}"</span>
+                                </span>
+                                {/* 🚀 OPEN ALL IN TABS */}
+                                <button
+                                  onClick={() => handleOpenAllBrollSites(bKw)}
+                                  style={{
+                                    backgroundColor: '#0891b2',
+                                    color: '#ffffff',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    padding: '3px 8px',
+                                    fontSize: '9.5px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '3px'
+                                  }}
+                                  title="এক ক্লিকে নতুন ব্রাউজার ট্যাবে Pexels, Pixabay, Mixkit, Coverr, Videezy ও YouTube সার্চ ওপেন করুন"
+                                >
+                                  <span>🚀 সব সাইটে একসাথে খুঁজুন</span>
+                                </button>
+                              </div>
+                              {/* Individual Site Badges */}
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                {sites.map(st => (
+                                  <button
+                                    key={st.name}
+                                    onClick={() => hostBridge.openURLInDefaultBrowser(st.url)}
+                                    style={{
+                                      backgroundColor: 'rgba(255,255,255,0.06)',
+                                      border: `1px solid ${st.color}55`,
+                                      color: st.color,
+                                      borderRadius: '3px',
+                                      padding: '2px 6px',
+                                      fontSize: '9px',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {st.name} ↗
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 🖼️ WHOLE PARAGRAPH PNG & ICON SEARCH HUB */}
+                    <div style={{
+                      backgroundColor: 'rgba(168, 85, 247, 0.07)',
+                      border: '1px solid rgba(168, 85, 247, 0.25)',
+                      borderRadius: '6px',
+                      padding: '8px 10px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '6px'
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                          <Image size={12} />
+                          <span>🖼️ স্বচ্ছ PNG ও আইকন সার্চ হাব (Google, Flaticon, Iconfinder, PNGWing, Freepik)</span>
+                        </span>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {pngKws.map((pKw: string, pIdx: number) => {
+                          const sites = getMultiSitePngLinks(pKw);
+                          return (
+                            <div key={`pkw_${pIdx}`} style={{
+                              backgroundColor: 'rgba(0,0,0,0.25)',
+                              borderRadius: '5px',
+                              padding: '6px 8px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '5px'
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                                <span style={{ fontSize: '11px', fontWeight: 600, color: '#ffffff' }}>
+                                  🔍 কি-ওয়ার্ড: <span style={{ color: '#d8b4fe' }}>"{pKw}"</span>
+                                </span>
+                                {/* 🚀 OPEN ALL IN TABS */}
+                                <button
+                                  onClick={() => handleOpenAllPngSites(pKw)}
+                                  style={{
+                                    backgroundColor: '#7c3aed',
+                                    color: '#ffffff',
+                                    border: 'none',
+                                    borderRadius: '4px',
+                                    padding: '3px 8px',
+                                    fontSize: '9.5px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '3px'
+                                  }}
+                                  title="এক ক্লিকে নতুন ব্রাউজার ট্যাবে Google Transparent PNG, Flaticon, Iconfinder, PNGWing ও Freepik সার্চ ওপেন করুন"
+                                >
+                                  <span>🚀 সব সাইটে একসাথে খুঁজুন</span>
+                                </button>
+                              </div>
+                              {/* Individual Site Badges */}
+                              <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                                {sites.map(st => (
+                                  <button
+                                    key={st.name}
+                                    onClick={() => hostBridge.openURLInDefaultBrowser(st.url)}
+                                    style={{
+                                      backgroundColor: 'rgba(255,255,255,0.06)',
+                                      border: `1px solid ${st.color}55`,
+                                      color: st.color,
+                                      borderRadius: '3px',
+                                      padding: '2px 6px',
+                                      fontSize: '9px',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    {st.name} ↗
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Quick Action Footer Bar */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                        <button
+                          onClick={async () => {
+                            await copyToClipboard(paraLineText);
+                            setCopiedLineIdx(para.startIdx);
+                            setTimeout(() => setCopiedLineIdx(null), 2000);
+                          }}
+                          className="btn-secondary"
+                          style={{ padding: '3px 7px', fontSize: '10px' }}
+                        >
+                          <Copy size={10} />
+                          <span>{copiedLineIdx === para.startIdx ? '✓ কপি হয়েছে!' : 'বাক্য কপি'}</span>
+                        </button>
+
+                        <button
+                          onClick={async () => {
+                            const kwStr = brollKws.concat(pngKws).join(' ');
+                            await copyToClipboard(kwStr);
+                            setExportStatus('কি-ওয়ার্ড কপি হয়েছে!');
+                            setTimeout(() => setExportStatus(null), 2500);
+                          }}
+                          className="btn-secondary"
+                          style={{ padding: '3px 7px', fontSize: '10px', color: '#facc15' }}
+                        >
+                          <Sparkles size={10} />
+                          <span>কাইনেটিক কি-ওয়ার্ড কপি</span>
+                        </button>
+                      </div>
+
+                      <button
+                        onClick={() => handleOpenBrollForWord({
+                          wordIdx: para.startIdx,
+                          word: directive.query || brollKws[0] || 'cinematic',
+                          start: para.startTime,
+                          end: paraEnd
+                        })}
+                        className="btn-primary"
+                        style={{ padding: '3px 9px', fontSize: '10px', backgroundColor: '#10b981' }}
+                      >
+                        <Video size={10} />
+                        <span>V2 ফুটেজ মডাল খুলুন</span>
+                      </button>
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
             );
           })}

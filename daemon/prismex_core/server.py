@@ -731,6 +731,9 @@ def save_project_files_api(req: SaveFilesRequest):
 class OpenUrlRequest(BaseModel):
     url: str
 
+class OpenUrlsRequest(BaseModel):
+    urls: List[str]
+
 @app.post("/api/v1/system/open-url")
 def open_url_api(req: OpenUrlRequest):
     """Reliably opens a URL in default browser on host OS (macOS/Windows)."""
@@ -738,6 +741,20 @@ def open_url_api(req: OpenUrlRequest):
         import webbrowser
         webbrowser.open(req.url)
         return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/v1/system/open-urls")
+def open_urls_api(req: OpenUrlsRequest):
+    """Reliably opens multiple URLs in separate tabs in default browser on host OS."""
+    try:
+        import webbrowser
+        import time
+        for u in req.urls:
+            if u and u.strip():
+                webbrowser.open_new_tab(u.strip())
+                time.sleep(0.08)
+        return {"success": True, "count": len(req.urls)}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

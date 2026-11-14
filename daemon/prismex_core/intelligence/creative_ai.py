@@ -1334,7 +1334,7 @@ class CreativeAI:
 
         prompt = (
             "You are an Elite Video Director and YouTube Editor analyzing a video transcript.\n"
-            "Goal: Maximize viewer retention by suggesting frequent visual elements (every 2-3 sentences)!\n"
+            "Goal: Maximize viewer retention by providing detailed video editing suggestions, typography guidance, icons, and exact Bengali translations for every sentence!\n\n"
             "Visual Cue Types:\n"
             "- 'BROLL': Cinematic footage, action, scenery, environment, or real-world example.\n"
             "- 'PNG': Transparent image, gadget, logo, brand, app, dollar/cash, chart, or cutout picture.\n"
@@ -1348,10 +1348,13 @@ class CreativeAI:
             "  {\n"
             '    "sentenceIndex": 0,\n'
             '    "visualType": "BROLL" | "PNG" | "TEXT_ANIMATION" | "PUNCH" | "NONE",\n'
-            '    "query": "concise search query in English for stock or PNG",\n'
-            '    "keyWords": ["2-3", "impactful", "words"],\n'
-            '    "banglaExplanation": "এই লাইনের সহজ বাংলা অর্থ ও প্রেক্ষাপট",\n'
-            '    "editingSuggestion": "এডিটর হিসেবে এখানে কী ভিজ্যুয়াল বা অ্যানিমেশন ব্যবহার করবেন তার বাংলা পরামর্শ"\n'
+            '    "query": "primary concise search query in English for stock or PNG",\n'
+            '    "meaningBn": "এই পুরো ইংরেজি লাইনের সঠিক ও সাবলীল বাংলা অর্থ",\n'
+            '    "editingIdea": "এই বাক্যের জন্য ক্যামেরা মুভমেন্ট, কাট, ১১৪% পাঞ্চ ইন বা পেসিংয়ের স্পষ্ট এডিটিং পরামর্শ",\n'
+            '    "typographyGuide": "অন-স্ক্রিন কাইনেটিক সাবটাইটেল, ফন্ট হাইলাইট বা টেক্সট পপ-ইন অ্যানিমেশন নির্দেশিকা",\n'
+            '    "iconIdea": "এই বক্তব্যের সাথে মানানসই অন-স্ক্রিন আইকন বা মোশন গ্রাফিক্স আইডিয়া (যেমন: ফোন, লোকেশন পিন, ইমেল, ডলার)",\n'
+            '    "brollKeywords": ["keyword 1", "keyword 2"],\n'
+            '    "pngKeywords": ["png keyword 1", "png keyword 2"]\n'
             "  }\n"
             "]"
         )
@@ -1476,6 +1479,47 @@ class CreativeAI:
                 accent_color = "#71717a"
 
             clean_q = re.sub(r"[^\w\s\u0980-\u09FF'-]", "", query).strip()
+            if not clean_q:
+                clean_q = "cinematic video"
+
+            # Derive comprehensive B-Roll and PNG keywords for whole sentence
+            broll_kws: List[str] = []
+            png_kws: List[str] = []
+            meaning_bn = ""
+            editing_idea = ""
+            typography_guide = ""
+            icon_idea = ""
+
+            if llm_item:
+                meaning_bn = str(llm_item.get("meaningBn") or llm_item.get("banglaExplanation") or b_exp).strip()
+                editing_idea = str(llm_item.get("editingIdea") or llm_item.get("editingSuggestion") or e_sug).strip()
+                typography_guide = str(llm_item.get("typographyGuide") or "কী-ওয়ার্ড বোল্ড ও ইয়েলো হাইলাইট টেক্সট আকারে পপ-ইন অ্যানিমেশন দিন।").strip()
+                icon_idea = str(llm_item.get("iconIdea") or "বক্তব্যের মূল ধারণার একটি ক্লিন ভেক্টর আইকন বা ফ্ল্যাশ গ্রাফিক্স ব্যবহার করুন।").strip()
+                raw_b_kws = llm_item.get("brollKeywords") or [clean_q]
+                if isinstance(raw_b_kws, list):
+                    broll_kws = [str(k).strip() for k in raw_b_kws if str(k).strip()]
+                else:
+                    broll_kws = [str(raw_b_kws).strip()]
+
+                raw_p_kws = llm_item.get("pngKeywords") or [clean_q + " icon"]
+                if isinstance(raw_p_kws, list):
+                    png_kws = [str(k).strip() for k in raw_p_kws if str(k).strip()]
+                else:
+                    png_kws = [str(raw_p_kws).strip()]
+            else:
+                meaning_bn = b_exp
+                editing_idea = e_sug
+                typography_guide = "স্ক্রিনে মূল শব্দগুলো পপ-ইন বা স্লো ফেড-ইন কাইনেটিক সাবটাইটেল আকারে অ্যানিমেট করুন।"
+                icon_idea = "বক্তব্যের সাথে সামঞ্জস্যপূর্ণ মিনিমালিস্ট আইকন স্ক্রিনের লোয়ার-থার্ডে ফ্ল্যাশ করুন।"
+                broll_kws = [clean_q]
+                png_kws = [clean_q + " icon"]
+
+            # Ensure at least 2 distinct keywords for B-Roll & PNG
+            if len(broll_kws) < 2:
+                broll_kws.append(f"{clean_q} 4k footage")
+            if len(png_kws) < 2:
+                png_kws.append(f"{clean_q} transparent vector")
+
             g_url = f"https://www.google.com/search?tbm=isch&q={urllib.parse.quote(clean_q + ' transparent png')}"
             p_url = f"https://www.pexels.com/search/videos/{urllib.parse.quote(clean_q)}/"
 
@@ -1493,6 +1537,12 @@ class CreativeAI:
                 "keyWords": kw,
                 "banglaExplanation": b_exp,
                 "editingSuggestion": e_sug,
+                "meaningBn": meaning_bn,
+                "editingIdea": editing_idea,
+                "typographyGuide": typography_guide,
+                "iconIdea": icon_idea,
+                "brollKeywords": broll_kws[:4],
+                "pngKeywords": png_kws[:3],
                 "googleImagesUrl": g_url,
                 "pexelsUrl": p_url
             }

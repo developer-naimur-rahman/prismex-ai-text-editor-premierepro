@@ -116,6 +116,30 @@ export class PremiereHostBridge {
     }
   }
 
+  /**
+   * Opens multiple URLs in separate tabs in the system default browser.
+   */
+  public openMultipleUrls(urls: string[]): void {
+    if (!urls || urls.length === 0) return;
+    const cleanUrls = urls.filter(u => u && u.trim().length > 0);
+
+    // First try companion daemon multi-open
+    try {
+      fetch('http://127.0.0.1:49152/api/v1/system/open-urls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: cleanUrls })
+      }).catch(() => {});
+    } catch (de) {}
+
+    // Also trigger sequential opener for maximum cross-platform compatibility
+    cleanUrls.forEach((u, i) => {
+      setTimeout(() => {
+        this.openURLInDefaultBrowser(u);
+      }, i * 160);
+    });
+  }
+
   private async ensureCEPScriptLoaded(): Promise<void> {
     if (!this.csInterface) return;
     try {
