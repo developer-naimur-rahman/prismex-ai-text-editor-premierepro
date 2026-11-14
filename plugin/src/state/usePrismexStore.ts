@@ -131,18 +131,33 @@ export function rippleShiftWords(words: any[], cuts: { startSeconds: number; end
     .filter((w) => {
       const ws = w.start_seconds ?? w.start ?? 0;
       const we = w.end_seconds ?? w.end ?? 0;
-      return !sortedCuts.some((c) => ws >= c.startSeconds - 0.03 && we <= c.endSeconds + 0.03);
+      const wordDur = Math.max(0.01, we - ws);
+      const mid = (ws + we) / 2;
+
+      // Cleanly remove any word whose midpoint or substantial duration lies within a cut interval
+      return !sortedCuts.some((c) => {
+        const cStart = c.startSeconds;
+        const cEnd = c.endSeconds;
+        if (mid >= cStart && mid <= cEnd) return true;
+        const overlap = Math.max(0, Math.min(we, cEnd) - Math.max(ws, cStart));
+        if (overlap / wordDur >= 0.35) return true;
+        if (ws >= cStart - 0.05 && we <= cEnd + 0.05) return true;
+        return false;
+      });
     })
     .map((w) => {
       let ws = w.start_seconds ?? w.start ?? 0;
       let we = w.end_seconds ?? w.end ?? 0;
+
       for (const c of sortedCuts) {
         const dur = c.durationSeconds ?? (c.endSeconds - c.startSeconds);
-        if (ws >= c.endSeconds - 0.02) {
+        // Words strictly at or after the cut point are shifted left by the exact ripple duration
+        if (ws >= c.startSeconds) {
           ws = Math.max(0, ws - dur);
           we = Math.max(0, we - dur);
         }
       }
+
       return {
         ...w,
         start_seconds: Number(ws.toFixed(4)),
@@ -678,26 +693,61 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       sourceSuggestionId: ''
     };
 
-    const execResult = await timelineEngine.executeCuts([cut]);
-    if (execResult.success) {
-      const remainingWords = rippleShiftWords(get().transcriptWords, [cut]);
-      const updatedSilences = get().detectedSilences
-        .filter((s: any) => s.end_seconds <= startSeconds + 0.02 || s.start_seconds >= endSeconds - 0.02)
-        .map((s: any) => s.start_seconds >= endSeconds - 0.02
-          ? { ...s, start_seconds: Math.max(0, s.start_seconds - duration), end_seconds: Math.max(0, s.end_seconds - duration) }
-          : s
-        );
+    // 1. Shift remaining words cleanly
+    const remainingWords = rippleShiftWords(get().transcriptWords, [cut]);
 
-      set({ transcriptWords: remainingWords, detectedSilences: updatedSilences });
-      const currentSeq = get().sequenceManifest;
-      if (currentSeq) {
-        await persistProjectData(currentSeq, {
-          words: remainingWords,
-          sentences: get().transcriptSentences,
-          silences: updatedSilences,
-          reviewItems: get().reviewItems
-        });
-      }
+    // 2. Remove cut review items (like the repeated take badge) and ripple-shift remaining ones
+    const updatedReviewItems = get().reviewItems
+      .filter((item: any) => {
+        const itemMid = (item.startSeconds + item.endSeconds) / 2;
+        return !(itemMid >= startSeconds - 0.05 && itemMid <= endSeconds + 0.05) &&
+               !(item.startSeconds >= startSeconds - 0.08 && item.endSeconds <= endSeconds + 0.08);
+      })
+      .map((item: any) => {
+        if (item.startSeconds >= endSeconds - 0.05) {
+          return {
+            ...item,
+            startSeconds: Math.max(0, item.startSeconds - duration),
+            endSeconds: Math.max(0, item.endSeconds - duration)
+          };
+        }
+        return item;
+      });
+
+    // 3. Remove cut silences and ripple-shift remaining ones
+    const updatedSilences = get().detectedSilences
+      .filter((s: any) => {
+        const sMid = (s.start_seconds + s.end_seconds) / 2;
+        return !(sMid >= startSeconds - 0.05 && sMid <= endSeconds + 0.05);
+      })
+      .map((s: any) => s.start_seconds >= endSeconds - 0.05
+        ? { ...s, start_seconds: Math.max(0, s.start_seconds - duration), end_seconds: Math.max(0, s.end_seconds - duration) }
+        : s
+      );
+
+    // 4. Update state immediately so UI responds instantaneously with zero latency
+    set({
+      transcriptWords: remainingWords,
+      detectedSilences: updatedSilences,
+      reviewItems: updatedReviewItems
+    });
+
+    // 5. Execute cut on Premiere Pro timeline
+    try {
+      await timelineEngine.executeCuts([cut]);
+    } catch (e) {
+      console.warn('[deleteTranscriptRange] timeline cut error:', e);
+    }
+
+    // 6. Persist to disk and project cache
+    const currentSeq = get().sequenceManifest;
+    if (currentSeq) {
+      await persistProjectData(currentSeq, {
+        words: remainingWords,
+        sentences: get().transcriptSentences,
+        silences: updatedSilences,
+        reviewItems: updatedReviewItems
+      });
     }
   },
 

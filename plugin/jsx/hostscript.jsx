@@ -680,10 +680,28 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
             var startTC = $._prismex._formatTimecode(startSec, fps);
             var endTC = $._prismex._formatTimecode(endSec, fps);
 
-            // Razor right boundary first, then left boundary
-            if (qeSeq && typeof qeSeq.razor === "function") {
-                try { qeSeq.razor(endTC); } catch (e1) {}
-                try { qeSeq.razor(startTC); } catch (e2) {}
+            // Razor right boundary first, then left boundary across sequence & tracks
+            if (qeSeq) {
+                if (typeof qeSeq.razor === "function") {
+                    try { qeSeq.razor(endTC); } catch (e1) {}
+                    try { qeSeq.razor(startTC); } catch (e2) {}
+                }
+                try {
+                    for (var qv = 0; qv < qeSeq.numVideoTracks; qv++) {
+                        var qvt = qeSeq.getVideoTrackAt(qv);
+                        if (qvt && typeof qvt.razor === "function") {
+                            try { qvt.razor(endTC); } catch (e) {}
+                            try { qvt.razor(startTC); } catch (e) {}
+                        }
+                    }
+                    for (var qa = 0; qa < qeSeq.numAudioTracks; qa++) {
+                        var qat = qeSeq.getAudioTrackAt(qa);
+                        if (qat && typeof qat.razor === "function") {
+                            try { qat.razor(endTC); } catch (e) {}
+                            try { qat.razor(startTC); } catch (e) {}
+                        }
+                    }
+                } catch (qTrackErr) {}
             }
 
             var removedAny = false;
@@ -695,7 +713,9 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                     var clip = vt.clips[ci];
                     var cStart = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
                     var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
-                    if (cStart >= startSec - 0.08 && cEnd <= endSec + 0.08) {
+                    var cDur = Math.max(0.01, cEnd - cStart);
+                    var cMid = (cStart + cEnd) / 2;
+                    if ((cStart >= startSec - 0.12 && cEnd <= endSec + 0.12) || (cMid >= startSec && cMid <= endSec && cDur <= dur + 0.18)) {
                         try {
                             clip.remove(1, 1);
                             removedAny = true;
@@ -713,7 +733,9 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                     var aclip = at.clips[ai];
                     var acStart = (parseFloat(aclip.start.ticks) - zeroTicks) / TICKS;
                     var acEnd = (parseFloat(aclip.end.ticks) - zeroTicks) / TICKS;
-                    if (acStart >= startSec - 0.08 && acEnd <= endSec + 0.08) {
+                    var acDur = Math.max(0.01, acEnd - acStart);
+                    var acMid = (acStart + acEnd) / 2;
+                    if ((acStart >= startSec - 0.12 && acEnd <= endSec + 0.12) || (acMid >= startSec && acMid <= endSec && acDur <= dur + 0.18)) {
                         try {
                             aclip.remove(1, 1);
                             removedAny = true;
