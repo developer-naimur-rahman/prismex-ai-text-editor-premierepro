@@ -181,6 +181,7 @@ export const TranscriptView: React.FC = () => {
   // Full Script Contextual AI Directives (B-Roll, PNG, Typography, Punch & Bengali Explanations)
   const [isAnalyzingScript, setIsAnalyzingScript] = useState<boolean>(false);
   const [expandedDirectiveIdx, setExpandedDirectiveIdx] = useState<number | null>(null);
+  const [liveTranslations, setLiveTranslations] = useState<Record<number, string>>({});
 
   const client = PrismexDaemonClient.getInstance();
   const hostBridge = PremiereHostBridge.getInstance();
@@ -243,6 +244,29 @@ export const TranscriptView: React.FC = () => {
     }
     return groups;
   }, [words]);
+
+  // Auto-translate surrounding paragraphs to maintain a genuine continuous Bengali narrative
+  useEffect(() => {
+    if (expandedDirectiveIdx === null) return;
+    const currentParaPos = paragraphs.findIndex(p => p.startIdx === expandedDirectiveIdx);
+    if (currentParaPos < 0) return;
+
+    const nearbyParas = paragraphs.slice(Math.max(0, currentParaPos - 3), Math.min(paragraphs.length, currentParaPos + 4));
+    nearbyParas.forEach(p => {
+      const pText = p.tokens.map(t => t.word).join(' ').trim();
+      const existingMeaning = scriptDirectives[p.startIdx]?.meaningBn;
+      const isBadMeaning = !existingMeaning || existingMeaning.includes('বক্তব্যে বিশেষ জোর') || existingMeaning.includes('ইমপ্যাক্ট তৈরি');
+
+      if ((isBadMeaning || !liveTranslations[p.startIdx]) && pText) {
+        client.translateSentence(pText).then(translated => {
+          if (translated && translated.trim()) {
+            setLiveTranslations(prev => ({ ...prev, [p.startIdx]: translated.trim() }));
+            updateScriptDirective(p.startIdx, { meaningBn: translated.trim() });
+          }
+        });
+      }
+    });
+  }, [expandedDirectiveIdx, paragraphs, scriptDirectives]);
 
   // Auto-Follow Playhead: Track Premiere timeline playhead and smoothly scroll to spoken text
   useEffect(() => {
@@ -610,14 +634,23 @@ export const TranscriptView: React.FC = () => {
   // Word Popover Actions
   const handleOpenBrollForWord = async (pWord: { wordIdx: number; word: string; start: number; end: number }) => {
     setTargetBrollTime(pWord.start);
-    const cleanWord = pWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF]/g, '').trim();
-    setBrollSearchQuery(cleanWord || 'cinematic');
+    let cleanWord = pWord.word.replace(/[^a-zA-Z0-9_\u0980-\u09FF\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (cleanWord.toLowerCase().includes('zoom') || cleanWord.toLowerCase().includes('punch') || cleanWord.length <= 2) {
+      const paraMatch = paragraphs.find(p => p.startIdx === pWord.wordIdx);
+      if (paraMatch) {
+        const words = paraMatch.tokens.map(t => t.word).filter(w => w.length > 2 && !['the','and','for','that','this','with','from','have','they','what','about'].includes(w.toLowerCase()));
+        cleanWord = words.slice(0, 2).join(' ') || 'cinematic communication';
+      } else {
+        cleanWord = 'cinematic communication';
+      }
+    }
+    setBrollSearchQuery(cleanWord || 'cinematic communication');
     setShowBrollModal(true);
     setPopoverWord(null);
 
     setIsSearchingBroll(true);
     try {
-      const results = await client.searchBrollStock(cleanWord || 'cinematic');
+      const results = await client.searchBrollStock(cleanWord || 'cinematic communication');
       setBrollResults(results || []);
     } finally {
       setIsSearchingBroll(false);
@@ -3510,13 +3543,35 @@ export const TranscriptView: React.FC = () => {
                 const precedingParas = currentParaPos > 0 ? paragraphs.slice(Math.max(0, currentParaPos - 3), currentParaPos) : [];
                 const succeedingParas = currentParaPos < paragraphs.length - 1 ? paragraphs.slice(currentParaPos + 1, Math.min(paragraphs.length, currentParaPos + 4)) : [];
 
-                const brollKws: string[] = (directive.brollKeywords && directive.brollKeywords.length > 0)
-                  ? directive.brollKeywords
-                  : [directive.query, `${directive.query} 4k footage`].filter(Boolean);
+                // Clean semantic query strictly filtering out camera jargon
+                const cleanQuery = (() => {
+                  const q = (directive.query || '').trim();
+                  if (!q || q.toLowerCase().includes('zoom') || q.toLowerCase().includes('punch')) {
+                    const contentWords = paraLineText.replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2 && !['the','and','for','that','this','with','from','have','they','what','about','reach','time','today'].includes(w.toLowerCase()));
+                    return contentWords.slice(0, 2).join(' ') || 'cinematic communication';
+                  }
+                  return q;
+                })();
 
-                const pngKws: string[] = (directive.pngKeywords && directive.pngKeywords.length > 0)
-                  ? directive.pngKeywords
-                  : [`${directive.query} transparent png`, `${directive.query} icon`].filter(Boolean);
+                const brollKws: string[] = ((directive.brollKeywords && directive.brollKeywords.length > 0)
+                  ? directive.brollKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch'))
+                  : []
+                );
+                if (brollKws.length === 0) {
+                  brollKws.push(cleanQuery, `${cleanQuery} 4k footage`);
+                }
+
+                const pngKws: string[] = ((directive.pngKeywords && directive.pngKeywords.length > 0)
+                  ? directive.pngKeywords.filter((k: string) => !k.toLowerCase().includes('zoom') && !k.toLowerCase().includes('punch'))
+                  : []
+                );
+                if (pngKws.length === 0) {
+                  pngKws.push(`${cleanQuery} transparent png`, `${cleanQuery} icon`);
+                }
+
+                const activeMeaningBn = liveTranslations[para.startIdx]
+                  || ((directive.meaningBn && !directive.meaningBn.includes('বক্তব্যে বিশেষ জোর')) ? directive.meaningBn : '')
+                  || 'বাংলা অনুবাদ লোড হচ্ছে...';
 
                 return (
                   <div
@@ -3573,45 +3628,56 @@ export const TranscriptView: React.FC = () => {
 
                     {/* 📖 CONTEXTUAL SCRIPT & BENGALI TRANSLATION STREAM */}
                     <div style={{
-                      backgroundColor: 'rgba(0,0,0,0.4)',
-                      borderRadius: '6px',
-                      border: '1px solid rgba(255,255,255,0.08)',
-                      padding: '10px',
+                      backgroundColor: 'rgba(0,0,0,0.45)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      padding: '12px',
                       display: 'flex',
                       flexDirection: 'column',
                       gap: '8px'
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                          <BookOpen size={13} />
+                        <span style={{ fontSize: '11.5px', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <BookOpen size={14} />
                           <span>কনটেক্সট ধারাবাহিকতা ও বাংলা অর্থ</span>
                         </span>
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
-                          (আগের ও পরের বক্তব্য স্ক্রোল করে পড়তে পারেন)
+                        <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                          (আগের ও পরের বক্তব্য স্ক্রোল করে বাংলায় পড়তে পারেন)
                         </span>
                       </div>
 
                       {/* Scrollable Context Stream */}
                       <div style={{
-                        maxHeight: '170px',
+                        maxHeight: '260px',
                         overflowY: 'auto',
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: '6px',
-                        paddingRight: '4px'
+                        gap: '8px',
+                        paddingRight: '6px'
                       }}>
-                        {/* Preceding Paragraphs (Muted Tone) */}
+                        {/* Preceding Paragraphs (Muted Tone, Readable Bengali) */}
                         {precedingParas.map((prevP) => {
                           const prevText = prevP.tokens.map(t => t.word).join(' ');
                           const prevDir = scriptDirectives[prevP.startIdx];
+                          const prevBn = liveTranslations[prevP.startIdx] || (prevDir?.meaningBn && !prevDir.meaningBn.includes('বক্তব্যে বিশেষ জোর') ? prevDir.meaningBn : '');
                           return (
-                            <div key={`prev_${prevP.startIdx}`} style={{ opacity: 0.45, fontSize: '10.5px', borderLeft: '2px solid rgba(255,255,255,0.2)', paddingLeft: '8px' }}>
+                            <div key={`prev_${prevP.startIdx}`} style={{
+                              opacity: 0.75,
+                              fontSize: '11px',
+                              borderLeft: '2px solid rgba(56, 189, 248, 0.4)',
+                              paddingLeft: '10px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '2px'
+                            }}>
                               <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-muted)' }}>
                                 {TimecodeConverter.formatTimecode(prevP.startTime, fps)}
                               </div>
-                              <div style={{ color: '#d4d4d8', fontStyle: 'italic' }}>"{prevText}"</div>
-                              {prevDir?.meaningBn && (
-                                <div style={{ color: '#93c5fd', fontSize: '10px', marginTop: '1px' }}>↳ {prevDir.meaningBn}</div>
+                              <div style={{ color: '#a1a1aa', fontStyle: 'italic', fontSize: '10.5px' }}>"{prevText}"</div>
+                              {prevBn && (
+                                <div style={{ color: '#7dd3fc', fontSize: '11px', fontWeight: 600, lineHeight: 1.4 }}>
+                                  🇧🇩 {prevBn}
+                                </div>
                               )}
                             </div>
                           );
@@ -3620,40 +3686,61 @@ export const TranscriptView: React.FC = () => {
                         {/* TARGET FOCUSED PARAGRAPH (Center Highlighted with Bright Contrast & Badge) */}
                         <div style={{
                           backgroundColor: 'rgba(56, 189, 248, 0.12)',
-                          border: '1.5px solid #38bdf8',
-                          borderRadius: '6px',
-                          padding: '8px 10px',
-                          boxShadow: '0 0 16px rgba(56, 189, 248, 0.15)'
+                          border: '2px solid #38bdf8',
+                          borderRadius: '8px',
+                          padding: '10px 12px',
+                          boxShadow: '0 0 20px rgba(56, 189, 248, 0.22)',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '6px'
                         }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ fontSize: '10px', fontWeight: 700, color: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.2)', padding: '1px 6px', borderRadius: '3px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.22)', padding: '2px 8px', borderRadius: '4px' }}>
                               🎯 মূল ফোকাস বাক্য • {TimecodeConverter.formatTimecode(para.startTime, fps)}
                             </span>
-                            <span style={{ fontSize: '9.5px', color: '#93c5fd', fontFamily: 'monospace' }}>
+                            <span style={{ fontSize: '10px', color: '#93c5fd', fontFamily: 'monospace' }}>
                               ~{(paraEnd - para.startTime).toFixed(1)}s
                             </span>
                           </div>
                           <div style={{ fontSize: '13px', fontWeight: 600, color: '#ffffff', lineHeight: 1.5 }}>
                             "{paraLineText}"
                           </div>
-                          <div style={{ marginTop: '6px', paddingTop: '6px', borderTop: '1px solid rgba(56, 189, 248, 0.25)', fontSize: '12px', fontWeight: 600, color: '#7dd3fc', lineHeight: 1.6 }}>
-                            <span style={{ color: '#38bdf8', fontWeight: 700 }}>🇧🇩 বাংলা অর্থ: </span>
-                            {directive.meaningBn || directive.banglaExplanation || 'এই বাক্যে মূল আলোচনা উপস্থাপন করা হয়েছে।'}
+                          <div style={{
+                            paddingTop: '6px',
+                            borderTop: '1px solid rgba(56, 189, 248, 0.3)',
+                            fontSize: '12.5px',
+                            fontWeight: 600,
+                            color: '#38bdf8',
+                            lineHeight: 1.6
+                          }}>
+                            <span style={{ color: '#67e8f9', fontWeight: 700 }}>🇧🇩 বাংলা অর্থ: </span>
+                            {activeMeaningBn}
                           </div>
                         </div>
 
-                        {/* Succeeding Paragraphs (Muted Tone) */}
+                        {/* Succeeding Paragraphs (Muted Tone, Readable Bengali) */}
                         {succeedingParas.map((nextP) => {
                           const nextText = nextP.tokens.map(t => t.word).join(' ');
                           const nextDir = scriptDirectives[nextP.startIdx];
+                          const nextBn = liveTranslations[nextP.startIdx] || (nextDir?.meaningBn && !nextDir.meaningBn.includes('বক্তব্যে বিশেষ জোর') ? nextDir.meaningBn : '');
                           return (
-                            <div key={`next_${nextP.startIdx}`} style={{ opacity: 0.45, fontSize: '10.5px', borderLeft: '2px solid rgba(255,255,255,0.2)', paddingLeft: '8px' }}>
+                            <div key={`next_${nextP.startIdx}`} style={{
+                              opacity: 0.75,
+                              fontSize: '11px',
+                              borderLeft: '2px solid rgba(56, 189, 248, 0.4)',
+                              paddingLeft: '10px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '2px'
+                            }}>
                               <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-muted)' }}>
                                 {TimecodeConverter.formatTimecode(nextP.startTime, fps)}
                               </div>
-                              <div style={{ color: '#d4d4d8', fontStyle: 'italic' }}>"{nextText}"</div>
-                              {nextDir?.meaningBn && (
-                                <div style={{ color: '#93c5fd', fontSize: '10px', marginTop: '1px' }}>↳ {nextDir.meaningBn}</div>
+                              <div style={{ color: '#a1a1aa', fontStyle: 'italic', fontSize: '10.5px' }}>"{nextText}"</div>
+                              {nextBn && (
+                                <div style={{ color: '#7dd3fc', fontSize: '11px', fontWeight: 600, lineHeight: 1.4 }}>
+                                  🇧🇩 {nextBn}
+                                </div>
                               )}
                             </div>
                           );
@@ -3901,7 +3988,7 @@ export const TranscriptView: React.FC = () => {
                       <button
                         onClick={() => handleOpenBrollForWord({
                           wordIdx: para.startIdx,
-                          word: directive.query || brollKws[0] || 'cinematic',
+                          word: cleanQuery || brollKws[0] || 'cinematic',
                           start: para.startTime,
                           end: paraEnd
                         })}

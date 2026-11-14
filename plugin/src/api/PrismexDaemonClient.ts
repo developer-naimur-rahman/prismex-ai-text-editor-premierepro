@@ -372,6 +372,34 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async translateSentence(text: string, targetLang: string = 'bn'): Promise<string> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/translate-sentence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, targetLang })
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.translated && data.translated.trim()) {
+          return data.translated.trim();
+        }
+      }
+    } catch {}
+
+    // Fallback direct translation
+    try {
+      const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=bn&dt=t&q=${encodeURIComponent(text)}`;
+      const r = await fetch(url);
+      if (r.ok) {
+        const d = await r.json();
+        return (d[0] || []).map((p: any) => p[0]).join('').trim();
+      }
+    } catch {}
+
+    return '';
+  }
+
   public async searchBrollStock(query: string): Promise<any[]> {
     try {
       const resp = await fetch(`${this.baseUrl}/api/v1/stock/broll-search`, {

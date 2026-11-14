@@ -618,6 +618,16 @@ def format_ae_typography(req: TypographyRequest):
 class TypographyKeywordsRequest(BaseModel):
     sentence: str
 
+class TranslateSentenceRequest(BaseModel):
+    text: str
+    targetLang: Optional[str] = "bn"
+
+@app.post("/api/v1/transcript/translate-sentence")
+def translate_sentence_endpoint(req: TranslateSentenceRequest):
+    """Translates an English sentence into accurate, natural Bengali."""
+    translated = CreativeAI.translate_to_bengali(req.text)
+    return {"text": req.text, "translated": translated, "language": req.targetLang or "bn"}
+
 @app.post("/api/v1/transcript/typography-keywords")
 def extract_typography_keywords(req: TypographyKeywordsRequest):
     """Extracts 2-4 high-impact keywords from a sentence for on-screen motion typography."""
