@@ -40,7 +40,9 @@ import {
   Image,
   ExternalLink,
   Globe,
-  FileText
+  FileText,
+  AlertTriangle,
+  ShieldCheck
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { copyToClipboard } from '../utils/clipboard';
@@ -178,6 +180,9 @@ export const TranscriptView: React.FC = () => {
     }
   });
   const [compareTakesItem, setCompareTakesItem] = useState<any | null>(null);
+  const [showReTranscribeModal, setShowReTranscribeModal] = useState<boolean>(false);
+  const [reTranscribeModel, setReTranscribeModel] = useState<string>('large-v3');
+  const [reTranscribeLang, setReTranscribeLang] = useState<string>('auto');
 
   // Paragraph Grouping Mode: 'SENTENCE' (complete sentence grouping) or 'PAUSE' (legacy pause/word-limit)
   const [paragraphGroupingMode, setParagraphGroupingMode] = useState<'SENTENCE' | 'PAUSE'>(() => {
@@ -1705,16 +1710,16 @@ export const TranscriptView: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Re-Transcribe */}
+          {/* Re-Transcribe with Safety Danger Confirmation Modal */}
           <button
             className="btn-secondary"
             disabled={isRunning}
-            onClick={transcribeSequence}
-            style={{ padding: '3px 8px', fontSize: '10px', height: '26px' }}
-            title="পুনরায় ট্রান্সক্রাইব করুন"
+            onClick={() => setShowReTranscribeModal(true)}
+            style={{ padding: '3px 8px', fontSize: '10px', height: '26px', display: 'flex', alignItems: 'center', gap: '4px' }}
+            title="পুনরায় ট্রান্সক্রাইব করার কনফার্মেশন ও সেটিংস পপ-আপ খুলুন"
           >
             <Mic size={11} />
-            <span>{language === 'bn' ? 'ট্রান্সক্রাইব' : 'Transcribe'}</span>
+            <span>{language === 'bn' ? 'রি-ট্রান্সক্রাইব' : 'Re-Transcribe'}</span>
           </button>
 
           {/* Auto Cut */}
@@ -5152,6 +5157,173 @@ export const TranscriptView: React.FC = () => {
                 </>
               );
             })()}
+          </div>
+        </div>
+      )}
+      {/* ⚠️ RE-TRANSCRIBE CONFIRMATION & DANGER WARNING MODAL */}
+      {showReTranscribeModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 10001,
+            backgroundColor: 'rgba(0,0,0,0.85)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '16px',
+            backdropFilter: 'blur(4px)'
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: '100%',
+              maxWidth: '480px',
+              backgroundColor: '#18181b',
+              border: '1.5px solid rgba(239, 68, 68, 0.5)',
+              borderRadius: '10px',
+              padding: '18px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '14px',
+              boxShadow: '0 16px 40px rgba(0,0,0,0.95)'
+            }}
+          >
+            {/* Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{
+                  backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                  color: '#ef4444',
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  fontSize: '11px',
+                  fontWeight: 800,
+                  border: '1px solid #ef4444'
+                }}>
+                  DANGER ZONE
+                </span>
+                <span style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>
+                  পুনরায় ট্রান্সক্রাইব কনফার্মেশন
+                </span>
+              </div>
+              <button
+                onClick={() => setShowReTranscribeModal(false)}
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '15px' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Danger Notice Box */}
+            <div
+              style={{
+                backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
+                borderRadius: '6px',
+                padding: '12px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#f87171', fontWeight: 700, fontSize: '12px' }}>
+                <AlertTriangle size={15} />
+                <span>⚠️ সতর্কবার্তা / Danger Notice</span>
+              </div>
+              <div style={{ fontSize: '11.5px', color: '#fca5a5', lineHeight: 1.5 }}>
+                পুনরায় ট্রান্সক্রাইব করলে বর্তমান ট্রান্সক্রিপ্টের পূর্বের সকল কাট হিস্ট্রি, ম্যানুয়াল এডিট ও এআই ডিরেক্টিভ রিসেট হয়ে যাবে। বর্তমান সিকোয়েন্সের অডিও থেকে সম্পূর্ণ নতুন করে প্রতিটি শব্দের টাইমকোড তৈরি হবে।
+              </div>
+              <div style={{ fontSize: '10.5px', color: '#86efac', display: 'flex', alignItems: 'center', gap: '4px', paddingTop: '4px', borderTop: '1px solid rgba(239,68,68,0.2)' }}>
+                <ShieldCheck size={13} />
+                <span>নিরাপত্তা সুরক্ষা: আপনার বর্তমান ট্রান্সক্রিপ্টের একটি সেফটি ব্যাকআপ .prismex_cache-এ সংরক্ষিত থাকবে।</span>
+              </div>
+            </div>
+
+            {/* Options (Model & Language) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 600, color: '#d4d4d8', display: 'block', marginBottom: '4px' }}>
+                  Whisper মডেল
+                </label>
+                <select
+                  value={reTranscribeModel}
+                  onChange={(e) => setReTranscribeModel(e.target.value)}
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#27272a',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    color: '#fff',
+                    borderRadius: '4px',
+                    padding: '6px 8px',
+                    fontSize: '11px'
+                  }}
+                >
+                  <option value="large-v3">MLX Large-v3 (সর্বোচ্চ নির্ভুলতা)</option>
+                  <option value="medium">MLX Medium (দ্রুত ও ভারসাম্য)</option>
+                  <option value="small">MLX Small (সুপার ফাস্ট)</option>
+                  <option value="base">MLX Base (হালকা)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: '11px', fontWeight: 600, color: '#d4d4d8', display: 'block', marginBottom: '4px' }}>
+                  অডিওর ভাষা
+                </label>
+                <select
+                  value={reTranscribeLang}
+                  onChange={(e) => setReTranscribeLang(e.target.value)}
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#27272a',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    color: '#fff',
+                    borderRadius: '4px',
+                    padding: '6px 8px',
+                    fontSize: '11px'
+                  }}
+                >
+                  <option value="auto">স্বয়ংক্রিয় সনাক্তকরণ (Auto)</option>
+                  <option value="en">ইংরেজি (English)</option>
+                  <option value="bn">বাংলা (Bengali)</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '6px' }}>
+              <button
+                onClick={() => setShowReTranscribeModal(false)}
+                className="btn-secondary"
+                style={{ padding: '6px 14px', fontSize: '11px' }}
+              >
+                ✕ বাতিল করুন (Cancel)
+              </button>
+              <button
+                onClick={async () => {
+                  setShowReTranscribeModal(false);
+                  await transcribeSequence();
+                }}
+                style={{
+                  backgroundColor: '#dc2626',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '6px 14px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  boxShadow: '0 4px 12px rgba(220, 38, 38, 0.4)'
+                }}
+              >
+                <AlertTriangle size={13} />
+                <span>⚠️ হ্যাঁ, রি-ট্রান্সক্রাইব করুন</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

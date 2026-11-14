@@ -659,7 +659,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
             fps = Math.round((TICKS / ticksPerFrame) * 1000.0) / 1000.0;
         }
 
-        // Reverse-chronological order: right-to-left
+        // Reverse-chronological order: right-to-left so earlier cuts aren't shifted by later cuts
         var cuts = rawCuts.slice(0).sort(function(a, b) {
             var aStart = parseFloat(a.startSeconds || a.start_seconds || 0);
             var bStart = parseFloat(b.startSeconds || b.start_seconds || 0);
@@ -680,76 +680,127 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
             var startTC = $._prismex._formatTimecode(startSec, fps);
             var endTC = $._prismex._formatTimecode(endSec, fps);
 
-            // Razor right boundary first, then left boundary across sequence & tracks
-            if (qeSeq) {
-                if (typeof qeSeq.razor === "function") {
-                    try { qeSeq.razor(endTC); } catch (e1) {}
-                    try { qeSeq.razor(startTC); } catch (e2) {}
-                }
+            var qeSuccess = false;
+            // 1. Try atomic QE In/Out sequence ripple delete (cuts all unlocked tracks simultaneously)
+            if (qeSeq && typeof qeSeq.setInPoint === "function" && typeof qeSeq.setOutPoint === "function" && typeof qeSeq.rippleDelete === "function") {
                 try {
-                    for (var qv = 0; qv < qeSeq.numVideoTracks; qv++) {
-                        var qvt = qeSeq.getVideoTrackAt(qv);
-                        if (qvt && typeof qvt.razor === "function") {
-                            try { qvt.razor(endTC); } catch (e) {}
-                            try { qvt.razor(startTC); } catch (e) {}
-                        }
-                    }
-                    for (var qa = 0; qa < qeSeq.numAudioTracks; qa++) {
-                        var qat = qeSeq.getAudioTrackAt(qa);
-                        if (qat && typeof qat.razor === "function") {
-                            try { qat.razor(endTC); } catch (e) {}
-                            try { qat.razor(startTC); } catch (e) {}
-                        }
-                    }
-                } catch (qTrackErr) {}
-            }
-
-            var removedAny = false;
-            // Native ripple remove targeted clip in interval
-            for (var v = 0; v < seq.videoTracks.numTracks; v++) {
-                var vt = seq.videoTracks[v];
-                if (vt.isLocked()) continue;
-                for (var ci = vt.clips.numItems - 1; ci >= 0; ci--) {
-                    var clip = vt.clips[ci];
-                    var cStart = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
-                    var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
-                    var cDur = Math.max(0.01, cEnd - cStart);
-                    var cMid = (cStart + cEnd) / 2;
-                    if ((cStart >= startSec - 0.12 && cEnd <= endSec + 0.12) || (cMid >= startSec && cMid <= endSec && cDur <= dur + 0.18)) {
-                        try {
-                            clip.remove(1, 1);
-                            removedAny = true;
-                        } catch (rErr) {
-                            try { clip.remove(true, true); removedAny = true; } catch (rErr2) {}
-                        }
-                    }
+                    qeSeq.setInPoint(startTC);
+                    qeSeq.setOutPoint(endTC);
+                    qeSeq.rippleDelete();
+                    qeSuccess = true;
+                    executedCount++;
+                } catch (qeRippleErr) {
+                    qeSuccess = false;
                 }
             }
 
-            for (var a = 0; a < seq.audioTracks.numTracks; a++) {
-                var at = seq.audioTracks[a];
-                if (at.isLocked()) continue;
-                for (var ai = at.clips.numItems - 1; ai >= 0; ai--) {
-                    var aclip = at.clips[ai];
-                    var acStart = (parseFloat(aclip.start.ticks) - zeroTicks) / TICKS;
-                    var acEnd = (parseFloat(aclip.end.ticks) - zeroTicks) / TICKS;
-                    var acDur = Math.max(0.01, acEnd - acStart);
-                    var acMid = (acStart + acEnd) / 2;
-                    if ((acStart >= startSec - 0.12 && acEnd <= endSec + 0.12) || (acMid >= startSec && acMid <= endSec && acDur <= dur + 0.18)) {
-                        try {
-                            aclip.remove(1, 1);
-                            removedAny = true;
-                        } catch (arErr) {
-                            try { aclip.remove(true, true); removedAny = true; } catch (arErr2) {}
+            // 2. If QE atomic ripple delete did not run, execute synchronized Lift-and-Ripple
+            if (!qeSuccess) {
+                // Razor all tracks at end boundary first, then start boundary
+                if (qeSeq) {
+                    if (typeof qeSeq.razor === "function") {
+                        try { qeSeq.razor(endTC); } catch (e1) {}
+                        try { qeSeq.razor(startTC); } catch (e2) {}
+                    }
+                    try {
+                        for (var qv = 0; qv < qeSeq.numVideoTracks; qv++) {
+                            var qvt = qeSeq.getVideoTrackAt(qv);
+                            if (qvt && typeof qvt.razor === "function") {
+                                try { qvt.razor(endTC); } catch (e) {}
+                                try { qvt.razor(startTC); } catch (e) {}
+                            }
+                        }
+                        for (var qa = 0; qa < qeSeq.numAudioTracks; qa++) {
+                            var qat = qeSeq.getAudioTrackAt(qa);
+                            if (qat && typeof qat.razor === "function") {
+                                try { qat.razor(endTC); } catch (e) {}
+                                try { qat.razor(startTC); } catch (e) {}
+                            }
+                        }
+                    } catch (qTrackErr) {}
+                }
+
+                // Step A: Lift (remove WITHOUT ripple 0, 0) on all audio tracks and secondary video tracks
+                // This ensures tracks DO NOT shift independently!
+                for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+                    var at = seq.audioTracks[a];
+                    if (at.isLocked()) continue;
+                    for (var ai = at.clips.numItems - 1; ai >= 0; ai--) {
+                        var aclip = at.clips[ai];
+                        var acStart = (parseFloat(aclip.start.ticks) - zeroTicks) / TICKS;
+                        var acEnd = (parseFloat(aclip.end.ticks) - zeroTicks) / TICKS;
+                        var acDur = Math.max(0.01, acEnd - acStart);
+                        var acMid = (acStart + acEnd) / 2;
+                        if ((acStart >= startSec - 0.12 && acEnd <= endSec + 0.12) || (acMid >= startSec && acMid <= endSec && acDur <= dur + 0.18)) {
+                            try { aclip.remove(0, 0); } catch (arErr) {}
                         }
                     }
                 }
-            }
 
-            if (removedAny) {
-                executedCount++;
+                for (var v = 1; v < seq.videoTracks.numTracks; v++) {
+                    var vt = seq.videoTracks[v];
+                    if (vt.isLocked()) continue;
+                    for (var ci = vt.clips.numItems - 1; ci >= 0; ci--) {
+                        var clip = vt.clips[ci];
+                        var cStart = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
+                        var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
+                        var cDur = Math.max(0.01, cEnd - cStart);
+                        var cMid = (cStart + cEnd) / 2;
+                        if ((cStart >= startSec - 0.12 && cEnd <= endSec + 0.12) || (cMid >= startSec && cMid <= endSec && cDur <= dur + 0.18)) {
+                            try { clip.remove(0, 0); } catch (rErr) {}
+                        }
+                    }
+                }
+
+                // Step B: Ripple Delete ONCE on primary video track (v = 0)
+                // This pulls the entire sequence (both video and audio) to the left in perfect sync!
+                var primaryRemoved = false;
+                if (seq.videoTracks.numTracks > 0 && !seq.videoTracks[0].isLocked()) {
+                    var v0 = seq.videoTracks[0];
+                    for (var c0 = v0.clips.numItems - 1; c0 >= 0; c0--) {
+                        var cl0 = v0.clips[c0];
+                        var cl0Start = (parseFloat(cl0.start.ticks) - zeroTicks) / TICKS;
+                        var cl0End = (parseFloat(cl0.end.ticks) - zeroTicks) / TICKS;
+                        var cl0Dur = Math.max(0.01, cl0End - cl0Start);
+                        var cl0Mid = (cl0Start + cl0End) / 2;
+                        if ((cl0Start >= startSec - 0.12 && cl0End <= endSec + 0.12) || (cl0Mid >= startSec && cl0Mid <= endSec && cl0Dur <= dur + 0.18)) {
+                            try {
+                                cl0.remove(1, 1);
+                                primaryRemoved = true;
+                                executedCount++;
+                                break;
+                            } catch (r0Err) {}
+                        }
+                    }
+                }
+
+                // If video track 0 wasn't present, ripple delete on audio track 0
+                if (!primaryRemoved && seq.audioTracks.numTracks > 0 && !seq.audioTracks[0].isLocked()) {
+                    var a0 = seq.audioTracks[0];
+                    for (var ca0 = a0.clips.numItems - 1; ca0 >= 0; ca0--) {
+                        var acl0 = a0.clips[ca0];
+                        var acl0Start = (parseFloat(acl0.start.ticks) - zeroTicks) / TICKS;
+                        var acl0End = (parseFloat(acl0.end.ticks) - zeroTicks) / TICKS;
+                        var acl0Dur = Math.max(0.01, acl0End - acl0Start);
+                        var acl0Mid = (acl0Start + acl0End) / 2;
+                        if ((acl0Start >= startSec - 0.12 && acl0End <= endSec + 0.12) || (acl0Mid >= startSec && acl0Mid <= endSec && acl0Dur <= dur + 0.18)) {
+                            try {
+                                acl0.remove(1, 1);
+                                primaryRemoved = true;
+                                executedCount++;
+                                break;
+                            } catch (ar0Err) {}
+                        }
+                    }
+                }
             }
         }
+
+        // Clear in/out points cleanly
+        try {
+            seq.clearInPoint();
+            seq.clearOutPoint();
+        } catch (clrErr) {}
 
         var finalTicks = Math.max(0, parseFloat(seq.end || 0) - zeroTicks);
         var finalSec = finalTicks / TICKS;
@@ -762,7 +813,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                 finalDurationSeconds: finalSec,
                 timeSavedSeconds: Math.max(0, initialSec - finalSec),
                 syncVerified: true,
-                mode: "native_ripple"
+                mode: "synchronized_atomic_ripple"
             });
         }
 

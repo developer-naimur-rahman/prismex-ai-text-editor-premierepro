@@ -676,35 +676,115 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     const seq = get().sequenceManifest;
     if (!seq) return;
 
-    const duration = Math.max(0, endSeconds - startSeconds);
-    if (duration <= 0.04) return;
+    // 1. Identify words to delete and lock cut boundaries exactly
+    const currentWords = get().transcriptWords;
+    const wordsInCut = currentWords.filter((w: any) => {
+      const ws = w.start_seconds ?? w.start ?? 0;
+      const we = w.end_seconds ?? w.end ?? 0;
+      const mid = (ws + we) / 2;
+      const dur = Math.max(0.01, we - ws);
+      if (mid >= startSeconds - 0.06 && mid <= endSeconds + 0.06) return true;
+      const overlap = Math.max(0, Math.min(we, endSeconds) - Math.max(ws, startSeconds));
+      if (overlap / dur >= 0.28) return true;
+      if (ws >= startSeconds - 0.12 && we <= endSeconds + 0.12) return true;
+      return false;
+    });
+
+    let cutStart = startSeconds;
+    let cutEnd = endSeconds;
+    if (wordsInCut.length > 0) {
+      const firstWStart = wordsInCut[0].start_seconds ?? wordsInCut[0].start ?? startSeconds;
+      const lastWEnd = wordsInCut[wordsInCut.length - 1].end_seconds ?? wordsInCut[wordsInCut.length - 1].end ?? endSeconds;
+      cutStart = Math.min(startSeconds, firstWStart);
+      cutEnd = Math.max(endSeconds, lastWEnd);
+    }
+    const duration = Math.max(0.04, cutEnd - cutStart);
 
     const fps = seq.fps || 24;
     const cut = {
       cutId: `cut_txt_${Date.now()}`,
-      startSeconds,
-      endSeconds,
+      startSeconds: cutStart,
+      endSeconds: cutEnd,
       durationSeconds: duration,
-      startTick: String(Math.round(startSeconds * 254016000000)),
-      endTick: String(Math.round(endSeconds * 254016000000)),
-      startFrame: Math.round(startSeconds * fps),
-      endFrame: Math.round(endSeconds * fps),
+      startTick: String(Math.round(cutStart * 254016000000)),
+      endTick: String(Math.round(cutEnd * 254016000000)),
+      startFrame: Math.round(cutStart * fps),
+      endFrame: Math.round(cutEnd * fps),
       category: 'SENTENCE_CUT' as const,
       sourceSuggestionId: ''
     };
 
-    // 1. Shift remaining words cleanly
-    const remainingWords = rippleShiftWords(get().transcriptWords, [cut]);
+    // 2. Cleanly remove cut words and ripple-shift remaining words
+    const cutIdSet = new Set(wordsInCut.map((w: any) => w.id || `${w.start}_${w.word}`));
+    const remainingWords = currentWords
+      .filter((w: any) => !cutIdSet.has(w.id || `${w.start}_${w.word}`) && !((w.start_seconds ?? w.start ?? 0) >= cutStart - 0.03 && (w.end_seconds ?? w.end ?? 0) <= cutEnd + 0.03))
+      .map((w: any) => {
+        let ws = w.start_seconds ?? w.start ?? 0;
+        let we = w.end_seconds ?? w.end ?? 0;
+        if (ws >= cutStart) {
+          ws = Math.max(0, ws - duration);
+          we = Math.max(0, we - duration);
+        }
+        return {
+          ...w,
+          start_seconds: ws,
+          end_seconds: we,
+          start: ws,
+          end: we
+        };
+      });
 
-    // 2. Remove cut review items (like the repeated take badge) and ripple-shift remaining ones
+    // 3. Shift sentences cleanly
+    const updatedSentences = (get().transcriptSentences || [])
+      .filter((s: any) => {
+        const sStart = Number(s.startSeconds ?? s.start_seconds ?? 0);
+        const sEnd = Number(s.endSeconds ?? s.end_seconds ?? 0);
+        const sMid = (sStart + sEnd) / 2;
+        return !(sMid >= cutStart - 0.06 && sMid <= cutEnd + 0.06);
+      })
+      .map((s: any) => {
+        const sStart = Number(s.startSeconds ?? s.start_seconds ?? 0);
+        const sEnd = Number(s.endSeconds ?? s.end_seconds ?? 0);
+        if (sStart >= cutEnd - 0.06) {
+          return {
+            ...s,
+            startSeconds: Math.max(0, sStart - duration),
+            endSeconds: Math.max(0, sEnd - duration),
+            start_seconds: Math.max(0, sStart - duration),
+            end_seconds: Math.max(0, sEnd - duration)
+          };
+        }
+        return s;
+      });
+
+    // 4. Shift directives cleanly
+    const currentDirectives = get().scriptDirectives || {};
+    const updatedDirectives: Record<number, any> = {};
+    for (const [key, d] of Object.entries(currentDirectives)) {
+      const dStart = Number(d.startSeconds ?? 0);
+      const dEnd = Number(d.endSeconds ?? 0);
+      const dMid = (dStart + dEnd) / 2;
+      if (dMid >= cutStart - 0.06 && dMid <= cutEnd + 0.06) continue;
+      if (dStart >= cutEnd - 0.06) {
+        updatedDirectives[Number(key)] = {
+          ...d,
+          startSeconds: Math.max(0, dStart - duration),
+          endSeconds: Math.max(0, dEnd - duration)
+        };
+      } else {
+        updatedDirectives[Number(key)] = d;
+      }
+    }
+
+    // 5. Remove cut review items (repeated take badge) and ripple-shift remaining ones
     const updatedReviewItems = get().reviewItems
       .filter((item: any) => {
         const itemMid = (item.startSeconds + item.endSeconds) / 2;
-        return !(itemMid >= startSeconds - 0.05 && itemMid <= endSeconds + 0.05) &&
-               !(item.startSeconds >= startSeconds - 0.08 && item.endSeconds <= endSeconds + 0.08);
+        return !(itemMid >= cutStart - 0.06 && itemMid <= cutEnd + 0.06) &&
+               !(item.startSeconds >= cutStart - 0.08 && item.endSeconds <= cutEnd + 0.08);
       })
       .map((item: any) => {
-        if (item.startSeconds >= endSeconds - 0.05) {
+        if (item.startSeconds >= cutEnd - 0.06) {
           return {
             ...item,
             startSeconds: Math.max(0, item.startSeconds - duration),
@@ -714,39 +794,42 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         return item;
       });
 
-    // 3. Remove cut silences and ripple-shift remaining ones
+    // 6. Remove cut silences and ripple-shift remaining ones
     const updatedSilences = get().detectedSilences
       .filter((s: any) => {
         const sMid = (s.start_seconds + s.end_seconds) / 2;
-        return !(sMid >= startSeconds - 0.05 && sMid <= endSeconds + 0.05);
+        return !(sMid >= cutStart - 0.06 && sMid <= cutEnd + 0.06);
       })
-      .map((s: any) => s.start_seconds >= endSeconds - 0.05
+      .map((s: any) => s.start_seconds >= cutEnd - 0.06
         ? { ...s, start_seconds: Math.max(0, s.start_seconds - duration), end_seconds: Math.max(0, s.end_seconds - duration) }
         : s
       );
 
-    // 4. Update state immediately so UI responds instantaneously with zero latency
+    // 7. Update UI state immediately with zero latency
     set({
       transcriptWords: remainingWords,
+      transcriptSentences: updatedSentences,
       detectedSilences: updatedSilences,
-      reviewItems: updatedReviewItems
+      reviewItems: updatedReviewItems,
+      scriptDirectives: updatedDirectives
     });
 
-    // 5. Execute cut on Premiere Pro timeline
+    // 8. Execute synchronized cut on Premiere Pro timeline
     try {
       await timelineEngine.executeCuts([cut]);
     } catch (e) {
       console.warn('[deleteTranscriptRange] timeline cut error:', e);
     }
 
-    // 6. Persist to disk and project cache
+    // 9. Persist to disk and project cache
     const currentSeq = get().sequenceManifest;
     if (currentSeq) {
       await persistProjectData(currentSeq, {
         words: remainingWords,
-        sentences: get().transcriptSentences,
+        sentences: updatedSentences,
         silences: updatedSilences,
-        reviewItems: updatedReviewItems
+        reviewItems: updatedReviewItems,
+        scriptDirectives: updatedDirectives
       });
     }
   },
