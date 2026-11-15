@@ -104,7 +104,9 @@ export const TranscriptView: React.FC = () => {
     setScriptDirectives,
     updateScriptDirective,
     customMarkers,
-    setCustomMarkers
+    setCustomMarkers,
+    sequenceChangedNotice,
+    setSequenceChangedNotice
   } = usePrismexStore();
 
   const t = translations[language];
@@ -1681,6 +1683,53 @@ export const TranscriptView: React.FC = () => {
         >
           <Check size={13} />
           <span>{exportStatus}</span>
+        </div>
+      )}
+
+      {/* Sequence Content Change Notification Banner */}
+      {sequenceChangedNotice && (
+        <div style={{
+          backgroundColor: 'rgba(245, 158, 11, 0.15)',
+          border: '1px solid rgba(245, 158, 11, 0.45)',
+          borderRadius: '6px',
+          padding: '6px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontSize: '11px',
+          color: '#fef3c7',
+          flexShrink: 0
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Sparkles size={14} color="#f59e0b" />
+            <span>টাইমলাইনে নতুন ক্লিপ বা দৈর্ঘ্য পরিবর্তন সনাক্ত হয়েছে ({sequenceChangedNotice})।</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              onClick={async () => {
+                setSequenceChangedNotice(null);
+                await transcribeSequence();
+              }}
+              style={{
+                backgroundColor: '#f59e0b',
+                color: '#000',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '3px 8px',
+                fontSize: '10.5px',
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              🔄 নতুন অংশ ট্রান্সক্রাইব করুন
+            </button>
+            <button
+              onClick={() => setSequenceChangedNotice(null)}
+              style={{ background: 'transparent', border: 'none', color: '#a1a1aa', cursor: 'pointer', fontSize: '13px' }}
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 

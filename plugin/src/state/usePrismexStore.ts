@@ -44,6 +44,11 @@ interface PrismexState {
   // Premiere Pro Host State
   sequenceManifest: SequenceManifest | null;
   refreshSequence: () => Promise<void>;
+  checkSequenceChange: () => Promise<void>;
+  autoTranscribeNewSequences: boolean;
+  setAutoTranscribeNewSequences: (val: boolean) => void;
+  sequenceChangedNotice: string | null;
+  setSequenceChangedNotice: (notice: string | null) => void;
 
   // Pipeline & Job State
   executionMode: ExecutionMode;
@@ -117,6 +122,7 @@ interface PrismexState {
 const client = PrismexDaemonClient.getInstance();
 const hostBridge = PremiereHostBridge.getInstance();
 const timelineEngine = new TimelineEditingEngine();
+let sequenceWatcherTimer: any = null;
 
 export function getCleanSequenceKey(seqName?: string): string {
   if (!seqName) return 'default_sequence';
@@ -305,12 +311,97 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   },
 
   sequenceManifest: null,
-  refreshSequence: async () => {
-    const manifest = await hostBridge.getActiveSequenceManifest();
-    set({ sequenceManifest: manifest });
-    if (manifest && get().transcriptWords.length === 0) {
-      await loadPersistedProjectData(manifest);
+  autoTranscribeNewSequences: (() => {
+    try {
+      return localStorage.getItem('prismex_auto_transcribe_new') !== 'false';
+    } catch {
+      return true;
     }
+  })(),
+  setAutoTranscribeNewSequences: (val: boolean) => {
+    try {
+      localStorage.setItem('prismex_auto_transcribe_new', String(val));
+    } catch {}
+    set({ autoTranscribeNewSequences: val });
+  },
+  sequenceChangedNotice: null,
+  setSequenceChangedNotice: (notice: string | null) => set({ sequenceChangedNotice: notice }),
+
+  checkSequenceChange: async () => {
+    // Never interrupt an active transcription
+    if (get().jobStatus === 'TRANSCRIBING' || (get().jobProgress > 0 && get().jobProgress < 100)) {
+      return;
+    }
+
+    const newManifest = await hostBridge.getActiveSequenceManifest();
+    const currentSeq = get().sequenceManifest;
+
+    if (!newManifest) {
+      if (currentSeq) set({ sequenceManifest: null });
+      return;
+    }
+
+    const oldCleanKey = currentSeq ? getCleanSequenceKey(currentSeq.cleanSequenceName || currentSeq.sequenceName) : '';
+    const newCleanKey = getCleanSequenceKey(newManifest.cleanSequenceName || newManifest.sequenceName);
+    const isDifferentSeq = !currentSeq || (oldCleanKey !== newCleanKey) || (currentSeq.sequenceGuid !== newManifest.sequenceGuid);
+
+    if (isDifferentSeq) {
+      set({ sequenceManifest: newManifest, sequenceChangedNotice: null });
+
+      // Check if cache exists for this sequence
+      const loaded = await loadPersistedProjectData(newManifest);
+      if (loaded) {
+        return;
+      }
+
+      // No cache found -> Brand new sequence!
+      // Clear previous sequence transcript cleanly
+      set({
+        transcriptWords: [],
+        transcriptSentences: [],
+        detectedSilences: [],
+        reviewItems: [],
+        scriptDirectives: {},
+        customMarkers: [],
+        viralTopics: [],
+        viralShorts: [],
+        srtCues: [],
+        jobStatus: 'INITIALIZING',
+        jobProgress: 0,
+        jobMessage: 'New sequence detected'
+      });
+
+      // Auto-transcribe if enabled and sequence has audio clips / duration
+      const hasClips = (newManifest.sourceClips && newManifest.sourceClips.length > 0) || (newManifest.durationSeconds > 0.5);
+      if (hasClips && get().autoTranscribeNewSequences) {
+        await get().transcribeSequence();
+      }
+    } else {
+      // Same sequence: update manifest
+      set({ sequenceManifest: newManifest });
+
+      const hasClips = (newManifest.sourceClips && newManifest.sourceClips.length > 0) || (newManifest.durationSeconds > 0.5);
+
+      // If transcript was empty and clips were just dropped in
+      if (get().transcriptWords.length === 0 && hasClips && get().autoTranscribeNewSequences) {
+        await get().transcribeSequence();
+        return;
+      }
+
+      // Check if new clips were added to an already transcribed sequence
+      const oldClipsCount = (currentSeq?.sourceClips || []).length;
+      const newClipsCount = (newManifest.sourceClips || []).length;
+      const oldDur = currentSeq?.durationSeconds || 0;
+      const newDur = newManifest.durationSeconds || 0;
+
+      if (get().transcriptWords.length > 0 && (newClipsCount > oldClipsCount || newDur - oldDur > 2.0)) {
+        set({ sequenceChangedNotice: `${Math.round(newDur)}s` });
+      }
+    }
+  },
+
+  refreshSequence: async () => {
+    await get().checkSequenceChange();
   },
 
   executionMode: 'AUTO_EDIT',
@@ -500,12 +591,16 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     const health = await client.checkHealth();
     set({ daemonOnline: health !== null });
 
-    // 2. Load sequence and attempt instant restoration from project cache
-    const manifest = await hostBridge.getActiveSequenceManifest();
-    set({ sequenceManifest: manifest });
-    if (manifest) {
-      await loadPersistedProjectData(manifest);
+    // 2. Initial sequence check & auto-restoration
+    await get().checkSequenceChange();
+
+    // 2.1. Start real-time background sequence & clip change watcher (every 2.5s)
+    if (sequenceWatcherTimer) {
+      clearInterval(sequenceWatcherTimer);
     }
+    sequenceWatcherTimer = setInterval(() => {
+      get().checkSequenceChange();
+    }, 2500);
 
     // 3. Load profiles & providers
     const [profiles, providers] = await Promise.all([

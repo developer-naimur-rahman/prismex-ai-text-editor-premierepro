@@ -6,7 +6,7 @@ import { Globe, Key, Trash2, Cpu, CheckCircle, ExternalLink } from 'lucide-react
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
 export const SettingsView: React.FC = () => {
-  const { language, setLanguage, setActiveTab } = usePrismexStore();
+  const { language, setLanguage, setActiveTab, autoTranscribeNewSequences, setAutoTranscribeNewSequences } = usePrismexStore();
   const t = translations[language];
   const [geminiKey, setGeminiKey] = useState('');
   const [keySaved, setKeySaved] = useState(false);
@@ -54,6 +54,26 @@ export const SettingsView: React.FC = () => {
             বাংলা (Bangla)
           </button>
         </div>
+      </div>
+
+      {/* Auto-Transcribe New Sequences & Clips */}
+      <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px' }}>
+        <div style={{ paddingRight: '12px' }}>
+          <div style={{ fontWeight: 600, fontSize: '11.5px', color: '#fff' }}>
+            {language === 'bn' ? 'নতুন সিকোয়েন্স অটো-ট্রান্সক্রাইব (Auto-Transcribe)' : 'Auto-Transcribe New Sequences'}
+          </div>
+          <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '2px', lineHeight: 1.4 }}>
+            {language === 'bn' 
+              ? 'প্রিমিয়ার প্রোতে নতুন কোনো সিকোয়েন্স বা ক্লিপ লোড করলে কোনো ক্লিক ছাড়াই স্বয়ংক্রিয়ভাবে স্পিচ-টু-টেক্সট ট্রান্সক্রিপশন শুরু হবে।' 
+              : 'Automatically transcribes new sequences and added clips in Premiere Pro without requiring manual button clicks.'}
+          </div>
+        </div>
+        <input
+          type="checkbox"
+          checked={autoTranscribeNewSequences}
+          onChange={(e) => setAutoTranscribeNewSequences(e.target.checked)}
+          style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--accent-color)', flexShrink: 0 }}
+        />
       </div>
 
       {/* AI API Key Quick Setup */}
