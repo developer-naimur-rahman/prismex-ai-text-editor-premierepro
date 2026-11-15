@@ -624,15 +624,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   detectedSilences: [],
   setTranscriptWords: (words) => {
     set({ transcriptWords: words });
-    const seq = get().sequenceManifest;
-    if (seq) {
-      persistProjectData(seq, {
-        words,
-        sentences: get().transcriptSentences,
-        silences: get().detectedSilences,
-        reviewItems: get().reviewItems
-      });
-    }
+    get().saveCurrentProjectState();
   },
   setReviewItems: (items) => set({ reviewItems: items }),
 
@@ -740,22 +732,9 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   setSrtCues: (cues) => {
     set((state) => {
       const next = typeof cues === 'function' ? cues(state.srtCues) : cues;
-      const seq = state.sequenceManifest;
-      if (seq) {
-        persistProjectData(seq, {
-          words: state.transcriptWords,
-          sentences: state.transcriptSentences,
-          silences: state.detectedSilences,
-          reviewItems: state.reviewItems,
-          scriptDirectives: state.scriptDirectives,
-          customMarkers: state.customMarkers,
-          viralTopics: state.viralTopics,
-          viralShorts: state.viralShorts,
-          srtCues: next
-        });
-      }
       return { srtCues: next };
     });
+    get().saveCurrentProjectState();
   },
 
   saveCurrentProjectState: async () => {
@@ -770,7 +749,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       customMarkers: s.customMarkers,
       viralTopics: s.viralTopics,
       viralShorts: s.viralShorts,
-      srtCues: s.srtCues
+      srtCues: s.srtCues,
+      audioSettings: s.audioSettings,
+      detectedSfxCues: s.detectedSfxCues,
+      soundDesignTips: s.soundDesignTips
     });
   },
 

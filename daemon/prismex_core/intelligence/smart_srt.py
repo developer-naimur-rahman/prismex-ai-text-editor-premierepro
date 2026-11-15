@@ -505,9 +505,10 @@ class SmartSRTSegmenter:
         fps: float,
     ) -> List[Dict[str, Any]]:
         cues: List[Dict[str, Any]] = []
+        n_ranges = len(ranges)
         prev_end_frame = 0
 
-        for idx, (s_idx, e_idx, reason) in enumerate(ranges, start=1):
+        for idx, (s_idx, e_idx, reason) in enumerate(ranges):
             chunk = words[s_idx : e_idx + 1]
             if not chunk:
                 continue
@@ -519,7 +520,32 @@ class SmartSRTSegmenter:
             if start_frame < prev_end_frame:
                 start_frame = prev_end_frame
 
-            end_frame = int(round(raw_end * fps))
+            # Look ahead to next cue's start to ensure seamless butt-to-butt frame connection
+            if idx + 1 < n_ranges:
+                next_s_idx, _, _ = ranges[idx + 1]
+                if next_s_idx < len(words):
+                    next_raw_start = max(0.0, float(words[next_s_idx].get("start_seconds", 0.0)))
+                    next_start_frame = int(round(next_raw_start * fps))
+                    gap_sec = next_raw_start - raw_end
+
+                    # If continuous speech or conversational cadence (pause < 1.2s),
+                    # seamless butt-to-butt snapping: extend cue end frame right to next_start_frame!
+                    # Preceding subtitle stays visible on screen until the exact frame the next word begins!
+                    if 0.0 <= gap_sec < 1.2 and next_start_frame > start_frame:
+                        end_frame = next_start_frame
+                    else:
+                        # Genuine pause or silence (>= 1.2s):
+                        # Give a pleasant 0.25s reading hold after speech, then clear during the pause
+                        speech_end_frame = int(round(raw_end * fps))
+                        hold_frames = int(round(0.25 * fps))
+                        max_end_frame = max(start_frame + 1, next_start_frame - int(round(0.3 * fps)))
+                        end_frame = min(speech_end_frame + hold_frames, max_end_frame)
+                else:
+                    end_frame = int(round(raw_end * fps)) + int(round(0.25 * fps))
+            else:
+                # Final cue in sequence: natural 0.25s hold
+                end_frame = int(round(raw_end * fps)) + int(round(0.25 * fps))
+
             if end_frame <= start_frame:
                 end_frame = start_frame + 1
 
@@ -531,7 +557,7 @@ class SmartSRTSegmenter:
 
             cues.append(
                 {
-                    "index": idx,
+                    "index": len(cues) + 1,
                     "startWordIdx": s_idx,
                     "endWordIdx": e_idx,
                     "wordCount": len(chunk),
