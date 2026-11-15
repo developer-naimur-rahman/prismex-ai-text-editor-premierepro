@@ -115,6 +115,11 @@ interface PrismexState {
   initStepMessage: string;
   initStepProgress: number;
 
+  // Sequence Switch Loading Overlay
+  isSwitchingSequence: boolean;
+  sequenceSwitchMessage: string;
+  sequenceSwitchProgress: number;
+
   // Global Busy & Activity Tracker
   globalBusyAction: string | null;
   setGlobalBusyAction: (action: string | null) => void;
@@ -137,6 +142,7 @@ const client = PrismexDaemonClient.getInstance();
 const hostBridge = PremiereHostBridge.getInstance();
 const timelineEngine = new TimelineEditingEngine();
 let sequenceWatcherTimer: any = null;
+let lastSequenceSignature: string = '';
 
 export function getCleanSequenceKey(seqName?: string): string {
   if (!seqName) return 'default_sequence';
@@ -373,6 +379,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   initStepMessage: 'Connecting to Prismex Engine...',
   initStepProgress: 15,
 
+  isSwitchingSequence: false,
+  sequenceSwitchMessage: '',
+  sequenceSwitchProgress: 0,
+
   globalBusyAction: null,
   setGlobalBusyAction: (action) => set({ globalBusyAction: action }),
 
@@ -392,6 +402,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       return;
     }
 
+    try {
+      lastSequenceSignature = await hostBridge.getActiveSequenceSignature();
+    } catch {}
+
     const newManifest = await hostBridge.getActiveSequenceManifest();
     const currentSeq = get().sequenceManifest;
 
@@ -405,7 +419,20 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     const isDifferentSeq = !currentSeq || (oldCleanKey !== newCleanKey) || (currentSeq.sequenceGuid !== newManifest.sequenceGuid);
 
     if (isDifferentSeq) {
-      set({ sequenceManifest: newManifest, sequenceChangedNotice: null });
+      const isBn = get().language === 'bn';
+      const seqDisplay = newManifest.cleanSequenceName || newManifest.sequenceName;
+
+      // 1. Immediately show smooth sequence transition overlay & progress
+      set({
+        isSwitchingSequence: true,
+        sequenceSwitchProgress: 25,
+        sequenceSwitchMessage: isBn ? `নতুন সিকোয়েন্স সনাক্ত হয়েছে: ${seqDisplay}...` : `Switched sequence: ${seqDisplay}...`,
+        sequenceManifest: newManifest,
+        sequenceChangedNotice: null
+      });
+
+      // Small async tick so React renders the transition overlay smoothly
+      await new Promise((r) => setTimeout(r, 70));
 
       const hasClips = Boolean(newManifest.sourceClips && newManifest.sourceClips.length > 0 && newManifest.durationSeconds > 0.1);
       if (!hasClips) {
@@ -421,15 +448,33 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           srtCues: [],
           jobStatus: 'INITIALIZING',
           jobProgress: 0,
-          jobMessage: 'Timeline is empty'
+          jobMessage: isBn ? 'টাইমলাইন ফাঁকা' : 'Timeline is empty',
+          sequenceSwitchProgress: 100,
+          sequenceSwitchMessage: isBn ? 'টাইমলাইন ফাঁকা' : 'Timeline is empty'
         });
         await clearPersistedProjectData(newManifest);
+        setTimeout(() => set({ isSwitchingSequence: false }), 400);
         return;
       }
+
+      set({
+        sequenceSwitchProgress: 55,
+        sequenceSwitchMessage: isBn ? 'সংরক্ষিত ট্রান্সক্রিপ্ট ও প্রজেক্ট ক্যাশ স্ক্যান হচ্ছে...' : 'Scanning project cache & saved transcripts...'
+      });
 
       // Check if cache exists for this sequence
       const loaded = await loadPersistedProjectData(newManifest);
       if (loaded) {
+        set({
+          sequenceSwitchProgress: 88,
+          sequenceSwitchMessage: isBn ? 'ট্রান্সক্রিপ্ট ও কিউ সফলভাবে সিঙ্ক হয়েছে!' : 'Transcript and cues synced successfully!'
+        });
+        await new Promise((r) => setTimeout(r, 120));
+        set({
+          sequenceSwitchProgress: 100,
+          sequenceSwitchMessage: isBn ? 'প্রস্তুত!' : 'Ready!'
+        });
+        setTimeout(() => set({ isSwitchingSequence: false }), 350);
         return;
       }
 
@@ -447,8 +492,11 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         srtCues: [],
         jobStatus: 'INITIALIZING',
         jobProgress: 0,
-        jobMessage: 'New sequence detected'
+        jobMessage: isBn ? 'নতুন সিকোয়েন্স সনাক্ত হয়েছে' : 'New sequence detected',
+        sequenceSwitchProgress: 100,
+        sequenceSwitchMessage: isBn ? 'নতুন সিকোয়েন্স প্রস্তুত' : 'Ready'
       });
+      setTimeout(() => set({ isSwitchingSequence: false }), 350);
 
       // Auto-transcribe if enabled and sequence has audio clips / duration
       if (hasClips && get().autoTranscribeNewSequences) {
@@ -711,13 +759,29 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       initStepProgress: 75
     });
 
-    // 2.1. Start real-time background sequence & clip change watcher (every 2.5s)
+    // 2.1. Start real-time background sequence & timeline signature poller (every 800ms)
     if (sequenceWatcherTimer) {
       clearInterval(sequenceWatcherTimer);
     }
-    sequenceWatcherTimer = setInterval(() => {
-      get().checkSequenceChange();
-    }, 2500);
+    try {
+      lastSequenceSignature = await hostBridge.getActiveSequenceSignature();
+    } catch {}
+
+    sequenceWatcherTimer = setInterval(async () => {
+      // Never poll while transcribing or in the middle of a job
+      const status = get().jobStatus;
+      const progress = get().jobProgress;
+      if (status === 'TRANSCRIBING' || (progress > 0 && progress < 100)) {
+        return;
+      }
+      try {
+        const sig = await hostBridge.getActiveSequenceSignature();
+        if (sig && sig !== lastSequenceSignature) {
+          lastSequenceSignature = sig;
+          await get().checkSequenceChange();
+        }
+      } catch {}
+    }, 800);
 
     // 3. Load profiles & providers
     const [profiles, providers] = await Promise.all([

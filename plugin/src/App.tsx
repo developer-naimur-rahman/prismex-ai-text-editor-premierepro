@@ -24,6 +24,9 @@ export const App: React.FC = () => {
     isAppInitializing,
     initStepMessage,
     initStepProgress,
+    isSwitchingSequence,
+    sequenceSwitchMessage,
+    sequenceSwitchProgress,
     jobProgress,
     jobMessage,
     jobStatus,
@@ -33,6 +36,25 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     initApp();
+
+    const handleFocusOrHover = () => {
+      usePrismexStore.getState().checkSequenceChange();
+    };
+
+    window.addEventListener('focus', handleFocusOrHover);
+    window.addEventListener('mouseenter', handleFocusOrHover);
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        handleFocusOrHover();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('focus', handleFocusOrHover);
+      window.removeEventListener('mouseenter', handleFocusOrHover);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [initApp]);
 
   const isBusy = (jobProgress > 0 && jobProgress < 100) || 
@@ -111,6 +133,67 @@ export const App: React.FC = () => {
           <div style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Loader2 size={12} className="animate-spin" />
             <span>{initStepMessage}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Layer 1.5: Sequence Switch Transition Overlay with Real-time Progress */}
+      {isSwitchingSequence && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 9995,
+          backgroundColor: 'rgba(9, 9, 11, 0.78)',
+          backdropFilter: 'blur(5px)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '20px'
+        }}>
+          <div style={{
+            backgroundColor: '#18181b',
+            border: '1px solid rgba(139, 92, 246, 0.45)',
+            borderRadius: '14px',
+            padding: '20px 28px',
+            boxShadow: '0 10px 35px rgba(0, 0, 0, 0.6), 0 0 24px rgba(139, 92, 246, 0.25)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            minWidth: '280px',
+            maxWidth: '92%'
+          }}>
+            <div style={{
+              width: '38px',
+              height: '38px',
+              borderRadius: '10px',
+              background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              marginBottom: '12px',
+              boxShadow: '0 0 16px rgba(139, 92, 246, 0.4)'
+            }}>
+              <Loader2 size={18} className="animate-spin" color="#fff" />
+            </div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', marginBottom: '6px', textAlign: 'center' }}>
+              {language === 'bn' ? 'সিকোয়েন্স পরিবর্তন হচ্ছে' : 'Switching Sequence'}
+            </div>
+            <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '14px', textAlign: 'center', minHeight: '16px' }}>
+              {sequenceSwitchMessage}
+            </div>
+            {/* Progress Bar */}
+            <div style={{ width: '100%', height: '5px', backgroundColor: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${sequenceSwitchProgress}%`,
+                background: 'linear-gradient(90deg, #3b82f6, #a855f7)',
+                transition: 'width 0.25s ease'
+              }} />
+            </div>
+            <div style={{ fontSize: '10.5px', fontWeight: 600, color: '#c084fc', marginTop: '6px' }}>
+              {sequenceSwitchProgress}%
+            </div>
           </div>
         </div>
       )}

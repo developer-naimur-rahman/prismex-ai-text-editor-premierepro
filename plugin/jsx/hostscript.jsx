@@ -633,6 +633,31 @@ $._prismex._formatTimecode = function(seconds, fps) {
     return pad(h) + ":" + pad(m) + ":" + pad(s) + ":" + pad(frames);
 };
 
+$._prismex.getActiveSequenceSignature = function() {
+    try {
+        if (!app.project || !app.project.activeSequence) return "none";
+        var seq = app.project.activeSequence;
+        var guid = String(seq.sequenceID || seq.guid || "");
+        var name = String(seq.name || "");
+        var zero = String(seq.zeroPoint || "0");
+        var endTicks = String(seq.end || "0");
+        var numClips = 0;
+        if (seq.videoTracks) {
+            for (var v = 0; v < seq.videoTracks.numTracks; v++) {
+                numClips += seq.videoTracks[v].clips.numItems;
+            }
+        }
+        if (seq.audioTracks) {
+            for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+                numClips += seq.audioTracks[a].clips.numItems;
+            }
+        }
+        return guid + "::" + name + "::" + zero + "::" + endTicks + "::" + String(numClips);
+    } catch (e) {
+        return "";
+    }
+};
+
 $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
     try {
         if (!app.project || !app.project.activeSequence) {
@@ -659,6 +684,31 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
             fps = Math.round((TICKS / ticksPerFrame) * 1000.0) / 1000.0;
         }
 
+        // CRITICAL: Ensure ALL unlocked video AND audio tracks are targeted with syncLock enabled
+        // This guarantees Premiere Pro cuts and ripples BOTH Video and Audio simultaneously with zero desync!
+        for (var v = 0; v < seq.videoTracks.numTracks; v++) {
+            var vt = seq.videoTracks[v];
+            if (vt && !vt.isLocked()) {
+                try { vt.setTargeted(true, true); } catch (e) {}
+            }
+        }
+        for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+            var at = seq.audioTracks[a];
+            if (at && !at.isLocked()) {
+                try { at.setTargeted(true, true); } catch (e) {}
+            }
+        }
+        if (qeSeq) {
+            try {
+                for (var qv = 0; qv < qeSeq.numVideoTracks; qv++) {
+                    try { qeSeq.getVideoTrackAt(qv).setTargeted(true); } catch (e) {}
+                }
+                for (var qa = 0; qa < qeSeq.numAudioTracks; qa++) {
+                    try { qeSeq.getAudioTrackAt(qa).setTargeted(true); } catch (e) {}
+                }
+            } catch (qeTargErr) {}
+        }
+
         // Reverse-chronological order: right-to-left so earlier cuts aren't shifted by later cuts
         var cuts = rawCuts.slice(0).sort(function(a, b) {
             var aStart = parseFloat(a.startSeconds || a.start_seconds || 0);
@@ -677,26 +727,35 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
             var dur = endSec - startSec;
             if (dur <= 0.03) continue;
 
-            var startTC = $._prismex._formatTimecode(startSec, fps);
-            var endTC = $._prismex._formatTimecode(endSec, fps);
+            // Compute exact timeline ruler timecode including sequence zeroPoint offset
+            var startRulerSec = (zeroTicks / TICKS) + startSec;
+            var endRulerSec = (zeroTicks / TICKS) + endSec;
+            var startTC = $._prismex._formatTimecode(startRulerSec, fps);
+            var endTC = $._prismex._formatTimecode(endRulerSec, fps);
 
             var qeSuccess = false;
-            // 1. Try atomic QE In/Out sequence ripple delete (cuts all unlocked tracks simultaneously)
-            if (qeSeq && typeof qeSeq.setInPoint === "function" && typeof qeSeq.setOutPoint === "function" && typeof qeSeq.rippleDelete === "function") {
+            // 1. Try atomic QE In/Out sequence ripple delete across all targeted tracks
+            if (qeSeq && typeof qeSeq.setInPoint === "function" && typeof qeSeq.setOutPoint === "function") {
                 try {
                     qeSeq.setInPoint(startTC);
                     qeSeq.setOutPoint(endTC);
-                    qeSeq.rippleDelete();
-                    qeSuccess = true;
-                    executedCount++;
+                    if (typeof qeSeq.rippleDelete === "function") {
+                        qeSeq.rippleDelete();
+                        qeSuccess = true;
+                        executedCount++;
+                    } else if (typeof qeSeq.extract === "function") {
+                        qeSeq.extract();
+                        qeSuccess = true;
+                        executedCount++;
+                    }
                 } catch (qeRippleErr) {
                     qeSuccess = false;
                 }
             }
 
-            // 2. If QE atomic ripple delete did not run, execute synchronized Lift-and-Ripple
+            // 2. If QE atomic ripple delete did not run, execute synchronized Video + Audio Razor and Ripple
             if (!qeSuccess) {
-                // Razor all tracks at end boundary first, then start boundary
+                // Razor ALL video and audio tracks at end boundary first, then start boundary
                 if (qeSeq) {
                     if (typeof qeSeq.razor === "function") {
                         try { qeSeq.razor(endTC); } catch (e1) {}
@@ -720,8 +779,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                     } catch (qTrackErr) {}
                 }
 
-                // Step A: Lift (remove WITHOUT ripple 0, 0) on all audio tracks and secondary video tracks
-                // This ensures tracks DO NOT shift independently!
+                // Step A: Lift (remove without ripple) all sliced audio clips and secondary video clips
                 for (var a = 0; a < seq.audioTracks.numTracks; a++) {
                     var at = seq.audioTracks[a];
                     if (at.isLocked()) continue;
@@ -731,7 +789,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                         var acEnd = (parseFloat(aclip.end.ticks) - zeroTicks) / TICKS;
                         var acDur = Math.max(0.01, acEnd - acStart);
                         var acMid = (acStart + acEnd) / 2;
-                        if ((acStart >= startSec - 0.12 && acEnd <= endSec + 0.12) || (acMid >= startSec && acMid <= endSec && acDur <= dur + 0.18)) {
+                        if ((acStart >= startSec - 0.12 && acEnd <= endSec + 0.12) || (acMid >= startSec && acMid <= endSec && acDur <= dur + 0.25)) {
                             try { aclip.remove(0, 0); } catch (arErr) {}
                         }
                     }
@@ -746,14 +804,14 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                         var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
                         var cDur = Math.max(0.01, cEnd - cStart);
                         var cMid = (cStart + cEnd) / 2;
-                        if ((cStart >= startSec - 0.12 && cEnd <= endSec + 0.12) || (cMid >= startSec && cMid <= endSec && cDur <= dur + 0.18)) {
+                        if ((cStart >= startSec - 0.12 && cEnd <= endSec + 0.12) || (cMid >= startSec && cMid <= endSec && cDur <= dur + 0.25)) {
                             try { clip.remove(0, 0); } catch (rErr) {}
                         }
                     }
                 }
 
                 // Step B: Ripple Delete ONCE on primary video track (v = 0)
-                // This pulls the entire sequence (both video and audio) to the left in perfect sync!
+                // In Premiere Pro, removing a video slice with remove(1, 1) ripples BOTH video and audio together!
                 var primaryRemoved = false;
                 if (seq.videoTracks.numTracks > 0 && !seq.videoTracks[0].isLocked()) {
                     var v0 = seq.videoTracks[0];
@@ -763,7 +821,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                         var cl0End = (parseFloat(cl0.end.ticks) - zeroTicks) / TICKS;
                         var cl0Dur = Math.max(0.01, cl0End - cl0Start);
                         var cl0Mid = (cl0Start + cl0End) / 2;
-                        if ((cl0Start >= startSec - 0.12 && cl0End <= endSec + 0.12) || (cl0Mid >= startSec && cl0Mid <= endSec && cl0Dur <= dur + 0.18)) {
+                        if ((cl0Start >= startSec - 0.12 && cl0End <= endSec + 0.12) || (cl0Mid >= startSec && cl0Mid <= endSec && cl0Dur <= dur + 0.25)) {
                             try {
                                 cl0.remove(1, 1);
                                 primaryRemoved = true;
@@ -774,7 +832,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                     }
                 }
 
-                // If video track 0 wasn't present, ripple delete on audio track 0
+                // If video track 0 had no slice (e.g. audio-only), ripple delete on audio track 0
                 if (!primaryRemoved && seq.audioTracks.numTracks > 0 && !seq.audioTracks[0].isLocked()) {
                     var a0 = seq.audioTracks[0];
                     for (var ca0 = a0.clips.numItems - 1; ca0 >= 0; ca0--) {
@@ -783,7 +841,7 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
                         var acl0End = (parseFloat(acl0.end.ticks) - zeroTicks) / TICKS;
                         var acl0Dur = Math.max(0.01, acl0End - acl0Start);
                         var acl0Mid = (acl0Start + acl0End) / 2;
-                        if ((acl0Start >= startSec - 0.12 && acl0End <= endSec + 0.12) || (acl0Mid >= startSec && acl0Mid <= endSec && acl0Dur <= dur + 0.18)) {
+                        if ((acl0Start >= startSec - 0.12 && acl0End <= endSec + 0.12) || (acl0Mid >= startSec && acl0Mid <= endSec && acl0Dur <= dur + 0.25)) {
                             try {
                                 acl0.remove(1, 1);
                                 primaryRemoved = true;
@@ -845,7 +903,7 @@ $._prismex.executeCuts = function(cutsJsonString) {
 
         var totalClipsProcessed = 0;
 
-        // Snapshot all video track clips first
+        // Snapshot all video track clips
         var videoTrackSnapshots = [];
         for (var v = 0; v < seq.videoTracks.numTracks; v++) {
             var vTrack = seq.videoTracks[v];
@@ -866,123 +924,112 @@ $._prismex.executeCuts = function(cutsJsonString) {
             videoTrackSnapshots.push({ trackIndex: v, track: vTrack, clips: vClips });
         }
 
-        // Snapshot audio-only clips (or if there are no video tracks)
-        var hasVideoClips = false;
-        for (var vs = 0; vs < videoTrackSnapshots.length; vs++) {
-            if (videoTrackSnapshots[vs].clips.length > 0) {
-                hasVideoClips = true;
-                break;
+        // Snapshot all audio track clips
+        var audioTrackSnapshots = [];
+        for (var a = 0; a < seq.audioTracks.numTracks; a++) {
+            var aTrack = seq.audioTracks[a];
+            if (aTrack.isLocked()) continue;
+            var aClips = [];
+            for (var ac = 0; ac < aTrack.clips.numItems; ac++) {
+                var acItem = aTrack.clips[ac];
+                if (!acItem.projectItem) continue;
+                aClips.push({
+                    clipRef: acItem,
+                    projectItem: acItem.projectItem,
+                    tlStart: (parseFloat(acItem.start.ticks) - zeroTicks) / TICKS,
+                    tlEnd: (parseFloat(acItem.end.ticks) - zeroTicks) / TICKS,
+                    srcIn: parseFloat(acItem.inPoint.ticks) / TICKS,
+                    srcOut: parseFloat(acItem.outPoint.ticks) / TICKS
+                });
+            }
+            audioTrackSnapshots.push({ trackIndex: a, track: aTrack, clips: aClips });
+        }
+
+        // Remove all existing unlocked video & audio clips before placing kept segments
+        for (var vDelIdx = 0; vDelIdx < videoTrackSnapshots.length; vDelIdx++) {
+            var vtDel = videoTrackSnapshots[vDelIdx].track;
+            for (var cDel = vtDel.clips.numItems - 1; cDel >= 0; cDel--) {
+                try { vtDel.clips[cDel].remove(0, 0); } catch (e) {}
+            }
+        }
+        for (var aDelIdx = 0; aDelIdx < audioTrackSnapshots.length; aDelIdx++) {
+            var atDel = audioTrackSnapshots[aDelIdx].track;
+            for (var aDel = atDel.clips.numItems - 1; aDel >= 0; aDel--) {
+                try { atDel.clips[aDel].remove(0, 0); } catch (e) {}
             }
         }
 
-        if (hasVideoClips) {
-            // Remove all existing unlocked video & audio clips cleanly before rebuilding kept segments
-            // (overwriteClip on a video track drops both linked video & audio cleanly in Premiere Pro)
-            for (var vIdx = 0; vIdx < videoTrackSnapshots.length; vIdx++) {
-                var vt = videoTrackSnapshots[vIdx].track;
-                for (var cDel = vt.clips.numItems - 1; cDel >= 0; cDel--) {
-                    try { vt.clips[cDel].remove(0, 0); } catch (e) {}
-                }
-            }
-            for (var aIdx = 0; aIdx < seq.audioTracks.numTracks; aIdx++) {
-                var at = seq.audioTracks[aIdx];
-                if (at.isLocked()) continue;
-                for (var aDel = at.clips.numItems - 1; aDel >= 0; aDel--) {
-                    try { at.clips[aDel].remove(0, 0); } catch (e) {}
-                }
-            }
+        // 1. Rebuild kept VIDEO segments onto video tracks
+        for (var vSnapIdx = 0; vSnapIdx < videoTrackSnapshots.length; vSnapIdx++) {
+            var snap = videoTrackSnapshots[vSnapIdx];
+            for (var ci = 0; ci < snap.clips.length; ci++) {
+                var info = snap.clips[ci];
+                var keptSegs = $._prismex._computeKeptSegments(info.tlStart, info.tlEnd, mergedCuts);
 
-            // Rebuild kept segments onto the timeline using 100% official overwriteClip
-            for (var vSnapIdx = 0; vSnapIdx < videoTrackSnapshots.length; vSnapIdx++) {
-                var snap = videoTrackSnapshots[vSnapIdx];
-                for (var ci = 0; ci < snap.clips.length; ci++) {
-                    var info = snap.clips[ci];
-                    var keptSegs = $._prismex._computeKeptSegments(info.tlStart, info.tlEnd, mergedCuts);
+                for (var si = 0; si < keptSegs.length; si++) {
+                    var seg = keptSegs[si];
+                    var offsetInClip = seg.start - info.tlStart;
+                    var segDur = seg.end - seg.start;
+                    var segSrcInTicks = Math.round((info.srcIn + offsetInClip) * TICKS);
+                    var segSrcOutTicks = Math.round((info.srcIn + offsetInClip + segDur) * TICKS);
+                    var tlTargetTicks = zeroTicks + Math.round(seg.newTimelineStart * TICKS);
 
-                    for (var si = 0; si < keptSegs.length; si++) {
-                        var seg = keptSegs[si];
-                        var offsetInClip = seg.start - info.tlStart;
-                        var segDur = seg.end - seg.start;
-                        var segSrcInTicks = Math.round((info.srcIn + offsetInClip) * TICKS);
-                        var segSrcOutTicks = Math.round((info.srcIn + offsetInClip + segDur) * TICKS);
-                        var tlTargetTicks = zeroTicks + Math.round(seg.newTimelineStart * TICKS);
-
-                        try {
-                            var inTimeObj = new Time();
-                            inTimeObj.ticks = segSrcInTicks.toFixed(0);
-                            var outTimeObj = new Time();
-                            outTimeObj.ticks = segSrcOutTicks.toFixed(0);
-                            var tlTimeObj = new Time();
-                            tlTimeObj.ticks = tlTargetTicks.toFixed(0);
-
-                            info.projectItem.setInPoint(inTimeObj, 4);
-                            info.projectItem.setOutPoint(outTimeObj, 4);
-                            snap.track.overwriteClip(info.projectItem, tlTimeObj);
-                            totalClipsProcessed++;
-                        } catch (owErr) {}
-                    }
-
-                    // Restore projectItem in/out points
                     try {
-                        info.projectItem.clearInPoint();
-                        info.projectItem.clearOutPoint();
-                    } catch (clrErr) {}
-                }
-            }
-        } else {
-            // Audio-only sequence handling
-            var audioSnapshots = [];
-            for (var a = 0; a < seq.audioTracks.numTracks; a++) {
-                var aTrack = seq.audioTracks[a];
-                if (aTrack.isLocked()) continue;
-                var aClips = [];
-                for (var ac = 0; ac < aTrack.clips.numItems; ac++) {
-                    var acItem = aTrack.clips[ac];
-                    if (!acItem.projectItem) continue;
-                    aClips.push({
-                        projectItem: acItem.projectItem,
-                        tlStart: (parseFloat(acItem.start.ticks) - zeroTicks) / TICKS,
-                        tlEnd: (parseFloat(acItem.end.ticks) - zeroTicks) / TICKS,
-                        srcIn: parseFloat(acItem.inPoint.ticks) / TICKS
-                    });
-                }
-                audioSnapshots.push({ track: aTrack, clips: aClips });
-                for (var ad = aTrack.clips.numItems - 1; ad >= 0; ad--) {
-                    try { aTrack.clips[ad].remove(0, 0); } catch (e) {}
-                }
-            }
+                        var inTimeObj = new Time();
+                        inTimeObj.ticks = segSrcInTicks.toFixed(0);
+                        var outTimeObj = new Time();
+                        outTimeObj.ticks = segSrcOutTicks.toFixed(0);
+                        var tlTimeObj = new Time();
+                        tlTimeObj.ticks = tlTargetTicks.toFixed(0);
 
-            for (var asIdx = 0; asIdx < audioSnapshots.length; asIdx++) {
-                var aSnap = audioSnapshots[asIdx];
-                for (var aci = 0; aci < aSnap.clips.length; aci++) {
-                    var aInfo = aSnap.clips[aci];
-                    var aKept = $._prismex._computeKeptSegments(aInfo.tlStart, aInfo.tlEnd, mergedCuts);
-                    for (var asi = 0; asi < aKept.length; asi++) {
-                        var aSeg = aKept[asi];
-                        var aOffset = aSeg.start - aInfo.tlStart;
-                        var aDur = aSeg.end - aSeg.start;
-                        var aInTicks = Math.round((aInfo.srcIn + aOffset) * TICKS);
-                        var aOutTicks = Math.round((aInfo.srcIn + aOffset + aDur) * TICKS);
-                        var aTargetTicks = zeroTicks + Math.round(aSeg.newTimelineStart * TICKS);
-                        try {
-                            var aInTimeObj = new Time();
-                            aInTimeObj.ticks = aInTicks.toFixed(0);
-                            var aOutTimeObj = new Time();
-                            aOutTimeObj.ticks = aOutTicks.toFixed(0);
-                            var aTlTimeObj = new Time();
-                            aTlTimeObj.ticks = aTargetTicks.toFixed(0);
+                        info.projectItem.setInPoint(inTimeObj, 4);
+                        info.projectItem.setOutPoint(outTimeObj, 4);
+                        snap.track.overwriteClip(info.projectItem, tlTimeObj);
+                        totalClipsProcessed++;
+                    } catch (owErr) {}
+                }
 
-                            aInfo.projectItem.setInPoint(aInTimeObj, 2);
-                            aInfo.projectItem.setOutPoint(aOutTimeObj, 2);
-                            aSnap.track.overwriteClip(aInfo.projectItem, aTlTimeObj);
-                            totalClipsProcessed++;
-                        } catch (aOwErr) {}
-                    }
+                try {
+                    info.projectItem.clearInPoint();
+                    info.projectItem.clearOutPoint();
+                } catch (clrErr) {}
+            }
+        }
+
+        // 2. Rebuild kept AUDIO segments onto audio tracks
+        for (var asIdx = 0; asIdx < audioTrackSnapshots.length; asIdx++) {
+            var aSnap = audioTrackSnapshots[asIdx];
+            for (var aci = 0; aci < aSnap.clips.length; aci++) {
+                var aInfo = aSnap.clips[aci];
+                var aKept = $._prismex._computeKeptSegments(aInfo.tlStart, aInfo.tlEnd, mergedCuts);
+
+                for (var asi = 0; asi < aKept.length; asi++) {
+                    var aSeg = aKept[asi];
+                    var aOffset = aSeg.start - aInfo.tlStart;
+                    var aDur = aSeg.end - aSeg.start;
+                    var aInTicks = Math.round((aInfo.srcIn + aOffset) * TICKS);
+                    var aOutTicks = Math.round((aInfo.srcIn + aOffset + aDur) * TICKS);
+                    var aTargetTicks = zeroTicks + Math.round(aSeg.newTimelineStart * TICKS);
+
                     try {
-                        aInfo.projectItem.clearInPoint();
-                        aInfo.projectItem.clearOutPoint();
-                    } catch (e) {}
+                        var aInTimeObj = new Time();
+                        aInTimeObj.ticks = aInTicks.toFixed(0);
+                        var aOutTimeObj = new Time();
+                        aOutTimeObj.ticks = aOutTicks.toFixed(0);
+                        var aTlTimeObj = new Time();
+                        aTlTimeObj.ticks = aTargetTicks.toFixed(0);
+
+                        aInfo.projectItem.setInPoint(aInTimeObj, 2);
+                        aInfo.projectItem.setOutPoint(aOutTimeObj, 2);
+                        aSnap.track.overwriteClip(aInfo.projectItem, aTlTimeObj);
+                        totalClipsProcessed++;
+                    } catch (aOwErr) {}
                 }
+
+                try {
+                    aInfo.projectItem.clearInPoint();
+                    aInfo.projectItem.clearOutPoint();
+                } catch (e) {}
             }
         }
 

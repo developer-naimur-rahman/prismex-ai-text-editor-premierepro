@@ -167,6 +167,22 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Ultra-fast (<2ms) check of the active sequence identity to detect timeline sequence switches immediately.
+   */
+  public async getActiveSequenceSignature(): Promise<string> {
+    if (this.isCEP) {
+      await this.ensureCEPScriptLoaded();
+      try {
+        const res = await this.evalScript("$._prismex.getActiveSequenceSignature()");
+        return typeof res === "string" ? res.trim() : "";
+      } catch {
+        return "";
+      }
+    }
+    return "";
+  }
+
+  /**
    * Retrieves active sequence metadata, audio tracks, and clip media paths.
    */
   public async getActiveSequenceManifest(): Promise<SequenceManifest | null> {
