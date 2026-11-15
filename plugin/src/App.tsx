@@ -14,13 +14,32 @@ import { HistoryView } from './views/HistoryView';
 import { SrtEditorView } from './views/SrtEditorView';
 import { ViralShortsView } from './views/ViralShortsView';
 import { ColorStudioView } from './views/ColorStudioView';
+import { Loader2, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const { activeTab, language, initApp } = usePrismexStore();
+  const { 
+    activeTab, 
+    language, 
+    initApp, 
+    isAppInitializing,
+    initStepMessage,
+    initStepProgress,
+    jobProgress,
+    jobMessage,
+    jobStatus,
+    globalBusyAction,
+    globalToast
+  } = usePrismexStore();
 
   useEffect(() => {
     initApp();
   }, [initApp]);
+
+  const isBusy = (jobProgress > 0 && jobProgress < 100) || 
+    jobStatus === 'TRANSCRIBING' || 
+    jobStatus === 'EXTRACTING' || 
+    jobStatus === 'ANALYZING' || 
+    Boolean(globalBusyAction);
 
   return (
     <div
@@ -32,10 +51,132 @@ export const App: React.FC = () => {
         height: '100vh',
         width: '100vw',
         backgroundColor: 'var(--bg-primary)',
-        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'var(--font-family-en)'
+        fontFamily: language === 'bn' ? 'var(--font-family-bn)' : 'var(--font-family-en)',
+        position: 'relative'
       }}
     >
+      {/* Layer 1: Studio Boot & Sync Screen (Startup Overlay) */}
+      {isAppInitializing && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 9999,
+          backgroundColor: '#09090b',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px'
+        }}>
+          {/* Animated Glowing Logo */}
+          <div style={{
+            width: '46px',
+            height: '46px',
+            borderRadius: '12px',
+            background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '22px',
+            fontWeight: 800,
+            color: '#fff',
+            boxShadow: '0 0 28px rgba(139, 92, 246, 0.45)',
+            marginBottom: '14px'
+          }}>
+            P
+          </div>
+          <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', letterSpacing: '0.4px', marginBottom: '4px' }}>
+            Prismex Studio Editor
+          </div>
+          <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '18px' }}>
+            {language === 'bn' ? 'অ্যাডোবি প্রিমিয়ার প্রো এআই এডিটর স্যুট' : 'Next-Gen AI Video Editing Suite for Adobe Premiere Pro'}
+          </div>
+
+          {/* Progress Bar */}
+          <div style={{ 
+            width: '210px', 
+            height: '4px', 
+            backgroundColor: 'rgba(255,255,255,0.1)', 
+            borderRadius: '4px', 
+            overflow: 'hidden', 
+            marginBottom: '10px' 
+          }}>
+            <div style={{
+              height: '100%',
+              width: `${initStepProgress}%`,
+              background: 'linear-gradient(90deg, #3b82f6, #8b5cf6)',
+              transition: 'width 0.3s ease'
+            }} />
+          </div>
+          <div style={{ fontSize: '11px', color: '#38bdf8', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Loader2 size={12} className="animate-spin" />
+            <span>{initStepMessage}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Global Floating Toast Alert */}
+      {globalToast && (
+        <div style={{
+          position: 'fixed',
+          top: '12px',
+          right: '16px',
+          zIndex: 9998,
+          backgroundColor: globalToast.type === 'error' ? '#dc2626' : (globalToast.type === 'info' ? '#2563eb' : '#059669'),
+          color: '#fff',
+          padding: '8px 14px',
+          borderRadius: '6px',
+          fontSize: '11.5px',
+          fontWeight: 600,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          border: '1px solid rgba(255,255,255,0.2)'
+        }}>
+          {globalToast.type === 'error' ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
+          <span>{globalToast.message}</span>
+        </div>
+      )}
+
       <NavigationHeader />
+
+      {/* Layer 2: Always-Visible Global Activity & Progress Strip */}
+      {isBusy && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          backgroundColor: '#0f172a',
+          borderBottom: '1px solid rgba(56, 189, 248, 0.35)',
+          padding: '5px 12px',
+          fontSize: '11px',
+          color: '#fff',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.25)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Loader2 size={13} className="animate-spin" color="#38bdf8" />
+            <span style={{ fontWeight: 600, color: '#e2e8f0', letterSpacing: '0.2px' }}>
+              {jobMessage || (globalBusyAction ? (language === 'bn' ? 'প্রসেসিং হচ্ছে...' : 'Processing operation...') : (language === 'bn' ? 'কাজ চলছে...' : 'Working...'))}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ width: '85px', height: '4px', backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: '2px', overflow: 'hidden' }}>
+              <div style={{
+                height: '100%',
+                width: `${Math.max(jobProgress, 8)}%`,
+                background: 'linear-gradient(90deg, #38bdf8, #818cf8)',
+                transition: 'width 0.35s ease'
+              }} />
+            </div>
+            <span style={{ fontSize: '10.5px', fontWeight: 700, color: '#38bdf8' }}>
+              {Math.round(jobProgress)}%
+            </span>
+          </div>
+        </div>
+      )}
+
       <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         {activeTab === 'transcript' && <TranscriptView />}
         {activeTab === 'magic-cut' && <MagicRoughCutView />}

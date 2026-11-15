@@ -110,6 +110,19 @@ interface PrismexState {
   lastReport: RoughCutSummaryReport | null;
   aiSummary: { summary: string; engine: string; wpm?: number; totalWords?: number; fillerCount?: number } | null;
 
+  // Initialization & Boot Overlay
+  isAppInitializing: boolean;
+  initStepMessage: string;
+  initStepProgress: number;
+
+  // Global Busy & Activity Tracker
+  globalBusyAction: string | null;
+  setGlobalBusyAction: (action: string | null) => void;
+
+  // Global Toasts
+  globalToast: { message: string; type: 'success' | 'info' | 'error' } | null;
+  showToast: (message: string, type?: 'success' | 'info' | 'error', durationMs?: number) => void;
+
   // Actions
   initApp: () => Promise<void>;
   transcribeSequence: (options?: any) => Promise<void>;
@@ -355,6 +368,23 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   },
   sequenceChangedNotice: null,
   setSequenceChangedNotice: (notice: string | null) => set({ sequenceChangedNotice: notice }),
+
+  isAppInitializing: true,
+  initStepMessage: 'Connecting to Prismex Engine...',
+  initStepProgress: 15,
+
+  globalBusyAction: null,
+  setGlobalBusyAction: (action) => set({ globalBusyAction: action }),
+
+  globalToast: null,
+  showToast: (message, type = 'success', durationMs = 3000) => {
+    set({ globalToast: { message, type } });
+    setTimeout(() => {
+      if (get().globalToast?.message === message) {
+        set({ globalToast: null });
+      }
+    }, durationMs);
+  },
 
   checkSequenceChange: async () => {
     // Never interrupt an active transcription
@@ -660,12 +690,26 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   aiSummary: null,
 
   initApp: async () => {
+    set({ 
+      isAppInitializing: true, 
+      initStepMessage: get().language === 'bn' ? 'প্রিজমেক্স এআই ইঞ্জিনের সাথে সংযোগ স্থাপন হচ্ছে...' : 'Connecting to Prismex Engine...', 
+      initStepProgress: 20 
+    });
+
     // 1. Check health
     const health = await client.checkHealth();
-    set({ daemonOnline: health !== null });
+    set({ 
+      daemonOnline: health !== null,
+      initStepMessage: get().language === 'bn' ? 'প্রিমিয়ার প্রো টাইমলাইন ও সিকোয়েন্স স্ক্যান করা হচ্ছে...' : 'Scanning Premiere Pro timeline & active sequence...',
+      initStepProgress: 45
+    });
 
     // 2. Initial sequence check & auto-restoration
     await get().checkSequenceChange();
+    set({ 
+      initStepMessage: get().language === 'bn' ? 'সংরক্ষিত ট্রান্সক্রিপ্ট ও ক্যাশ মেমোরি লোড করা হচ্ছে...' : 'Restoring sequence transcripts & project cache...',
+      initStepProgress: 75
+    });
 
     // 2.1. Start real-time background sequence & clip change watcher (every 2.5s)
     if (sequenceWatcherTimer) {
@@ -680,7 +724,17 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       client.getProfiles(),
       client.getProviders()
     ]);
-    set({ profiles, providers });
+    set({ 
+      profiles, 
+      providers,
+      initStepMessage: get().language === 'bn' ? 'প্রিজমেক্স স্টুডিও প্রস্তুত!' : 'Prismex Studio Editor Ready!',
+      initStepProgress: 100
+    });
+
+    // Smooth exit from splash screen
+    setTimeout(() => {
+      set({ isAppInitializing: false });
+    }, 450);
 
     // 4. Connect WebSocket
     client.connectWebSocket(async (event) => {
@@ -693,13 +747,15 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       } else if (event.method === 'job.completed') {
         const { jobId, executionMode, cuts, words, sentences, silences } = event.params;
         set({
+          globalBusyAction: null,
           jobProgress: 100,
-          jobMessage: 'Transcription & analysis complete!',
+          jobMessage: get().language === 'bn' ? 'ট্রান্সক্রিপশন ও অ্যানালাইসিস সম্পন্ন!' : 'Transcription & analysis complete!',
           jobStatus: 'COMPLETE',
           transcriptWords: words || [],
           transcriptSentences: sentences || [],
           detectedSilences: silences || []
         });
+        get().showToast(get().language === 'bn' ? '✓ কাজ সফলভাবে সম্পন্ন হয়েছে!' : '✓ Operation completed successfully!', 'success');
 
         const seq = get().sequenceManifest;
         if (seq) {
@@ -891,49 +947,71 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
     let silences = get().detectedSilences;
     if (!silences || silences.length === 0) {
-      // If not analyzed yet, run Magic Auto Cut or ask to transcribe
       await get().transcribeSequence();
       return;
     }
 
-    const fps = seq.fps || 24;
-    const cuts = silences.map((s: any, idx: number) => ({
-      cutId: `cut_sil_${idx}_${Date.now()}`,
-      startSeconds: s.start_seconds,
-      endSeconds: s.end_seconds,
-      durationSeconds: s.duration_seconds,
-      startTick: String(Math.round(s.start_seconds * 254016000000)),
-      endTick: String(Math.round(s.end_seconds * 254016000000)),
-      startFrame: Math.round(s.start_seconds * fps),
-      endFrame: Math.round(s.end_seconds * fps),
-      category: 'SILENCE' as const,
-      sourceSuggestionId: ''
-    }));
+    set({
+      globalBusyAction: 'silence_cut',
+      jobProgress: 20,
+      jobMessage: get().language === 'bn' ? 'টাইমলাইনে সাইলেন্স কাট ও সিকোয়েন্স রিপল হচ্ছে...' : 'Executing silence cuts & ripples on timeline...'
+    });
 
-    await hostBridge.cloneActiveSequence('_SilenceCut');
-    const execResult = await timelineEngine.executeCuts(cuts);
-    if (execResult.success) {
-      const remainingWords = rippleShiftWords(get().transcriptWords, cuts);
-      set({ detectedSilences: [], transcriptWords: remainingWords });
-      const currentSeq = get().sequenceManifest;
-      if (currentSeq) {
-        await persistProjectData(currentSeq, {
-          words: remainingWords,
-          sentences: get().transcriptSentences,
-          silences: [],
-          reviewItems: get().reviewItems
-        });
+    try {
+      const fps = seq.fps || 24;
+      const cuts = silences.map((s: any, idx: number) => ({
+        cutId: `cut_sil_${idx}_${Date.now()}`,
+        startSeconds: s.start_seconds,
+        endSeconds: s.end_seconds,
+        durationSeconds: s.duration_seconds,
+        startTick: String(Math.round(s.start_seconds * 254016000000)),
+        endTick: String(Math.round(s.end_seconds * 254016000000)),
+        startFrame: Math.round(s.start_seconds * fps),
+        endFrame: Math.round(s.end_seconds * fps),
+        category: 'SILENCE' as const,
+        sourceSuggestionId: ''
+      }));
+
+      await hostBridge.cloneActiveSequence('_SilenceCut');
+      const execResult = await timelineEngine.executeCuts(cuts);
+      if (execResult.success) {
+        const remainingWords = rippleShiftWords(get().transcriptWords, cuts);
+        set({ detectedSilences: [], transcriptWords: remainingWords, jobProgress: 100, jobMessage: 'Complete' });
+        const currentSeq = get().sequenceManifest;
+        if (currentSeq) {
+          await persistProjectData(currentSeq, {
+            words: remainingWords,
+            sentences: get().transcriptSentences,
+            silences: [],
+            reviewItems: get().reviewItems
+          });
+        }
+        await get().refreshSequence();
+        get().showToast(get().language === 'bn' ? '✓ সফলভাবে সাইলেন্স কাট সম্পন্ন হয়েছে!' : '✓ Silence cuts executed successfully!', 'success');
+      } else {
+        get().showToast(get().language === 'bn' ? 'সাইলেন্স কাট ব্যর্থ হয়েছে' : 'Failed to execute cuts', 'error');
       }
-      await get().refreshSequence();
+    } finally {
+      set({ globalBusyAction: null });
     }
   },
 
   runTranscriptAI: async (prompt?: string) => {
     const words = get().transcriptWords;
     if (!words || words.length === 0) return;
-    const res = await client.aiAnalyzeTranscript(words, prompt);
-    if (res) {
-      set({ aiSummary: res });
+    set({
+      globalBusyAction: 'ai_analyze',
+      jobProgress: 35,
+      jobMessage: get().language === 'bn' ? 'এআই ট্রান্সক্রিপ্ট অ্যানালাইসিস করছে...' : 'Analyzing transcript with AI...'
+    });
+    try {
+      const res = await client.aiAnalyzeTranscript(words, prompt);
+      if (res) {
+        set({ aiSummary: res, jobProgress: 100, jobMessage: 'Complete' });
+        get().showToast(get().language === 'bn' ? '✓ এআই অ্যানালাইসিস সম্পন্ন হয়েছে!' : '✓ AI analysis completed!', 'success');
+      }
+    } finally {
+      set({ globalBusyAction: null });
     }
   },
 
@@ -1108,8 +1186,9 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     set({ sequenceManifest: seq });
 
     set({
+      globalBusyAction: 'magic_rough_cut',
       jobProgress: 5,
-      jobMessage: 'Starting Magic Rough Cut...',
+      jobMessage: get().language === 'bn' ? 'ম্যাজিক রাফ কাট প্রসেস শুরু হচ্ছে...' : 'Starting Magic Rough Cut...',
       jobStatus: 'INITIALIZING'
     });
 
