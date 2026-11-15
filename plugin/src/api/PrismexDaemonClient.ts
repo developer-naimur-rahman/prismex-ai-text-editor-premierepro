@@ -745,6 +745,64 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async recommendBackgroundMusic(params: {
+    words: any[];
+    sentences: any[];
+    genre: string;
+    durationSeconds?: number;
+  }): Promise<{
+    genre: string;
+    moodSummary: string;
+    recommendedBpm: string;
+    mixingGuide: { targetVolume: string; duckingDepth: string; eqTip: string };
+    musicTracks: Array<{
+      id: string;
+      title: string;
+      titleBn: string;
+      mood: string;
+      moodBn: string;
+      tempo: string;
+      instruments: string;
+      searchQuery: string;
+      pixabayUrl: string;
+      fmaUrl: string;
+      chosicUrl: string;
+      bestFor: string;
+    }>;
+    engine?: string;
+  } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/audio/bgm-recommendations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async openUrl(url: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/system/open-url`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      return res.ok;
+    } catch {
+      if (typeof window !== 'undefined') {
+        window.open(url, '_blank');
+        return true;
+      }
+      return false;
+    }
+  }
+
   public connectWebSocket(onEvent: (event: any) => void): () => void {
     this.eventListeners.push(onEvent);
 

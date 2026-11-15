@@ -21,7 +21,11 @@ import {
   Clock,
   Compass,
   Zap,
-  Music
+  Music,
+  Disc,
+  ExternalLink,
+  Headphones,
+  BookmarkPlus
 } from 'lucide-react';
 
 interface AudioProfile {
@@ -126,11 +130,14 @@ export const AudioStudioView: React.FC = () => {
     detectedSfxCues,
     setDetectedSfxCues,
     soundDesignTips,
-    setSoundDesignTips
+    setSoundDesignTips,
+    recommendedBgmData,
+    setRecommendedBgmData
   } = usePrismexStore();
 
   const [isProcessingAudio, setIsProcessingAudio] = useState(false);
   const [isAnalyzingSfx, setIsAnalyzingSfx] = useState(false);
+  const [isAnalyzingBgm, setIsAnalyzingBgm] = useState(false);
   const [sfxProgressMsg, setSfxProgressMsg] = useState('');
   const [audioMasterSuccess, setAudioMasterSuccess] = useState<string | null>(null);
 
@@ -262,6 +269,70 @@ export const AudioStudioView: React.FC = () => {
   const handleJumpToTime = async (seconds: number) => {
     try {
       await hostBridge.setPlayheadPosition(seconds);
+    } catch {}
+  };
+
+  const handleAnalyzeBgm = async () => {
+    if (!transcriptSentences || transcriptSentences.length === 0) {
+      showToast(isBn ? 'আগে ট্রান্সক্রিপশন সম্পন্ন করুন' : 'Please transcribe sequence first', 'error');
+      return;
+    }
+
+    setIsAnalyzingBgm(true);
+    try {
+      showToast(isBn ? 'এআই কন্টেন্ট বিশ্লেষণ করে সেরা ব্যাকগ্রাউন্ড মিউজিক ট্র্যাক খুঁজছে...' : 'AI analyzing content for optimal BGM tracks...', 'info');
+
+      const res = await client.recommendBackgroundMusic({
+        words: transcriptWords,
+        sentences: transcriptSentences,
+        genre: activeAudioProfileId,
+        durationSeconds: sequenceManifest?.durationSeconds || 60.0
+      });
+
+      if (res && res.musicTracks) {
+        setRecommendedBgmData(res);
+        showToast(
+          isBn 
+            ? `${res.musicTracks.length} টি কপিরাইট-মুক্ত ব্যাকগ্রাউন্ড মিউজিক ট্র্যাক সাজেস্ট করা হয়েছে!` 
+            : `Curated ${res.musicTracks.length} royalty-free BGM track recommendations!`, 
+          'success'
+        );
+      } else {
+        throw new Error('No BGM suggestions returned');
+      }
+    } catch (e: any) {
+      showToast(isBn ? 'মিউজিক অ্যানালাইসিসে সমস্যা হয়েছে' : 'Music curation analysis failed', 'error');
+    } finally {
+      setIsAnalyzingBgm(false);
+    }
+  };
+
+  const handleOpenUrl = async (url: string) => {
+    try {
+      await client.openUrl(url);
+    } catch {}
+  };
+
+  const handleAddBgmTimelineMarker = async (track: any) => {
+    try {
+      const targetVol = recommendedBgmData?.mixingGuide?.targetVolume || '-18dB';
+      const marker = [{
+        name: `[BGM Cue] ${track.title}`,
+        comment: `Tempo: ${track.tempo} | Target Vol: ${targetVol} | Instruments: ${track.instruments}`,
+        startSeconds: 0,
+        durationSeconds: 5.0,
+        color: 'PURPLE'
+      }];
+
+      const res = await hostBridge.addTimelineMarkers(marker);
+      if (res.success) {
+        showToast(
+          isBn 
+            ? `টাইমলাইনের শুরুতে [BGM] মার্কার ড্রপ করা হয়েছে!` 
+            : `Added [BGM] timeline marker at sequence start!`, 
+          'success'
+        );
+      }
     } catch {}
   };
 
@@ -627,7 +698,252 @@ export const AudioStudioView: React.FC = () => {
         )}
       </div>
 
-      {/* SECTION 3: AI Sound Design & SFX Cue Suggester */}
+      {/* SECTION 3: Smart Background Music & Free Curation */}
+      <div style={{
+        backgroundColor: '#18181b',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        borderRadius: '12px',
+        padding: '16px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '12px' }}>
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Disc size={14} color="#a855f7" />
+              <span>{isBn ? '৩. স্মার্ট ব্যাকগ্রাউন্ড মিউজিক কিউরেশন (Free BGM Curator)' : '3. Smart Background Music & Royalty-Free Curator'}</span>
+            </div>
+            <div style={{ fontSize: '10.5px', color: '#a1a1aa' }}>
+              {isBn 
+                ? 'আপনার কন্টেন্টের মুড, টোন ও টেম্পো অনুসারে পিক্সাবে (Pixabay) সহ ফ্রি সাইট থেকে ১০০% কপিরাইট-মুক্ত মিউজিক সাজেশন।' 
+                : 'AI-curated royalty-free background tracks from Pixabay, Free Music Archive & Chosic based on content analysis.'}
+            </div>
+          </div>
+
+          <button
+            onClick={handleAnalyzeBgm}
+            disabled={isAnalyzingBgm}
+            style={{
+              padding: '7px 14px',
+              borderRadius: '6px',
+              background: 'linear-gradient(135deg, #a855f7, #6366f1)',
+              color: '#fff',
+              fontSize: '11px',
+              fontWeight: 600,
+              border: 'none',
+              cursor: isAnalyzingBgm ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 2px 10px rgba(168, 85, 247, 0.35)',
+              opacity: isAnalyzingBgm ? 0.7 : 1
+            }}
+          >
+            {isAnalyzingBgm ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            <span>{isBn ? 'মিউজিক সাজেশন বের করুন' : 'Curate BGM Suggestions'}</span>
+          </button>
+        </div>
+
+        {isAnalyzingBgm && (
+          <div style={{
+            padding: '16px',
+            textAlign: 'center',
+            color: '#a1a1aa',
+            fontSize: '11.5px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            <Loader2 size={20} className="animate-spin" color="#a855f7" />
+            <span>{isBn ? 'এআই কন্টেন্ট বিশ্লেষণ করে সেরা ব্যাকগ্রাউন্ড মিউজিক ট্র্যাক খুঁজছে...' : 'AI analyzing content for optimal BGM tracks...'}</span>
+          </div>
+        )}
+
+        {/* Music Mixing Guide */}
+        {recommendedBgmData && (
+          <div style={{
+            marginBottom: '14px',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            backgroundColor: 'rgba(168, 85, 247, 0.08)',
+            border: '1px solid rgba(168, 85, 247, 0.2)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ fontSize: '11px', fontWeight: 700, color: '#c084fc', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Headphones size={13} />
+                <span>{isBn ? 'মিউজিক ডিরেক্টর অডিও গাইডলাইন (Audio Mixing Guide):' : 'BGM Mixing & Pacing Guide:'}</span>
+              </div>
+              <span style={{ fontSize: '10px', color: '#e4e4e7', fontWeight: 600 }}>
+                {isBn ? `প্রস্তাবিত টেম্পো: ${recommendedBgmData.recommendedBpm}` : `BPM: ${recommendedBgmData.recommendedBpm}`}
+              </span>
+            </div>
+
+            <div style={{ fontSize: '10.5px', color: '#cbd5e1', display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+              <span>🔊 {isBn ? 'ভয়েসের নিচে ভলিউম' : 'Target Volume'}: <strong style={{ color: '#38bdf8' }}>{recommendedBgmData.mixingGuide?.targetVolume || '-18dB'}</strong></span>
+              <span>📉 {isBn ? 'ডাকিং ডেপথ' : 'Ducking'}: <strong style={{ color: '#a78bfa' }}>{recommendedBgmData.mixingGuide?.duckingDepth || '-12dB'}</strong></span>
+              <span>🎚️ {isBn ? 'EQ গাইড' : 'EQ Tip'}: <span style={{ color: '#94a3b8' }}>{recommendedBgmData.mixingGuide?.eqTip}</span></span>
+            </div>
+          </div>
+        )}
+
+        {/* BGM Track Cards */}
+        {recommendedBgmData && recommendedBgmData.musicTracks && recommendedBgmData.musicTracks.length > 0 ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '10px' }}>
+            {recommendedBgmData.musicTracks.map((tr: any, idx: number) => (
+              <div
+                key={tr.id || idx}
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  backgroundColor: '#121215',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '8px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
+                  <div>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#f4f4f5' }}>
+                      {isBn ? tr.titleBn : tr.title}
+                    </div>
+                    <div style={{ fontSize: '10px', color: '#94a3b8' }}>
+                      {tr.title}
+                    </div>
+                  </div>
+
+                  <span style={{
+                    fontSize: '9.5px',
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    backgroundColor: 'rgba(168, 85, 247, 0.15)',
+                    color: '#c084fc',
+                    border: '1px solid rgba(168, 85, 247, 0.3)'
+                  }}>
+                    {isBn ? tr.moodBn : tr.mood}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: '10.5px', color: '#71717a', lineHeight: '1.4' }}>
+                  <span style={{ color: '#a1a1aa' }}>🎹 {tr.instruments}</span> • <span style={{ color: '#818cf8' }}>{tr.tempo}</span>
+                </div>
+
+                <div style={{ fontSize: '10px', color: '#a1a1aa', fontStyle: 'italic' }}>
+                  💡 {tr.bestFor}
+                </div>
+
+                {/* Direct Action Links */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                  <button
+                    onClick={() => handleOpenUrl(tr.pixabayUrl)}
+                    title={isBn ? 'পিক্সাবে মিউজিকে সার্চ করুন' : 'Search on Pixabay Music (Free)'}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: '#059669',
+                      color: '#fff',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>Pixabay Music (Free)</span>
+                    <ExternalLink size={10} />
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenUrl(tr.fmaUrl)}
+                    title="Free Music Archive"
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: '#27272a',
+                      color: '#cbd5e1',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>FMA</span>
+                    <ExternalLink size={10} />
+                  </button>
+
+                  <button
+                    onClick={() => handleOpenUrl(tr.chosicUrl)}
+                    title="Chosic Royalty Free"
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: '#27272a',
+                      color: '#cbd5e1',
+                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <span>Chosic</span>
+                    <ExternalLink size={10} />
+                  </button>
+
+                  <button
+                    onClick={() => handleAddBgmTimelineMarker(tr)}
+                    title={isBn ? 'টাইমলাইনে BGM মার্কার যোগ করুন' : 'Drop BGM cue marker onto timeline'}
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      backgroundColor: '#1e1b4b',
+                      color: '#c084fc',
+                      border: '1px solid rgba(168, 85, 247, 0.4)',
+                      fontSize: '10px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      marginLeft: 'auto'
+                    }}
+                  >
+                    <BookmarkPlus size={10} />
+                    <span>{isBn ? 'মার্কার দিন' : 'Mark 00:00'}</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          !isAnalyzingBgm && (
+            <div style={{
+              padding: '16px',
+              textAlign: 'center',
+              color: '#71717a',
+              fontSize: '11px',
+              border: '1px dashed rgba(255, 255, 255, 0.08)',
+              borderRadius: '8px'
+            }}>
+              {isBn 
+                ? 'উপরের "মিউজিক সাজেশন বের করুন" বাটনে ক্লিক করলে আপনার কন্টেন্টের বিষয়বস্তু অনুযায়ী পিক্সাবে সহ বিভিন্ন সাইটের পারফেক্ট ব্যাকগ্রাউন্ড মিউজিক খুঁজে দেবে।' 
+                : 'Click "Curate BGM Suggestions" above to discover royalty-free tracks matched to your content mood and tempo.'}
+            </div>
+          )
+        )}
+      </div>
+
+      {/* SECTION 4: AI Sound Design & SFX Cue Suggester */}
       <div style={{
         backgroundColor: '#18181b',
         border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -638,7 +954,7 @@ export const AudioStudioView: React.FC = () => {
           <div>
             <div style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', display: 'flex', alignItems: 'center', gap: '6px' }}>
               <Music size={14} color="#ec4899" />
-              <span>{isBn ? '৩. এআই সাউন্ড ডিজাইন ও সিনেমাটিক SFX কিউ (AI Sound Designer)' : '3. AI Sound Design & Cinematic SFX Suggester'}</span>
+              <span>{isBn ? '৪. এআই সাউন্ড ডিজাইন ও সিনেমাটিক SFX কিউ (AI Sound Designer)' : '4. AI Sound Design & Cinematic SFX Suggester'}</span>
             </div>
             <div style={{ fontSize: '10.5px', color: '#a1a1aa' }}>
               {isBn 

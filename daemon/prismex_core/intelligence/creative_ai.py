@@ -2142,3 +2142,209 @@ Return strictly a JSON object:
             "sfxCues": fallback_cues,
             "engine": "Prismex Smart Heuristic Audio Engine"
         }
+
+    @classmethod
+    def recommend_background_music(
+        cls,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        genre: str = "podcast",
+        duration_seconds: float = 60.0
+    ) -> Dict[str, Any]:
+        """
+        Analyzes video theme, emotional curve, and pacing to curate royalty-free
+        background music styles, tempo (BPM), and direct 1-click free download links
+        (Pixabay Music, Free Music Archive, Chosic).
+        """
+        import urllib.parse
+
+        # Sample snippet from sentences
+        text_summary = " ".join([s.get("text", "") for s in sentences[:20]])[:600]
+
+        genre_configs = {
+            "podcast": {
+                "name": "Talking Head / Podcast",
+                "defaultMood": "Lo-Fi Warm Acoustic & Chill Beats",
+                "defaultBpm": "80-95 BPM",
+                "ducking": "-14dB to -18dB",
+                "queries": ["lofi chill beats", "warm acoustic guitar", "subtle ambient background"]
+            },
+            "real-estate": {
+                "name": "Real Estate & Architecture",
+                "defaultMood": "Elegant Luxury Piano & Ambient Acoustic",
+                "defaultBpm": "85-100 BPM",
+                "ducking": "-16dB to -20dB",
+                "queries": ["real estate ambient", "luxury acoustic piano", "modern architecture chill"]
+            },
+            "sports-fitness": {
+                "name": "High-Energy Sports & Fitness",
+                "defaultMood": "Energetic Bass, Workout Trap & Electro Hype",
+                "defaultBpm": "120-135 BPM",
+                "ducking": "-10dB to -14dB",
+                "queries": ["workout trap beat", "energetic sports rock", "electronic fitness motivation"]
+            },
+            "wedding-emotional": {
+                "name": "Cinematic Wedding & Emotional",
+                "defaultMood": "Romantic Piano, Soft Strings & Cinematic Swell",
+                "defaultBpm": "65-80 BPM",
+                "ducking": "-15dB to -20dB",
+                "queries": ["cinematic romantic piano", "wedding emotional strings", "gentle love story acoustic"]
+            },
+            "drama-natok": {
+                "name": "Bangla Drama / Natok / Fiction",
+                "defaultMood": "Atmospheric Drone, Emotional Bansuri/Piano, Suspense",
+                "defaultBpm": "70-85 BPM",
+                "ducking": "-16dB to -22dB",
+                "queries": ["dramatic cinematic tension", "emotional sad piano", "acoustic storytelling ambient"]
+            },
+            "corporate-tech": {
+                "name": "Corporate & Tech Explainer",
+                "defaultMood": "Modern Uplifting Tech Corporate & Minimal Glitch",
+                "defaultBpm": "105-120 BPM",
+                "ducking": "-16dB to -20dB",
+                "queries": ["modern tech corporate", "uplifting minimal business", "inspiring innovation ambient"]
+            }
+        }
+
+        conf = genre_configs.get(genre, genre_configs["podcast"])
+
+        prompt = f"""You are a master Music Supervisor for Hollywood films and top YouTube creators.
+Analyze this video content and recommend 3 to 4 distinct Royalty-Free Background Music (BGM) tracks.
+Genre: {genre} ({conf['name']})
+Sequence Duration: {round(duration_seconds, 1)} seconds
+Transcript Context:
+"{text_summary}"
+
+For each track suggestion, provide:
+- A descriptive title
+- Title in Bengali
+- Specific Mood & Vibe (e.g., Uplifting, Chill, Suspense, Inspiring)
+- Mood in Bengali
+- Recommended BPM / Tempo
+- Key instruments used
+- Best search keyword string (in English) for free music libraries like Pixabay Music
+- Mixing tip on how this track complements dialogue
+
+Return strictly a JSON object:
+{{
+  "genre": "{genre}",
+  "moodSummary": "1-sentence summary of ideal background music atmosphere",
+  "recommendedBpm": "{conf['defaultBpm']}",
+  "mixingGuide": {{
+    "targetVolume": "{conf['ducking']}",
+    "duckingDepth": "Lower by -12dB when speaker talks",
+    "eqTip": "Cut 800Hz-2.5kHz on music EQ to carve space for the voice"
+  }},
+  "musicTracks": [
+    {{
+      "title": "Track Title (e.g., Soft Acoustic Morning)",
+      "titleBn": "বাংলা টাইটেল (যেমন: শান্ত অ্যাকোস্টিক মর্নিং)",
+      "mood": "Relaxed & Warm",
+      "moodBn": "উষ্ণ ও প্রশান্তিদায়ক",
+      "tempo": "88 BPM",
+      "instruments": "Acoustic Guitar, Soft Pads, Light Finger Snaps",
+      "searchQuery": "warm acoustic morning chill",
+      "bestFor": "Clean dialogue bed without distracting the audience"
+    }}
+  ]
+}}
+"""
+        ai_res = cls._call_gemini_json(prompt)
+        tracks = []
+
+        if isinstance(ai_res, dict) and "musicTracks" in ai_res and len(ai_res["musicTracks"]) > 0:
+            for idx, tr in enumerate(ai_res["musicTracks"], start=1):
+                sq = tr.get("searchQuery", conf["queries"][0])
+                quoted = urllib.parse.quote_plus(sq)
+                tracks.append({
+                    "id": f"bgm_{idx}",
+                    "title": tr.get("title", f"Curated BGM #{idx}"),
+                    "titleBn": tr.get("titleBn", f"নির্বাচিত ব্যাকগ্রাউন্ড মিউজিক #{idx}"),
+                    "mood": tr.get("mood", "Inspiring Background"),
+                    "moodBn": tr.get("moodBn", "অনুপ্রেরণাদায়ক ব্যাকগ্রাউন্ড"),
+                    "tempo": tr.get("tempo", conf["defaultBpm"]),
+                    "instruments": tr.get("instruments", "Piano, Acoustic Guitar, Light Drums"),
+                    "searchQuery": sq,
+                    "pixabayUrl": f"https://pixabay.com/music/search/{quoted}/",
+                    "fmaUrl": f"https://freemusicarchive.org/search?adv=1&quicksearch={quoted}",
+                    "chosicUrl": f"https://www.chosic.com/free-music/all/?search={quoted}",
+                    "bestFor": tr.get("bestFor", "Dialogue backing track")
+                })
+
+            return {
+                "genre": genre,
+                "moodSummary": ai_res.get("moodSummary", f"Tailored background music for {conf['name']}"),
+                "recommendedBpm": ai_res.get("recommendedBpm", conf["defaultBpm"]),
+                "mixingGuide": ai_res.get("mixingGuide", {
+                    "targetVolume": conf["ducking"],
+                    "duckingDepth": "Duck by -12dB during speech",
+                    "eqTip": "Cut 800Hz-2.5kHz on music track to keep vocal frequencies distinct"
+                }),
+                "musicTracks": tracks,
+                "engine": "Gemini AI Music Supervisor"
+            }
+
+        # Offline Fallback
+        default_templates = [
+            {
+                "title": f"{conf['name']} Primary Bed",
+                "titleBn": f"{conf['name']} মূল অ্যাম্বিয়েন্ট বেড",
+                "mood": conf["defaultMood"],
+                "moodBn": "আদর্শ ব্যালেন্সড আবহ",
+                "tempo": conf["defaultBpm"],
+                "instruments": "Acoustic Guitar, Warm Piano, Soft Bass",
+                "searchQuery": conf["queries"][0],
+                "bestFor": "Continuous subtle bed that holds the viewer without overpowering speech"
+            },
+            {
+                "title": "Minimal Lo-Fi Chill Flow",
+                "titleBn": "মিনিমাল লো-ফাই চিল ফ্লো",
+                "mood": "Relaxed, Modern & Engaging",
+                "moodBn": "রিল্যাক্সড ও আধুনিক",
+                "tempo": "85 BPM",
+                "instruments": "Muted Electric Piano, Vinyl Textures, Soft Beat",
+                "searchQuery": conf["queries"][1] if len(conf["queries"]) > 1 else "lofi chill background",
+                "bestFor": "Modern tech, lifestyle or talking head presentations"
+            },
+            {
+                "title": "Inspirational Cinematic Lift",
+                "titleBn": "অনুপ্রেরণাদায়ক সিনেমাটিক লিফট",
+                "mood": "Uplifting, Hopeful & Forward-Moving",
+                "moodBn": "অনুপ্রেরণাদায়ক ও গতিশীল",
+                "tempo": "95 BPM",
+                "instruments": "Warm Strings, Gentle Synth Arps, Soft Kick",
+                "searchQuery": conf["queries"][2] if len(conf["queries"]) > 2 else "inspirational ambient acoustic",
+                "bestFor": "Key realizations, takeaways, story climaxes and outro calls to action"
+            }
+        ]
+
+        for idx, t_data in enumerate(default_templates, start=1):
+            sq = t_data["searchQuery"]
+            quoted = urllib.parse.quote_plus(sq)
+            tracks.append({
+                "id": f"bgm_{idx}",
+                "title": t_data["title"],
+                "titleBn": t_data["titleBn"],
+                "mood": t_data["mood"],
+                "moodBn": t_data["moodBn"],
+                "tempo": t_data["tempo"],
+                "instruments": t_data["instruments"],
+                "searchQuery": sq,
+                "pixabayUrl": f"https://pixabay.com/music/search/{quoted}/",
+                "fmaUrl": f"https://freemusicarchive.org/search?adv=1&quicksearch={quoted}",
+                "chosicUrl": f"https://www.chosic.com/free-music/all/?search={quoted}",
+                "bestFor": t_data["bestFor"]
+            })
+
+        return {
+            "genre": genre,
+            "moodSummary": f"Tailored background music curation for {conf['name']}",
+            "recommendedBpm": conf["defaultBpm"],
+            "mixingGuide": {
+                "targetVolume": conf["ducking"],
+                "duckingDepth": "Duck by -12dB during speech",
+                "eqTip": "Cut 800Hz-2.5kHz on music EQ to maintain pristine speech articulation"
+            },
+            "musicTracks": tracks,
+            "engine": "Prismex Contextual Music Engine"
+        }

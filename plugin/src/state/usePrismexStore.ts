@@ -144,6 +144,8 @@ interface PrismexState {
   setDetectedSfxCues: (cues: any[]) => void;
   soundDesignTips: string[];
   setSoundDesignTips: (tips: string[]) => void;
+  recommendedBgmData: any | null;
+  setRecommendedBgmData: (data: any | null) => void;
 
   // Global Busy & Activity Tracker
   globalBusyAction: string | null;
@@ -232,6 +234,7 @@ export interface PrismexProjectSavePayload {
   audioSettings?: any;
   detectedSfxCues?: any[];
   soundDesignTips?: string[];
+  recommendedBgmData?: any;
 }
 
 export async function persistProjectData(
@@ -285,6 +288,7 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
           audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
           detectedSfxCues: parsed.detectedSfxCues || [],
           soundDesignTips: parsed.soundDesignTips || [],
+          recommendedBgmData: parsed.recommendedBgmData || null,
           jobStatus: 'COMPLETE',
           jobProgress: 100,
           jobMessage: 'Loaded from project cache'
@@ -313,6 +317,7 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
         audioSettings: daemonData.audioSettings || usePrismexStore.getState().audioSettings,
         detectedSfxCues: daemonData.detectedSfxCues || [],
         soundDesignTips: daemonData.soundDesignTips || [],
+        recommendedBgmData: daemonData.recommendedBgmData || null,
         jobStatus: 'COMPLETE',
         jobProgress: 100,
         jobMessage: 'Loaded from daemon project cache'
@@ -343,6 +348,7 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
             audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
             detectedSfxCues: parsed.detectedSfxCues || [],
             soundDesignTips: parsed.soundDesignTips || [],
+            recommendedBgmData: parsed.recommendedBgmData || null,
             jobStatus: 'COMPLETE',
             jobProgress: 100
           });
@@ -435,6 +441,11 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   setDetectedSfxCues: (cues) => set({ detectedSfxCues: cues }),
   soundDesignTips: [],
   setSoundDesignTips: (tips) => set({ soundDesignTips: tips }),
+  recommendedBgmData: null,
+  setRecommendedBgmData: (data) => {
+    set({ recommendedBgmData: data });
+    get().saveCurrentProjectState();
+  },
 
   globalBusyAction: null,
   setGlobalBusyAction: (action) => set({ globalBusyAction: action }),
@@ -752,7 +763,8 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       srtCues: s.srtCues,
       audioSettings: s.audioSettings,
       detectedSfxCues: s.detectedSfxCues,
-      soundDesignTips: s.soundDesignTips
+      soundDesignTips: s.soundDesignTips,
+      recommendedBgmData: s.recommendedBgmData
     });
   },
 

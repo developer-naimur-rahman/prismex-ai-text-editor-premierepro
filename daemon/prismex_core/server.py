@@ -176,6 +176,12 @@ class SoundDesignRequest(BaseModel):
     sentences: List[Dict[str, Any]] = []
     genre: str = "podcast"
 
+class BgmRecommendRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    genre: str = "podcast"
+    durationSeconds: Optional[float] = 60.0
+
 # ----------------- REST Endpoints -----------------
 
 @app.get("/health")
@@ -1053,6 +1059,17 @@ async def sound_design_endpoint(req: SoundDesignRequest):
         req.words,
         req.sentences,
         req.genre
+    )
+    return res
+
+@app.post("/api/v1/audio/bgm-recommendations")
+async def bgm_recommendations_endpoint(req: BgmRecommendRequest):
+    res = await asyncio.to_thread(
+        CreativeAI.recommend_background_music,
+        req.words,
+        req.sentences,
+        req.genre,
+        req.durationSeconds or 60.0
     )
     return res
 
