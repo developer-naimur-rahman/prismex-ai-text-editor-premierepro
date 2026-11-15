@@ -298,7 +298,7 @@ class SmartSRTSegmenter:
     @staticmethod
     def _call_gemini_json(api_key: str, prompt_text: str) -> Optional[List[Dict[str, Any]]]:
         import requests
-        candidate_models = ["gemini-flash-lite-latest", "gemini-3.5-flash-lite", "gemini-3.5-flash"]
+        candidate_models = ["gemini-flash-lite-latest", "gemini-flash-latest", "gemini-2.5-flash", "gemini-1.5-flash"]
         for m in candidate_models:
             try:
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"

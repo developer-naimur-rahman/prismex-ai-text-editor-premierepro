@@ -70,9 +70,9 @@ class CreativeAI:
             return None
         candidate_models = [
             "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-3.5-flash",
-            "gemini-3.7-flash"
+            "gemini-flash-latest",
+            "gemini-2.5-flash",
+            "gemini-1.5-flash"
         ]
         for m in candidate_models:
             try:
@@ -81,7 +81,7 @@ class CreativeAI:
                     url,
                     json={
                         "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
+                        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
                     },
                     timeout=20,
                 )
@@ -95,49 +95,103 @@ class CreativeAI:
         return None
 
     @classmethod
-    def spell_check(cls, words: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Detects typos or speech-to-text misspellings and returns corrected words with preserved timestamps."""
+    def spell_check(cls, words: List[Dict[str, Any]], language: str = "auto") -> Dict[str, Any]:
+        """Detects typos or speech-to-text misspellings across the ENTIRE transcript using Gemini in chunks,
+        preserving strict 1-to-1 word timecode alignment and marking original_word and is_polished."""
         if not words:
             return {"words": [], "corrections": 0, "engine": "none"}
 
-        full_text = " ".join(str(w.get("word", "")).strip() for w in words)
-        prompt = (
-            "You are an expert video transcript proofreader. Review this transcript for typos, phonetic transcription errors, "
-            "or grammatical glitches. Return a JSON array of corrected words of the EXACT same length as the input words array. "
-            f"Input words array length: {len(words)}.\n"
-            f"Words: {json.dumps([w.get('word', '') for w in words[:200]])}\n"
-            "Return JSON: [\"word1\", \"word2\", ...]"
-        )
-
-        res = cls._call_gemini_json(prompt)
         corrected_words = [dict(w) for w in words]
-        corrections = 0
+        total_corrections = 0
+        gemini_success = False
 
-        if isinstance(res, list) and len(res) <= len(words):
-            for i, fixed in enumerate(res):
-                if isinstance(fixed, str) and fixed.strip() and fixed.strip() != corrected_words[i].get("word"):
-                    corrected_words[i]["word"] = fixed.strip()
-                    corrections += 1
-            return {"words": corrected_words, "corrections": corrections, "engine": "Google Gemini 2.0 Flash"}
+        def _extract_words(data: Any) -> Optional[List[str]]:
+            if isinstance(data, list):
+                return [str(x) for x in data]
+            if isinstance(data, dict):
+                for k in ["words", "response", "result", "corrected_words", "corrected", "data"]:
+                    if k in data and isinstance(data[k], list):
+                        return [str(x) for x in data[k]]
+                for v in data.values():
+                    if isinstance(v, list) and len(v) > 0 and isinstance(v[0], str):
+                        return [str(x) for x in v]
+            return None
 
-        # Offline Local Spell Check (common capitalization & contraction fixes)
-        for w in corrected_words:
-            orig = str(w.get("word", ""))
-            # Capitalize lonely 'i' or contractions
-            if orig == "i":
-                w["word"] = "I"
-                corrections += 1
-            elif orig == "im":
-                w["word"] = "I'm"
-                corrections += 1
-            elif orig == "dont":
-                w["word"] = "don't"
-                corrections += 1
-            elif orig == "cant":
-                w["word"] = "can't"
-                corrections += 1
+        # Process words in sentence-friendly chunks of 20-25 words to prevent LLM hallucinations or length mismatches
+        CHUNK_SIZE = 25
+        for i in range(0, len(words), CHUNK_SIZE):
+            chunk = corrected_words[i:i + CHUNK_SIZE]
+            chunk_texts = [str(w.get("word", "")).strip() for w in chunk]
 
-        return {"words": corrected_words, "corrections": corrections, "engine": "Prismex Local Dictionary (Offline)"}
+            prompt = (
+                "You are an expert video transcript proofreader and editor for Bengali and English audio.\n"
+                "Review the following words transcribed by Whisper STT. "
+                "Fix spelling mistakes, typos, phonetic mishearings, or phonetic transcription errors in Bengali or English "
+                "matching the exact spoken pronunciation and context.\n"
+                "Do NOT add new words. Do NOT delete words. Do NOT rephrase.\n"
+                f"CRITICAL REQUIREMENT: Return a JSON object with key \"words\" containing an array of corrected words of the EXACT SAME LENGTH ({len(chunk)} words).\n"
+                f"Input words: {json.dumps(chunk_texts, ensure_ascii=False)}\n"
+                "Return strictly JSON object: {\"words\": [\"word1\", \"word2\", ...]}"
+            )
+
+            res = cls._call_gemini_json(prompt)
+            word_list = _extract_words(res)
+
+            if word_list is not None and len(word_list) == len(chunk):
+                gemini_success = True
+                for c_idx, fixed in enumerate(word_list):
+                    if isinstance(fixed, str) and fixed.strip():
+                        clean_fixed = fixed.strip()
+                        orig_w = str(chunk[c_idx].get("word", ""))
+                        if clean_fixed != orig_w:
+                            chunk[c_idx]["original_word"] = orig_w
+                            chunk[c_idx]["originalWord"] = orig_w
+                            chunk[c_idx]["word"] = clean_fixed
+                            chunk[c_idx]["is_polished"] = True
+                            chunk[c_idx]["isPolished"] = True
+                            total_corrections += 1
+            else:
+                # If Gemini returned mismatched length or failed, fallback to local dictionary rules on this chunk
+                for c_idx, w in enumerate(chunk):
+                    orig = str(w.get("word", ""))
+                    if orig == "i":
+                        w["original_word"] = orig
+                        w["originalWord"] = orig
+                        w["word"] = "I"
+                        w["is_polished"] = True
+                        w["isPolished"] = True
+                        total_corrections += 1
+                    elif orig == "im":
+                        w["original_word"] = orig
+                        w["originalWord"] = orig
+                        w["word"] = "I'm"
+                        w["is_polished"] = True
+                        w["isPolished"] = True
+                        total_corrections += 1
+                    elif orig == "dont":
+                        w["original_word"] = orig
+                        w["originalWord"] = orig
+                        w["word"] = "don't"
+                        w["is_polished"] = True
+                        w["isPolished"] = True
+                        total_corrections += 1
+                    elif orig == "cant":
+                        w["original_word"] = orig
+                        w["originalWord"] = orig
+                        w["word"] = "can't"
+                        w["is_polished"] = True
+                        w["isPolished"] = True
+                        total_corrections += 1
+
+        engine_name = "Google Gemini (Flash Polish)" if gemini_success else "Prismex Local Dictionary (Offline)"
+        return {"words": corrected_words, "corrections": total_corrections, "engine": engine_name}
+
+    @classmethod
+    def polish_sentence(cls, sentence_words: List[Dict[str, Any]], language: str = "auto") -> Dict[str, Any]:
+        """Polishes a single sentence's words in real-time with Google Gemini, preserving 1-to-1 word timecode alignment."""
+        if not sentence_words:
+            return {"words": [], "corrections": 0, "engine": "none"}
+        return cls.spell_check(sentence_words, language=language)
 
     @classmethod
     def detect_viral_shorts(

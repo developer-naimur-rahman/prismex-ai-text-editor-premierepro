@@ -111,6 +111,7 @@ class SmartSrtRequest(BaseModel):
 
 class SpellCheckRequest(BaseModel):
     words: List[Dict[str, Any]] = []
+    language: Optional[str] = "auto"
 
 class ViralShortsRequest(BaseModel):
     words: List[Dict[str, Any]] = []
@@ -683,8 +684,13 @@ def generate_smart_srt(req: SmartSrtRequest):
 
 @app.post("/api/v1/transcript/ai-spell-check")
 def ai_spell_check(req: SpellCheckRequest):
-    """Detects typos or speech-to-text misspellings and returns corrected words with preserved timestamps."""
-    return CreativeAI.spell_check(req.words)
+    """Detects typos or speech-to-text misspellings across all words and returns corrected words with preserved timestamps."""
+    return CreativeAI.spell_check(req.words, language=req.language or "auto")
+
+@app.post("/api/v1/transcript/ai-polish-sentence")
+def ai_polish_sentence(req: SpellCheckRequest):
+    """Polishes a single sentence with Google Gemini, preserving exact 1-to-1 word timestamps."""
+    return CreativeAI.polish_sentence(req.words, language=req.language or "auto")
 
 @app.post("/api/v1/transcript/ai-viral-shorts")
 def ai_viral_shorts(req: ViralShortsRequest):

@@ -199,17 +199,32 @@ export class PrismexDaemonClient {
     }
   }
 
-  public async aiSpellCheck(words: any[]): Promise<{ words: any[]; corrections: number; engine: string } | null> {
+  public async aiSpellCheck(words: any[], language?: string): Promise<{ words: any[]; corrections: number; engine: string } | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-spell-check`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ words })
+        body: JSON.stringify({ words, language })
       });
       if (res.ok) return await res.json();
       return null;
     } catch (err) {
       console.error('[PrismexDaemonClient] aiSpellCheck failed:', err);
+      return null;
+    }
+  }
+
+  public async aiPolishSentence(words: any[], language?: string): Promise<{ words: any[]; corrections: number; engine: string } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-polish-sentence`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, language })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] aiPolishSentence failed:', err);
       return null;
     }
   }

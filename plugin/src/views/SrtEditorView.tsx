@@ -21,7 +21,8 @@ import {
   LayoutList,
   Copy,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  RotateCcw
 } from 'lucide-react';
 
 function formatSrtTimestamp(sec: number): string {
@@ -40,6 +41,7 @@ export const SrtEditorView: React.FC = () => {
   const {
     sequenceManifest,
     transcriptWords,
+    setTranscriptWords,
     transcriptSentences,
     language,
     srtCues,
@@ -57,6 +59,24 @@ export const SrtEditorView: React.FC = () => {
   const [targetChars, setTargetChars] = useState(18);
   const [maxChars, setMaxChars] = useState(26);
   const [showSliders, setShowSliders] = useState(false);
+
+  // Punctuation Strip on Generate & Quick Clean State
+  const [stripOnGenerate, setStripOnGenerate] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('prismex_srt_strip_on_gen') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [stripOption, setStripOption] = useState<'PERIODS_COMMAS' | 'ALL' | 'PERIODS' | 'COMMAS'>(() => {
+    try {
+      return (localStorage.getItem('prismex_srt_strip_option') as any) || 'PERIODS_COMMAS';
+    } catch {
+      return 'PERIODS_COMMAS';
+    }
+  });
+  const [applyToTranscript, setApplyToTranscript] = useState<boolean>(false);
+  const [undoCues, setUndoCues] = useState<any[] | null>(null);
 
   // Mapped to persistent Zustand store
   const cues = srtCues;
@@ -179,6 +199,27 @@ export const SrtEditorView: React.FC = () => {
     handleGenerateCues(tw, tc, mc, flexibleWords);
   };
 
+  const cleanPunctuationText = (
+    text: string,
+    mode: 'PERIODS_COMMAS' | 'ALL' | 'PERIODS' | 'COMMAS' | 'UPPER' | 'TITLE'
+  ): string => {
+    let str = text;
+    if (mode === 'PERIODS_COMMAS') {
+      str = str.replace(/[।.,،]/g, '');
+    } else if (mode === 'PERIODS') {
+      str = str.replace(/[.।]/g, '');
+    } else if (mode === 'COMMAS') {
+      str = str.replace(/[,،]/g, '');
+    } else if (mode === 'ALL') {
+      str = str.replace(/[।.,?!;:"'()\[\]{}—–\-_/\\`~^“”‘’]/g, '');
+    } else if (mode === 'UPPER') {
+      str = str.toUpperCase();
+    } else if (mode === 'TITLE') {
+      str = str.replace(/\b\w/g, (char: string) => char.toUpperCase());
+    }
+    return str.replace(/\s+/g, ' ').trim();
+  };
+
   const handleGenerateCues = async (
     customTw?: number,
     customTc?: number,
@@ -201,9 +242,20 @@ export const SrtEditorView: React.FC = () => {
         useAi: true
       });
       if (res && res.cues) {
-        setCues(res.cues);
+        let finalCues = res.cues;
+        if (stripOnGenerate) {
+          finalCues = finalCues.map((c: any) => {
+            const cleaned = cleanPunctuationText(c.text, stripOption);
+            return { ...c, text: cleaned, charCount: cleaned.length };
+          });
+        }
+        setCues(finalCues);
         setEngineUsed(res.engine);
-        setStatusMessage(language === 'bn' ? `${res.totalCues} টি কিউ সফলভাবে ফ্রেম স্ন্যাপ হয়েছে!` : `${res.totalCues} cues generated & frame snapped!`);
+        setStatusMessage(
+          language === 'bn'
+            ? `${finalCues.length} টি কিউ সফলভাবে ফ্রেম স্ন্যাপ হয়েছে!${stripOnGenerate ? ' (যতিচিহ্ন ছাড়া ক্লিন ক্যাপশন)' : ''}`
+            : `${finalCues.length} cues generated & frame snapped!${stripOnGenerate ? ' (Clean - No Punctuation)' : ''}`
+        );
       }
     } finally {
       setIsGenerating(false);
@@ -323,19 +375,50 @@ export const SrtEditorView: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 4000);
   };
 
-  const handlePunctuationTransform = (type: 'COMMAS' | 'PERIODS' | 'ALL' | 'UPPER' | 'TITLE') => {
+  const handlePunctuationTransform = (
+    type: 'PERIODS_COMMAS' | 'ALL' | 'PERIODS' | 'COMMAS' | 'UPPER' | 'TITLE',
+    syncWithTranscript = applyToTranscript
+  ) => {
+    if (cues.length === 0) return;
+    setUndoCues([...cues]);
+
     const updated = cues.map((c) => {
-      let str = c.text;
-      if (type === 'COMMAS') str = str.replace(/[,،]/g, '');
-      else if (type === 'PERIODS') str = str.replace(/[.।]/g, '');
-      else if (type === 'ALL') str = str.replace(/[,.?!।:;—"']/g, '');
-      else if (type === 'UPPER') str = str.toUpperCase();
-      else if (type === 'TITLE') str = str.replace(/\b\w/g, (char: string) => char.toUpperCase());
+      const str = cleanPunctuationText(c.text, type);
       return { ...c, text: str, charCount: str.length };
     });
     setCues(updated);
-    setStatusMessage('Cleaned punctuation in all cues!');
-    setTimeout(() => setStatusMessage(null), 2500);
+
+    if (syncWithTranscript && transcriptWords.length > 0) {
+      const updatedWords = transcriptWords.map((w: any) => {
+        const str = cleanPunctuationText(String(w.word || ''), type);
+        return { ...w, word: str };
+      });
+      setTranscriptWords(updatedWords);
+    }
+
+    const modeLabels: Record<string, { bn: string; en: string }> = {
+      PERIODS_COMMAS: { bn: 'দাঁড়ি (।) ও কমা (,)', en: 'periods & commas' },
+      ALL: { bn: 'সকল যতিচিহ্ন', en: 'all punctuation' },
+      PERIODS: { bn: 'দাঁড়ি (।)', en: 'periods' },
+      COMMAS: { bn: 'কমা (,)', en: 'commas' },
+      UPPER: { bn: 'বড় হাতের অক্ষর', en: 'ALL CAPS' },
+      TITLE: { bn: 'টাইটেল কেস', en: 'Title Case' }
+    };
+    const label = modeLabels[type]?.[language === 'bn' ? 'bn' : 'en'] || type;
+    setStatusMessage(
+      language === 'bn'
+        ? `${cues.length}টি কিউ থেকে এক ক্লিকে ${label} মুছে দেওয়া হয়েছে!${syncWithTranscript ? ' (মূল ট্রান্সক্রিপ্টেও আপডেট হয়েছে)' : ''} (আনডু সম্ভব)`
+        : `Cleaned ${label} in all ${cues.length} cues!${syncWithTranscript ? ' (Synced to transcript)' : ''} (Undo available)`
+    );
+    setTimeout(() => setStatusMessage(null), 3500);
+  };
+
+  const handleUndoPunctuationTransform = () => {
+    if (!undoCues) return;
+    setCues(undoCues);
+    setUndoCues(null);
+    setStatusMessage(language === 'bn' ? 'পূর্বের যতিচিহ্ন ফিরিয়ে আনা হয়েছে!' : 'Restored previous cues with punctuation!');
+    setTimeout(() => setStatusMessage(null), 3000);
   };
 
   const filteredCues = useMemo(() => {
@@ -505,6 +588,52 @@ export const SrtEditorView: React.FC = () => {
                 {language === 'bn' ? 'অর্থপূর্ণ ফ্লেক্সিবল ফিট' : 'Flexible Meaning Fit'}
               </label>
             </div>
+
+            {/* Punctuation Filter on Generation */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', gridColumn: '1 / -1', paddingTop: '6px', borderTop: '1px dashed var(--border-subtle)', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <input
+                  type="checkbox"
+                  id="stripPunctuationOnGen"
+                  checked={stripOnGenerate}
+                  onChange={(e) => {
+                    const val = e.target.checked;
+                    setStripOnGenerate(val);
+                    try { localStorage.setItem('prismex_srt_strip_on_gen', String(val)); } catch {}
+                  }}
+                />
+                <label htmlFor="stripPunctuationOnGen" style={{ fontSize: '9.5px', color: '#f59e0b', fontWeight: 600, cursor: 'pointer' }}>
+                  {language === 'bn' ? '✂️ তৈরি করার সময় যতিচিহ্ন মুছুন (Clean SRT)' : '✂️ Strip Punctuation on SRT Generation'}
+                </label>
+              </div>
+
+              {stripOnGenerate && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <select
+                    value={stripOption}
+                    onChange={(e) => {
+                      const val = e.target.value as any;
+                      setStripOption(val);
+                      try { localStorage.setItem('prismex_srt_strip_option', val); } catch {}
+                    }}
+                    style={{
+                      fontSize: '9.5px',
+                      padding: '2px 6px',
+                      borderRadius: '3px',
+                      backgroundColor: 'var(--bg-tertiary)',
+                      color: 'var(--text-primary)',
+                      border: '1px solid var(--border-subtle)'
+                    }}
+                  >
+                    <option value="PERIODS_COMMAS">{language === 'bn' ? 'দাঁড়ি (।) ও কমা (,) মুছুন' : 'Strip Periods & Commas'}</option>
+                    <option value="ALL">{language === 'bn' ? 'সব যতিচিহ্ন (?, !, কোটেশন)' : 'Strip All Punctuation'}</option>
+                    <option value="PERIODS">{language === 'bn' ? 'শুধুমাত্র দাঁড়ি (।) মুছুন' : 'Strip Periods Only'}</option>
+                    <option value="COMMAS">{language === 'bn' ? 'শুধুমাত্র কমা (,) মুছুন' : 'Strip Commas Only'}</option>
+                  </select>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={() => handleGenerateCues()}
               disabled={isGenerating}
@@ -583,25 +712,62 @@ export const SrtEditorView: React.FC = () => {
 
       {/* Quick Punctuation Tools & View Mode Toggle */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap', flexShrink: 0 }}>
-        <div style={{ display: 'flex', gap: '3px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-            {language === 'bn' ? 'যতিচিহ্ন:' : 'Punctuation:'}
+        <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+            {language === 'bn' ? '✂️ যতিচিহ্ন:' : '✂️ Punctuation:'}
           </span>
-          <button onClick={() => handlePunctuationTransform('COMMAS')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
-            {language === 'bn' ? 'কমা মুছুন' : 'Strip ,'}
+          {/* Master 1-Click Strip Periods & Commas */}
+          <button
+            onClick={() => handlePunctuationTransform('PERIODS_COMMAS')}
+            className="btn-primary"
+            title="এক ক্লিকে সকল কিউ থেকে দাঁড়ি (।) ও কমা (,) মুছে ফেলুন"
+            style={{ padding: '3px 8px', fontSize: '10px', backgroundColor: '#d97706', color: '#fff', border: 'none' }}
+          >
+            {language === 'bn' ? '✂️ দাঁড়ি ও কমা মুছুন' : 'Strip . and ,'}
           </button>
-          <button onClick={() => handlePunctuationTransform('PERIODS')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
-            {language === 'bn' ? 'দাঁড়ি মুছুন' : 'Strip .'}
-          </button>
-          <button onClick={() => handlePunctuationTransform('ALL')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px', color: '#f87171' }}>
+          <button
+            onClick={() => handlePunctuationTransform('ALL')}
+            className="btn-secondary"
+            title="সব ধরণের দাঁড়ি, কমা, প্রশ্নবোধক, কোটেশন ইত্যাদি মুছে দিন"
+            style={{ padding: '3px 7px', fontSize: '10px', color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+          >
             {language === 'bn' ? 'সব চিহ্ন মুছুন' : 'Strip All'}
           </button>
-          <button onClick={() => handlePunctuationTransform('UPPER')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
+          <button onClick={() => handlePunctuationTransform('PERIODS')} className="btn-secondary" style={{ padding: '3px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'দাঁড়ি (।)' : 'Periods'}
+          </button>
+          <button onClick={() => handlePunctuationTransform('COMMAS')} className="btn-secondary" style={{ padding: '3px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'কমা (,)' : 'Commas'}
+          </button>
+          <button onClick={() => handlePunctuationTransform('UPPER')} className="btn-secondary" style={{ padding: '3px 6px', fontSize: '10px' }}>
             {language === 'bn' ? 'বড় হাতের' : 'ALL CAPS'}
           </button>
-          <button onClick={() => handlePunctuationTransform('TITLE')} className="btn-secondary" style={{ padding: '2px 6px', fontSize: '10px' }}>
-            {language === 'bn' ? 'ক্যাপিটাল' : 'Title Case'}
+          <button onClick={() => handlePunctuationTransform('TITLE')} className="btn-secondary" style={{ padding: '3px 6px', fontSize: '10px' }}>
+            {language === 'bn' ? 'ক্যাপিটাল' : 'Title'}
           </button>
+
+          {/* Sync to transcript checkbox */}
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '9px', color: 'var(--text-muted)', cursor: 'pointer', marginLeft: '4px' }}>
+            <input
+              type="checkbox"
+              checked={applyToTranscript}
+              onChange={(e) => setApplyToTranscript(e.target.checked)}
+            />
+            <span>{language === 'bn' ? 'ট্রান্সক্রিপ্টেও মুছুন' : 'Sync Transcript'}</span>
+          </label>
+
+          {/* Undo Button */}
+          {undoCues && (
+            <button
+              onClick={handleUndoPunctuationTransform}
+              className="btn-secondary"
+              title="পূর্বের যতিচিহ্ন ফিরিয়ে আনুন"
+              style={{ padding: '2px 6px', fontSize: '9.5px', color: '#38bdf8', borderColor: '#38bdf8', display: 'flex', alignItems: 'center', gap: '3px' }}
+            >
+              <RotateCcw size={10} />
+              <span>{language === 'bn' ? 'আনডু' : 'Undo'}</span>
+            </button>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>

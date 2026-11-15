@@ -53,6 +53,8 @@ interface WordToken {
   start: number;
   end: number;
   isFiller: boolean;
+  isPolished?: boolean;
+  originalWord?: string;
 }
 
 function formatSrtTimestamp(sec: number): string {
@@ -149,6 +151,8 @@ export const TranscriptView: React.FC = () => {
   const [aeTypographyData, setAeTypographyData] = useState<{ formattedText: string; lines: string[]; aeSnippet: string } | null>(null);
   const [isProcessingCreative, setIsProcessingCreative] = useState(false);
   const [creativeStatus, setCreativeStatus] = useState<string | null>(null);
+  const [isPolishing, setIsPolishing] = useState<boolean>(false);
+  const [polishingSentenceIdx, setPolishingSentenceIdx] = useState<number | null>(null);
 
   // Word-Level Floating AI Popover & Speed Tools State
   const [popoverWord, setPopoverWord] = useState<{ wordIdx: number; word: string; start: number; end: number; x: number; y: number } | null>(null);
@@ -222,7 +226,9 @@ export const TranscriptView: React.FC = () => {
       word: w.word,
       start: w.start_seconds ?? w.start ?? 0,
       end: w.end_seconds ?? w.end ?? 0,
-      isFiller: !!(w.is_filler ?? w.isFiller)
+      isFiller: !!(w.is_filler ?? w.isFiller),
+      isPolished: !!(w.is_polished ?? w.isPolished),
+      originalWord: w.original_word ?? w.originalWord
     }));
   }, [transcriptWords]);
 
@@ -1256,37 +1262,109 @@ export const TranscriptView: React.FC = () => {
     setTimeout(() => setExportStatus(null), 2500);
   };
 
-  const handleStripPunctuation = (type: 'COMMAS' | 'PERIODS' | 'ALL' | 'UPPER') => {
+  const handleStripPunctuation = (type: 'PERIODS_COMMAS' | 'COMMAS' | 'PERIODS' | 'ALL' | 'UPPER') => {
     const updated = transcriptWords.map((w: any) => {
       let str = String(w.word || '');
-      if (type === 'COMMAS') {
+      if (type === 'PERIODS_COMMAS') {
+        str = str.replace(/[।.,،]/g, '');
+      } else if (type === 'COMMAS') {
         str = str.replace(/[,،]/g, '');
       } else if (type === 'PERIODS') {
         str = str.replace(/[.।]/g, '');
       } else if (type === 'ALL') {
-        str = str.replace(/[,.?!।:;—"']/g, '');
+        str = str.replace(/[।.,?!;:"'()\[\]{}—–\-_/\\`~^“”‘’]/g, '');
       } else if (type === 'UPPER') {
         str = str.toUpperCase();
       }
-      return { ...w, word: str };
+      return { ...w, word: str.replace(/\s+/g, ' ').trim() };
     });
     setTranscriptWords(updated);
-    setExportStatus(`Punctuation updated!`);
+    setExportStatus(language === 'bn' ? 'যতিচিহ্ন সফলভাবে আপডেট হয়েছে!' : 'Punctuation updated!');
     setTimeout(() => setExportStatus(null), 2500);
   };
 
-  const handleRunSpellCheck = async () => {
-    setIsProcessingCreative(true);
-    setCreativeStatus('Checking spelling & grammar...');
+  const handleRunFullGeminiPolish = async () => {
+    if (transcriptWords.length === 0) return;
+    setIsPolishing(true);
+    setCreativeStatus(language === 'bn' ? 'জেমিনির মাধ্যমে উচ্চারণ অনুযায়ী ট্রান্সক্রিপ্ট পলিশ ও বানান সংশোধন করা হচ্ছে...' : 'Gemini is polishing transcript & phonetic spellings...');
+    setExportStatus(language === 'bn' ? 'জেমিনি পলিশ চলছে...' : 'Gemini Polish in progress...');
     try {
-      const res = await client.aiSpellCheck(transcriptWords);
+      const res = await client.aiSpellCheck(transcriptWords, language);
       if (res && res.words) {
         setTranscriptWords(res.words);
-        setCreativeStatus(`Fixed ${res.corrections} word(s) (${res.engine})!`);
+        const msg = language === 'bn'
+          ? `জেমিনি সফলভাবে ${res.corrections}টি বানান সংশোধন ও পলিশ করেছে (${res.engine})!`
+          : `Gemini polished & corrected ${res.corrections} word(s) (${res.engine})!`;
+        setCreativeStatus(msg);
+        setExportStatus(msg);
       }
+    } catch (err: any) {
+      const errTxt = language === 'bn' ? `পলিশ ব্যর্থ হয়েছে: ${err?.message || err}` : `Polish failed: ${err?.message || err}`;
+      setCreativeStatus(errTxt);
+      setExportStatus(errTxt);
     } finally {
-      setIsProcessingCreative(false);
+      setIsPolishing(false);
+      setTimeout(() => {
+        setCreativeStatus(null);
+        setExportStatus(null);
+      }, 5000);
     }
+  };
+
+  const handleRunSpellCheck = handleRunFullGeminiPolish;
+
+  const handlePolishSingleSentence = async (paraIdx: number, paraTokens: any[]) => {
+    if (!paraTokens || paraTokens.length === 0) return;
+    setPolishingSentenceIdx(paraIdx);
+    setExportStatus(language === 'bn' ? 'এই বাক্যটি জেমিনি দিয়ে পলিশ করা হচ্ছে...' : 'Polishing sentence with Gemini...');
+    try {
+      const sentenceWords = paraTokens.map((t) => ({
+        ...transcriptWords[t.globalIdx],
+        word: t.word
+      }));
+      const res = await client.aiPolishSentence(sentenceWords, language);
+      if (res && res.words && res.words.length === paraTokens.length) {
+        const updated = [...transcriptWords];
+        for (let i = 0; i < paraTokens.length; i++) {
+          const gIdx = paraTokens[i].globalIdx;
+          updated[gIdx] = {
+            ...updated[gIdx],
+            ...res.words[i]
+          };
+        }
+        setTranscriptWords(updated);
+        setExportStatus(
+          language === 'bn'
+            ? `বাক্যটি জেমিনি দিয়ে পলিশ সম্পন্ন! (${res.corrections}টি সংশোধন)`
+            : `Sentence polished with Gemini! (${res.corrections} corrections)`
+        );
+      }
+    } catch (err: any) {
+      setExportStatus(`Failed: ${err?.message || err}`);
+    } finally {
+      setPolishingSentenceIdx(null);
+      setTimeout(() => setExportStatus(null), 3500);
+    }
+  };
+
+  const handleRevertWordPolish = (wordIdx: number) => {
+    const targetWord = transcriptWords[wordIdx];
+    if (!targetWord || !targetWord.original_word) return;
+    const updated = [...transcriptWords];
+    updated[wordIdx] = {
+      ...updated[wordIdx],
+      word: targetWord.original_word,
+      is_polished: false,
+      isPolished: false
+    };
+    setTranscriptWords(updated);
+    setPopoverWord(null);
+    setExportStatus(
+      language === 'bn'
+        ? `শব্দটি মূল উচ্চারণে ফেরত নেওয়া হয়েছে: "${targetWord.original_word}"`
+        : `Reverted to original word: "${targetWord.original_word}"`
+    );
+    setTimeout(() => setExportStatus(null), 2500);
   };
 
   const handleDetectViralShorts = async () => {
@@ -1844,6 +1922,32 @@ export const TranscriptView: React.FC = () => {
           >
             <Download size={11} />
             <span>{language === 'bn' ? 'এক্সপোর্ট ▾' : 'Export ▾'}</span>
+          </button>
+
+          {/* ✨ GEMINI POLISH & SPELL-CHECK MASTER BUTTON */}
+          <button
+            onClick={handleRunFullGeminiPolish}
+            disabled={isPolishing || transcriptWords.length === 0}
+            className="btn-primary"
+            style={{
+              padding: '3px 9px',
+              fontSize: '10px',
+              height: '26px',
+              backgroundColor: isPolishing ? '#4b5563' : '#8b5cf6',
+              color: '#ffffff',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: isPolishing ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              fontWeight: 600,
+              boxShadow: '0 1px 3px rgba(139, 92, 246, 0.3)'
+            }}
+            title={language === 'bn' ? 'জেমিনির মাধ্যমে উচ্চারণ অনুযায়ী বানান সংশোধন ও পলিশ করুন (টাইমকোড ১০০% অক্ষুণ্ণ থাকবে)' : 'Polish transcript & correct spellings with Google Gemini (100% timecode aligned)'}
+          >
+            <Sparkles size={11} className={isPolishing ? 'animate-spin' : ''} />
+            <span>{isPolishing ? (language === 'bn' ? 'পলিশ হচ্ছে...' : 'Polishing...') : (language === 'bn' ? '✨ জেমিনি পলিশ' : '✨ Gemini Polish')}</span>
           </button>
 
           {/* ⚙️ TOOLS BUTTON (Opens Focused Modal) */}
@@ -3152,6 +3256,32 @@ export const TranscriptView: React.FC = () => {
                       <Sparkles size={10} />
                     )}
                   </button>
+
+                  {/* ✨ Gemini Polish Sentence */}
+                  <button
+                    onClick={() => handlePolishSingleSentence(para.startIdx, para.tokens)}
+                    disabled={polishingSentenceIdx === para.startIdx}
+                    title={language === 'bn' ? 'জেমিনির মাধ্যমে এই বাক্যটি পলিশ ও বানান সংশোধন করুন' : 'Polish this sentence with Gemini'}
+                    style={{
+                      backgroundColor: polishingSentenceIdx === para.startIdx
+                        ? 'rgba(139, 92, 246, 0.4)'
+                        : 'rgba(255,255,255,0.06)',
+                      border: '1px solid rgba(139, 92, 246, 0.35)',
+                      color: polishingSentenceIdx === para.startIdx ? '#c4b5fd' : '#a78bfa',
+                      borderRadius: '3px',
+                      padding: '2px 4px',
+                      cursor: polishingSentenceIdx === para.startIdx ? 'not-allowed' : 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                  >
+                    {polishingSentenceIdx === para.startIdx ? (
+                      <RefreshCw size={10} style={{ animation: 'spin 1s linear infinite' }} />
+                    ) : (
+                      <Sparkles size={10} color="#c084fc" />
+                    )}
+                  </button>
                 </div>
 
                 {matchingTake && (
@@ -3329,6 +3459,10 @@ export const TranscriptView: React.FC = () => {
                       wordBg = 'rgba(239, 68, 68, 0.18)';
                       wordColor = '#fee2e2';
                       wordBorderBottom = '2.5px solid #ef4444';
+                    } else if (item.isPolished) {
+                      wordBg = 'rgba(16, 185, 129, 0.18)';
+                      wordColor = '#a7f3d0';
+                      wordBorderBottom = '2px solid #10b981';
                     } else if (directive && directive.visualType !== 'NONE') {
                       wordBorderBottom = `1px dotted ${directive.accentColor || '#666'}`;
                     }
@@ -3337,7 +3471,7 @@ export const TranscriptView: React.FC = () => {
                       <span key={item.id} style={{ display: 'inline-flex', alignItems: 'center', margin: '1px 2px' }}>
                         <span
                           onClick={(e) => handleWordClick(item.globalIdx, e)}
-                          title={`${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + (markerInfo.suggestion || markerInfo.label) + ']' : ''} (ক্লিক করুন AI অ্যাকশনের জন্য, Shift+Click সিলেক্ট)`}
+                          title={`${item.isPolished ? `✨ Gemini Polished: "${item.originalWord}" ➔ "${item.word}" (ক্লিক করে পূর্বের বানানে ফেরত যেতে পারেন)\n` : ''}${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + (markerInfo.suggestion || markerInfo.label) + ']' : ''} (ক্লিক করুন AI অ্যাকশনের জন্য, Shift+Click সিলেক্ট)`}
                           style={{
                             display: 'inline-block',
                             padding: '1px 4px',
@@ -3349,11 +3483,30 @@ export const TranscriptView: React.FC = () => {
                             borderBottom: wordBorderBottom,
                             textDecoration: isPlayingWord ? 'underline' : 'none',
                             fontSize: '12px',
-                            fontWeight: (isPng || isBroll || isEmphasis || isIcon) ? 600 : 400
+                            fontWeight: (isPng || isBroll || isEmphasis || isIcon || item.isPolished) ? 600 : 400
                           }}
                         >
                           {item.word}
                         </span>
+
+                        {item.isPolished && (
+                          <span
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRevertWordPolish(item.globalIdx);
+                            }}
+                            title={`ক্লিক করে মূল বানানে ফিরে যান: "${item.originalWord}"`}
+                            style={{
+                              fontSize: '8px',
+                              color: '#34d399',
+                              cursor: 'pointer',
+                              marginRight: '2px',
+                              lineHeight: 1
+                            }}
+                          >
+                            ✨
+                          </span>
+                        )}
 
                         {isPng && (
                           <span
@@ -4202,6 +4355,30 @@ export const TranscriptView: React.FC = () => {
             <Scissors size={12} />
           </button>
 
+          {/* ↺ Revert to Original Spoken Word */}
+          {transcriptWords[popoverWord.wordIdx]?.original_word && (
+            <button
+              onClick={() => handleRevertWordPolish(popoverWord.wordIdx)}
+              style={{
+                padding: '3px 6px',
+                backgroundColor: 'rgba(16, 185, 129, 0.25)',
+                color: '#6ee7b7',
+                border: '1px solid rgba(16, 185, 129, 0.5)',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px',
+                fontSize: '10px',
+                fontWeight: 600
+              }}
+              title={`জেমিনির সংশোধন বাতিল করে মূল বানানে ফিরে যান: "${transcriptWords[popoverWord.wordIdx]?.original_word}"`}
+            >
+              <RotateCcw size={10} />
+              <span>পূর্বের রূপ ({transcriptWords[popoverWord.wordIdx]?.original_word})</span>
+            </button>
+          )}
+
           {/* Close */}
           <button
             onClick={() => setPopoverWord(null)}
@@ -4755,7 +4932,53 @@ export const TranscriptView: React.FC = () => {
                 </div>
               </button>
 
-              {/* Tool 5: AI Assistant */}
+              {/* Tool 5: Gemini Polish & Spell-Check */}
+              <button
+                onClick={() => { handleRunFullGeminiPolish(); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(139, 92, 246, 0.14)',
+                  border: '1px solid rgba(139, 92, 246, 0.4)',
+                  borderRadius: '6px',
+                  color: '#c4b5fd',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <Sparkles size={16} color="#8b5cf6" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#f5f3ff' }}>✨ জেমিনি পলিশ ও বানান সংশোধন</div>
+                  <div style={{ fontSize: '10px', color: '#a78bfa' }}>উচ্চারণ অনুযায়ী সম্পূর্ণ ট্রান্সক্রিপ্ট নিখুঁত করুন (টাইমকোড অক্ষুণ্ণ রেখে)</div>
+                </div>
+              </button>
+
+              {/* Tool 6: Strip Punctuation */}
+              <button
+                onClick={() => { handleStripPunctuation('PERIODS_COMMAS'); setShowToolsDropdown(false); }}
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: 'rgba(217, 119, 6, 0.12)',
+                  border: '1px solid rgba(217, 119, 6, 0.35)',
+                  borderRadius: '6px',
+                  color: '#fcd34d',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                  textAlign: 'left'
+                }}
+              >
+                <Scissors size={16} color="#d97706" />
+                <div>
+                  <div style={{ fontSize: '12px', fontWeight: 600, color: '#fffbeb' }}>✂️ এক ক্লিকে দাঁড়ি ও কমা মুছুন</div>
+                  <div style={{ fontSize: '10px', color: '#fbbf24' }}>ট্রান্সক্রিপ্টের সব দাঁড়ি (।) ও কমা (,) সাথে সাথে মুছে ফেলুন</div>
+                </div>
+              </button>
+
+              {/* Tool 7: AI Assistant */}
               <button
                 onClick={() => { setShowAiPanel(!showAiPanel); setShowToolsDropdown(false); }}
                 style={{
