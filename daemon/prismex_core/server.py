@@ -163,6 +163,19 @@ class ProviderKeyRequest(BaseModel):
 class ClipboardRequest(BaseModel):
     text: str
 
+class AudioEnhanceRequest(BaseModel):
+    sequenceName: str = "sequence"
+    audioPath: Optional[str] = None
+    sourceClips: Optional[List[Dict[str, Any]]] = None
+    durationSeconds: Optional[float] = 0.0
+    profileId: str = "crispy-podcast"
+    settings: Optional[Dict[str, Any]] = None
+
+class SoundDesignRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    genre: str = "podcast"
+
 # ----------------- REST Endpoints -----------------
 
 @app.get("/health")
@@ -1003,6 +1016,45 @@ async def extract_frame_ffmpeg(req: ExtractFrameRequest):
         raise HTTPException(status_code=500, detail="Frame not generated")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"FFmpeg error: {e}")
+
+@app.post("/api/v1/audio/enhance")
+async def enhance_audio_endpoint(req: AudioEnhanceRequest):
+    input_wav = None
+    if req.audioPath and os.path.exists(req.audioPath):
+        input_wav = Path(req.audioPath)
+    elif req.sourceClips and req.durationSeconds and req.durationSeconds > 0:
+        input_wav = await asyncio.to_thread(
+            AudioExtractor.extract_sequence_timeline_audio, req.sourceClips, req.durationSeconds
+        )
+    if not input_wav or not input_wav.exists():
+        raise HTTPException(status_code=400, detail="No audio source available for enhancement")
+
+    clean_name = re.sub(r'[^a-zA-Z0-9_-]', '_', req.sequenceName)
+    out_dir = Path.home() / ".prismex" / "enhanced_audio"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = int(time.time())
+    out_path = out_dir / f"{clean_name}_Enhanced_{req.profileId}_{timestamp}.wav"
+
+    res = await asyncio.to_thread(
+        AudioDSP.enhance_audio_track,
+        input_wav,
+        out_path,
+        req.profileId,
+        req.settings or {}
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=500, detail=res.get("error", "Audio enhancement failed"))
+    return res
+
+@app.post("/api/v1/audio/sound-design")
+async def sound_design_endpoint(req: SoundDesignRequest):
+    res = await asyncio.to_thread(
+        CreativeAI.analyze_sound_design,
+        req.words,
+        req.sentences,
+        req.genre
+    )
+    return res
 
 # ----------------- WebSocket Endpoint -----------------
 

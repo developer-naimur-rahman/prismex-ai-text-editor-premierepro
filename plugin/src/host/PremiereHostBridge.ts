@@ -411,6 +411,26 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Imports the enhanced studio audio master WAV into Premiere Pro and places it onto the timeline.
+   */
+  public async applyEnhancedAudioTrack(
+    wavPath: string,
+    targetTrackIndex: number = 1,
+    muteOriginal: boolean = true
+  ): Promise<{ success: boolean; trackIndex?: number; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, trackIndex: targetTrackIndex };
+    }
+    try {
+      const safePath = wavPath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const res = await this.evalScript(`$._prismex.applyEnhancedAudioTrack('${safePath}', ${targetTrackIndex}, ${muteOriginal})`);
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
    * Imports a media file (B-Roll or SFX) and places it onto a specific track in Premiere Pro at targetTimeSec.
    */
   public async importAndPlaceClipOnTrack(

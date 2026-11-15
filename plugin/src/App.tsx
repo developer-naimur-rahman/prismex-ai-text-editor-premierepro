@@ -14,6 +14,7 @@ import { HistoryView } from './views/HistoryView';
 import { SrtEditorView } from './views/SrtEditorView';
 import { ViralShortsView } from './views/ViralShortsView';
 import { ColorStudioView } from './views/ColorStudioView';
+import { AudioStudioView } from './views/AudioStudioView';
 import { Loader2, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -269,6 +270,7 @@ export const App: React.FC = () => {
         {activeTab === 'srt-editor' && <SrtEditorView />}
         {activeTab === 'viral-shorts' && <ViralShortsView />}
         {activeTab === 'color-studio' && <ColorStudioView />}
+        {activeTab === 'audio-studio' && <AudioStudioView />}
         {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'providers' && <ProvidersView />}
         {activeTab === 'profiles' && <ProfilesView />}

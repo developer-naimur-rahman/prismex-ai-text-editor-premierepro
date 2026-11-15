@@ -695,6 +695,56 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async enhanceAudio(params: {
+    sequenceName: string;
+    audioPath?: string;
+    sourceClips?: any[];
+    durationSeconds?: number;
+    profileId: string;
+    settings?: any;
+  }): Promise<{ success: boolean; outputPath?: string; profileId?: string; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/audio/enhance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      return { success: false, error: err.detail || `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  public async analyzeSoundDesign(params: {
+    words: any[];
+    sentences: any[];
+    genre: string;
+  }): Promise<{
+    genre: string;
+    moodSummary: string;
+    soundDesignTips: string[];
+    sfxCues: any[];
+    engine?: string;
+  } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/audio/sound-design`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public connectWebSocket(onEvent: (event: any) => void): () => void {
     this.eventListeners.push(onEvent);
 

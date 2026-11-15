@@ -408,6 +408,86 @@ $._prismex.importAndPlaceClipOnTrack = function(filePath, targetTimeSec, targetT
 };
 
 /**
+ * Imports and lays the enhanced studio-master audio track onto the Premiere timeline,
+ * perfectly synchronized to sequence start.
+ */
+$._prismex.applyEnhancedAudioTrack = function(wavPath, targetTrackIndex, muteOriginal) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var seq = app.project.activeSequence;
+        var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
+
+        // 1. Get or create bin for Prismex Audio
+        var rootItem = app.project.rootItem;
+        var audioBin = null;
+        for (var b = 0; b < rootItem.children.numItems; b++) {
+            var child = rootItem.children[b];
+            if (child.type === 2 && child.name === "Prismex Enhanced Audio") {
+                audioBin = child;
+                break;
+            }
+        }
+        if (!audioBin) {
+            audioBin = rootItem.createBin("Prismex Enhanced Audio");
+        }
+
+        // 2. Import file into project
+        var imported = app.project.importFiles([wavPath], true, audioBin, false);
+        if (!imported) {
+            return JSON.stringify({ success: false, error: "Failed to import WAV file into Premiere Pro" });
+        }
+
+        // 3. Find imported project item
+        var projectItem = null;
+        for (var i = 0; i < audioBin.children.numItems; i++) {
+            var itm = audioBin.children[i];
+            if (itm.getMediaPath && itm.getMediaPath() === wavPath) {
+                projectItem = itm;
+                break;
+            }
+        }
+        if (!projectItem && audioBin.children.numItems > 0) {
+            projectItem = audioBin.children[audioBin.children.numItems - 1];
+        }
+
+        if (!projectItem) {
+            return JSON.stringify({ success: false, error: "Imported project item not found in bin" });
+        }
+
+        // 4. Determine destination audio track
+        var trkIdx = (typeof targetTrackIndex === "number") ? targetTrackIndex : (seq.audioTracks.numTracks > 1 ? 1 : 0);
+        if (trkIdx >= seq.audioTracks.numTracks) trkIdx = seq.audioTracks.numTracks - 1;
+        var destTrack = seq.audioTracks[trkIdx];
+
+        if (!destTrack || destTrack.isLocked()) {
+            return JSON.stringify({ success: false, error: "Audio track is locked or unavailable" });
+        }
+
+        // 5. Overwrite clip starting at sequence zeroPoint with 100% frame-perfect sync
+        var tlTimeObj = new Time();
+        tlTimeObj.ticks = zeroTicks.toFixed(0);
+        destTrack.overwriteClip(projectItem, tlTimeObj);
+
+        // 6. Optionally mute raw dialogue track (A1) if master placed on A2
+        if (muteOriginal && seq.audioTracks.numTracks > 1 && trkIdx !== 0) {
+            try {
+                seq.audioTracks[0].setMute(1);
+            } catch (mErr) {}
+        }
+
+        return JSON.stringify({
+            success: true,
+            trackIndex: trkIdx,
+            wavPath: wavPath
+        });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+};
+
+/**
  * Applies Dynamic Punch Jump Zoom (e.g. 112% scale) at emphasis keyword timestamps.
  */
 $._prismex.applyDynamicPunchZoom = function(punchTimesJson, zoomPercent) {

@@ -28,6 +28,7 @@ export type ActiveTab =
   | 'srt-editor'
   | 'viral-shorts'
   | 'color-studio'
+  | 'audio-studio'
   | 'dashboard' 
   | 'providers' 
   | 'profiles' 
@@ -120,6 +121,30 @@ interface PrismexState {
   sequenceSwitchMessage: string;
   sequenceSwitchProgress: number;
 
+  // Audio Studio State
+  activeAudioProfileId: string;
+  setActiveAudioProfileId: (id: string) => void;
+  audioSettings: {
+    denoise: number;
+    dereverb: number;
+    crispAir: number;
+    warmth: number;
+    deesser: number;
+    targetLufs: number;
+  };
+  setAudioSettings: (settings: Partial<{
+    denoise: number;
+    dereverb: number;
+    crispAir: number;
+    warmth: number;
+    deesser: number;
+    targetLufs: number;
+  }>) => void;
+  detectedSfxCues: any[];
+  setDetectedSfxCues: (cues: any[]) => void;
+  soundDesignTips: string[];
+  setSoundDesignTips: (tips: string[]) => void;
+
   // Global Busy & Activity Tracker
   globalBusyAction: string | null;
   setGlobalBusyAction: (action: string | null) => void;
@@ -204,6 +229,9 @@ export interface PrismexProjectSavePayload {
   viralTopics?: any[];
   viralShorts?: any[];
   srtCues?: any[];
+  audioSettings?: any;
+  detectedSfxCues?: any[];
+  soundDesignTips?: string[];
 }
 
 export async function persistProjectData(
@@ -254,6 +282,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
           viralTopics: parsed.viralTopics || [],
           viralShorts: parsed.viralShorts || [],
           srtCues: parsed.srtCues || [],
+          audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
+          detectedSfxCues: parsed.detectedSfxCues || [],
+          soundDesignTips: parsed.soundDesignTips || [],
           jobStatus: 'COMPLETE',
           jobProgress: 100,
           jobMessage: 'Loaded from project cache'
@@ -279,6 +310,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
         viralTopics: daemonData.viralTopics || [],
         viralShorts: daemonData.viralShorts || [],
         srtCues: daemonData.srtCues || [],
+        audioSettings: daemonData.audioSettings || usePrismexStore.getState().audioSettings,
+        detectedSfxCues: daemonData.detectedSfxCues || [],
+        soundDesignTips: daemonData.soundDesignTips || [],
         jobStatus: 'COMPLETE',
         jobProgress: 100,
         jobMessage: 'Loaded from daemon project cache'
@@ -306,6 +340,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
             viralTopics: parsed.viralTopics || [],
             viralShorts: parsed.viralShorts || [],
             srtCues: parsed.srtCues || [],
+            audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
+            detectedSfxCues: parsed.detectedSfxCues || [],
+            soundDesignTips: parsed.soundDesignTips || [],
             jobStatus: 'COMPLETE',
             jobProgress: 100
           });
@@ -382,6 +419,22 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   isSwitchingSequence: false,
   sequenceSwitchMessage: '',
   sequenceSwitchProgress: 0,
+
+  activeAudioProfileId: 'crispy-podcast',
+  setActiveAudioProfileId: (id) => set({ activeAudioProfileId: id }),
+  audioSettings: {
+    denoise: 50,
+    dereverb: 40,
+    crispAir: 65,
+    warmth: 45,
+    deesser: 55,
+    targetLufs: -14.0
+  },
+  setAudioSettings: (settings) => set((state) => ({ audioSettings: { ...state.audioSettings, ...settings } })),
+  detectedSfxCues: [],
+  setDetectedSfxCues: (cues) => set({ detectedSfxCues: cues }),
+  soundDesignTips: [],
+  setSoundDesignTips: (tips) => set({ soundDesignTips: tips }),
 
   globalBusyAction: null,
   setGlobalBusyAction: (action) => set({ globalBusyAction: action }),

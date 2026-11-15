@@ -1941,3 +1941,204 @@ Return a strictly valid JSON object with these exact keys:
             "timelineMarkers": timeline_markers,
             "engine": engine_name
         }
+
+    @classmethod
+    def analyze_sound_design(
+        cls,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        genre: str = "talking-head"
+    ) -> Dict[str, Any]:
+        """
+        Analyzes video transcript, pacing, and mood to recommend studio-grade SFX cues,
+        audio pacing notes, and timeline markers tailored to client genres.
+        """
+        # Prepare condensed text
+        sentence_samples = []
+        for idx, s in enumerate(sentences[:45]):
+            st = s.get("text", "").strip()
+            if st:
+                sentence_samples.append({
+                    "index": idx,
+                    "text": st,
+                    "start": round(float(s.get("start_seconds", s.get("start", 0))), 2),
+                    "end": round(float(s.get("end_seconds", s.get("end", 0))), 2)
+                })
+
+        genre_prompts = {
+            "podcast": "Crispy upfront talking-head podcast / YouTube video. Needs subtle whooshes for transitions, crisp dings for key tips, and modern impacts.",
+            "real-estate": "Luxury real estate property walkthrough. Needs warm ambient chimes, subtle swooshes for room reveals, and soft positive shimmer on price or amenities.",
+            "sports-fitness": "High energy sports and fitness motivation. Needs heavy bass drops, energetic impacts, fast punchy whooshes, and intense beat drops.",
+            "wedding-emotional": "Cinematic romantic wedding video. Needs emotional piano/chime accents, soft sparkle shimmers, wind swell, and gentle romantic transitions.",
+            "drama-natok": "Bangla Drama / Natok / Fiction storytelling. Needs atmospheric drone tension, heartbeat suspense, dramatic hit on emotional twists, and natural room tone transitions.",
+            "corporate-tech": "Modern corporate / tech explainer. Needs clean UI clicks, tech swooshes, polished pop accents, and balanced executive stingers."
+        }
+
+        genre_guidance = genre_prompts.get(genre, genre_prompts["podcast"])
+
+        prompt = f"""You are a master Hollywood Sound Designer & Audio Engineer.
+Analyze this video transcript and generate cinematic SFX (Sound Effects) cue points tailored for:
+Genre: {genre} ({genre_guidance})
+
+Transcript Sentences:
+{json.dumps(sentence_samples, ensure_ascii=False)}
+
+Identify 4 to 12 optimal SFX moments where sound effects will heighten viewer retention, emotion, or clarity.
+Valid Categories & Premiere Colors:
+- "IMPACT" (Color: "RED"): Big hook, shocking revelation, dramatic twist, heavy sub-drop.
+- "WHOOSH" (Color: "CYAN"): Fast transition, topic change, camera wipe, slide in.
+- "SHIMMER" (Color: "YELLOW"): Golden insight, pro tip, price reveal, positive takeaway.
+- "TENSION" (Color: "PURPLE"): Dramatic pause, suspense, serious question, mystery.
+- "COMIC" (Color: "ORANGE"): Laugh, blooper, ironic remark, lighthearted beat.
+- "AMBIENCE" (Color: "GREEN"): Atmospheric shift, room change, emotional bed.
+
+Return strictly a JSON object:
+{{
+  "genre": "{genre}",
+  "moodSummary": "1-sentence summary of the video audio atmosphere and energy curve",
+  "soundDesignTips": [
+    "Ducking tip for background music",
+    "Audio dynamics tip for this genre"
+  ],
+  "sfxCues": [
+    {{
+      "startSeconds": 4.5,
+      "durationSeconds": 1.5,
+      "category": "IMPACT",
+      "sfxName": "Cinematic Sub Boom Impact",
+      "recommendedFile": "sub_boom_impact.wav",
+      "reason": "Emphasizes the bold opening statement",
+      "explanationBn": "বোল্ড স্টেটমেন্টকে জোরদার করার জন্য সিনেমাটিক ইমপ্যাক্ট",
+      "color": "RED"
+    }}
+  ]
+}}
+"""
+        ai_res = cls._call_gemini_json(prompt)
+        if isinstance(ai_res, dict) and "sfxCues" in ai_res and len(ai_res["sfxCues"]) > 0:
+            cues = []
+            for c in ai_res["sfxCues"]:
+                cues.append({
+                    "id": f"sfx_{len(cues)+1}",
+                    "startSeconds": round(float(c.get("startSeconds", 0)), 2),
+                    "durationSeconds": round(float(c.get("durationSeconds", 1.2)), 2),
+                    "category": c.get("category", "WHOOSH").upper(),
+                    "sfxName": c.get("sfxName", "Whoosh Transition"),
+                    "recommendedFile": c.get("recommendedFile", "whoosh_01.wav"),
+                    "reason": c.get("reason", "Visual transition accent"),
+                    "explanationBn": c.get("explanationBn", "ভিজ্যুয়াল ট্রানজিশনের জন্য সাউন্ড ইফেক্ট"),
+                    "color": c.get("color", "CYAN")
+                })
+            return {
+                "genre": genre,
+                "moodSummary": ai_res.get("moodSummary", f"Tailored audio enhancement for {genre}"),
+                "soundDesignTips": ai_res.get("soundDesignTips", ["Keep dialogue centered at -14 to -16 LUFS", "Duck music by -12dB during speech"]),
+                "sfxCues": cues,
+                "engine": "Gemini AI Sound Director"
+            }
+
+        # Offline Contextual Heuristic Engine
+        fallback_cues = []
+        cue_id = 1
+
+        # Heuristic keywords
+        impact_words = {"রহস্য", "ভয়ানক", "সবচেয়ে", "সেরা", "বিশাল", "আসল", "shocking", "huge", "best", "secret", "never", "unbelievable", "গুরুত্বপূর্ণ"}
+        whoosh_words = {"এবার", "পরবর্তী", "শুরু", "next", "then", "let's", "start", "now", "প্রথমত", "দ্বিতীয়ত"}
+        shimmer_words = {"টিপস", "টাকা", "ডলার", "লাভ", "সফল", "টাকা", "price", "tip", "profit", "success", "money", "win", "দাম"}
+        tension_words = {"কেন", "কীভাবে", "সমস্যা", "ভুল", "বিপদ", "why", "how", "danger", "problem", "mistake", "warning"}
+
+        for s in sentence_samples:
+            st = s["text"].lower()
+            start = s["start"]
+            end = s["end"]
+            dur = max(1.0, end - start)
+
+            # Check impact
+            matched_impact = [w for w in impact_words if w in st]
+            if matched_impact and len(fallback_cues) < 10:
+                fallback_cues.append({
+                    "id": f"sfx_{cue_id}",
+                    "startSeconds": start,
+                    "durationSeconds": 1.5,
+                    "category": "IMPACT",
+                    "sfxName": "Cinematic Heavy Impact",
+                    "recommendedFile": "cinematic_impact.wav",
+                    "reason": f"Highlight critical keyword: '{matched_impact[0]}'",
+                    "explanationBn": f"গুরুত্বপূর্ণ শব্দ '{matched_impact[0]}' কে ফোকাস করতে সিনেমাটিক ইমপ্যাক্ট",
+                    "color": "RED"
+                })
+                cue_id += 1
+                continue
+
+            # Check shimmer
+            matched_shimmer = [w for w in shimmer_words if w in st]
+            if matched_shimmer and len(fallback_cues) < 10:
+                fallback_cues.append({
+                    "id": f"sfx_{cue_id}",
+                    "startSeconds": start + 0.3,
+                    "durationSeconds": 1.2,
+                    "category": "SHIMMER",
+                    "sfxName": "Bright Ding & Shimmer",
+                    "recommendedFile": "clean_ding_shimmer.wav",
+                    "reason": f"Emphasizes key insight / value: '{matched_shimmer[0]}'",
+                    "explanationBn": f"মূল পয়েন্ট বা টিপস হাইলাইট করার জন্য ক্লিন শিমার",
+                    "color": "YELLOW"
+                })
+                cue_id += 1
+                continue
+
+            # Check whoosh on transitions
+            matched_whoosh = [w for w in whoosh_words if w in st]
+            if matched_whoosh and len(fallback_cues) < 10:
+                fallback_cues.append({
+                    "id": f"sfx_{cue_id}",
+                    "startSeconds": max(0, start - 0.2),
+                    "durationSeconds": 0.8,
+                    "category": "WHOOSH",
+                    "sfxName": "Smooth Swish / Whoosh",
+                    "recommendedFile": "smooth_whoosh.wav",
+                    "reason": f"Swift topic transition: '{matched_whoosh[0]}'",
+                    "explanationBn": f"টপিক পরিবর্তনের সাথে সাথে স্মুথ ট্রানজিশন সাউন্ড",
+                    "color": "CYAN"
+                })
+                cue_id += 1
+                continue
+
+        # If empty, add opening hook and mid-point cues
+        if not fallback_cues and sentence_samples:
+            fallback_cues.append({
+                "id": "sfx_1",
+                "startSeconds": sentence_samples[0]["start"],
+                "durationSeconds": 1.5,
+                "category": "IMPACT",
+                "sfxName": "Opening Hook Punch",
+                "recommendedFile": "sub_boom_impact.wav",
+                "reason": "Draws initial viewer focus onto the first 3 seconds",
+                "explanationBn": "প্রথম ৩ সেকেন্ডে দর্শকের মনোযোগ আকর্ষণ করার জন্য ওপেনিং পাঞ্চ",
+                "color": "RED"
+            })
+            if len(sentence_samples) > 2:
+                mid_s = sentence_samples[len(sentence_samples) // 2]
+                fallback_cues.append({
+                    "id": "sfx_2",
+                    "startSeconds": mid_s["start"],
+                    "durationSeconds": 1.0,
+                    "category": "WHOOSH",
+                    "sfxName": "Midpoint Whoosh Transition",
+                    "recommendedFile": "smooth_whoosh.wav",
+                    "reason": "Pacing reset at video midpoint",
+                    "explanationBn": "ভিডিওর মাঝামাঝি সময়ে নতুন গতি দেওয়ার জন্য ট্রানজিশন",
+                    "color": "CYAN"
+                })
+
+        return {
+            "genre": genre,
+            "moodSummary": f"Dynamic audio curation engineered for {genre} content",
+            "soundDesignTips": [
+                "Keep main vocal dialog between -14 and -16 LUFS integrated",
+                "Apply gentle 80Hz high-pass to clear low end rumble",
+                "Duck music track by -10dB to -14dB during voice clips"
+            ],
+            "sfxCues": fallback_cues,
+            "engine": "Prismex Smart Heuristic Audio Engine"
+        }

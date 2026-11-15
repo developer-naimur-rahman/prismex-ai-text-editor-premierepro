@@ -16,7 +16,8 @@ import {
   RotateCcw,
   Subtitles,
   Flame,
-  Palette 
+  Palette,
+  Volume2
 } from 'lucide-react';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
@@ -46,6 +47,7 @@ export const NavigationHeader: React.FC = () => {
     { id: 'srt-editor', label: t.tabSrtEditor, icon: <Subtitles size={12} /> },
     { id: 'viral-shorts', label: t.tabViralShorts, icon: <Flame size={12} /> },
     { id: 'color-studio', label: language === 'bn' ? 'এআই কালার স্টুডিও' : 'AI Color Studio', icon: <Palette size={12} /> },
+    { id: 'audio-studio', label: language === 'bn' ? 'এআই অডিও স্টুডিও' : 'AI Audio Studio', icon: <Volume2 size={12} /> },
     { id: 'dashboard', label: t.tabDashboard, icon: <LayoutDashboard size={12} /> },
     { id: 'providers', label: t.tabProviders, icon: <Cpu size={12} /> },
     { id: 'settings', label: t.tabSettings, icon: <Settings size={12} /> },

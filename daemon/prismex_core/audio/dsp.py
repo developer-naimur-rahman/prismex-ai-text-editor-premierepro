@@ -7,7 +7,7 @@ import math
 import wave
 import struct
 from pathlib import Path
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 
 class AudioDSP:
     @staticmethod
@@ -128,3 +128,133 @@ class AudioDSP:
                 })
 
         return silence_intervals
+
+    @classmethod
+    def enhance_audio_track(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        profile_id: str = "crispy-podcast",
+        settings: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Processes voice audio with Hollywood-grade digital audio processing (DSP):
+        - High-pass rumble filter (80Hz)
+        - Profile-specific multi-band surgical equalization (Crisp presence, warmth, boxiness cut)
+        - Sibilance De-Esser
+        - Dynamic voice leveling & compression
+        - Target LUFS loudness normalization (Broadcast standard -14 to -16 LUFS)
+        """
+        import subprocess
+        import os
+        from .extractor import AudioExtractor
+
+        if settings is None:
+            settings = {}
+
+        denoise = float(settings.get("denoise", 50)) / 100.0
+        crisp_air = float(settings.get("crispAir", 60)) / 100.0
+        warmth = float(settings.get("warmth", 50)) / 100.0
+        deesser = float(settings.get("deesser", 50)) / 100.0
+        target_lufs = float(settings.get("targetLufs", -14.0))
+
+        ffmpeg_bin = AudioExtractor.get_ffmpeg_path()
+        if not ffmpeg_bin or not os.path.exists(str(input_path)):
+            return {
+                "success": False,
+                "error": "FFmpeg binary or input audio file not found"
+            }
+
+        filters = []
+        # 1. High-pass filter to clean sub-80Hz rumble, AC humming, and mic stands
+        filters.append("highpass=f=80")
+
+        # 2. Denoise if enabled
+        if denoise > 0.15:
+            filters.append("afftdn=nf=-25")
+
+        # 3. Profile-Specific Surgical Equalization
+        if profile_id == "crispy-podcast":
+            # Cut muddy 250Hz boxiness, boost presence (3.5kHz), boost ultra-crispy air (10-12kHz)
+            air_gain = round(2.0 + (crisp_air * 5.0), 1)
+            warmth_gain = round(1.0 + (warmth * 2.5), 1)
+            filters.append("equalizer=f=250:t=q:w=1.2:g=-2.5")
+            filters.append(f"equalizer=f=180:t=q:w=1.0:g={warmth_gain}")
+            filters.append("equalizer=f=3500:t=q:w=1.0:g=3.5")
+            filters.append(f"equalizer=f=11000:t=h:w=2000:g={air_gain}")
+        elif profile_id == "real-estate":
+            # Warm inviting tone, natural presence, clear ambient room balance
+            warmth_gain = round(2.0 + (warmth * 4.0), 1)
+            air_gain = round(1.0 + (crisp_air * 3.0), 1)
+            filters.append(f"equalizer=f=200:t=q:w=1.0:g={warmth_gain}")
+            filters.append("equalizer=f=4500:t=q:w=1.2:g=2.5")
+            filters.append(f"equalizer=f=9000:t=h:w=2500:g={air_gain}")
+        elif profile_id == "sports-fitness":
+            # Punchy, aggressive mid-range punch to cut through heavy workout music
+            filters.append("equalizer=f=120:t=q:w=1.0:g=3.5")
+            filters.append("equalizer=f=2800:t=q:w=1.0:g=4.5")
+            filters.append("equalizer=f=7500:t=h:w=2000:g=3.0")
+            filters.append("acompressor=threshold=-15dB:ratio=4:attack=10:release=90")
+        elif profile_id == "wedding-emotional":
+            # Silky, warm, delicate vocal contours with gentle high-end shimmer
+            filters.append("equalizer=f=220:t=q:w=1.0:g=2.0")
+            filters.append("equalizer=f=5500:t=q:w=1.2:g=2.2")
+            filters.append("equalizer=f=12000:t=h:w=2500:g=3.0")
+            filters.append("acompressor=threshold=-20dB:ratio=2.5:attack=30:release=200")
+        elif profile_id == "drama-natok":
+            # Naturalistic dialogue, wide dynamic breathing, room-tone preserved
+            filters.append("equalizer=f=300:t=q:w=1.5:g=-1.5")
+            filters.append("equalizer=f=3000:t=q:w=1.0:g=2.0")
+            filters.append("acompressor=threshold=-22dB:ratio=2:attack=25:release=150")
+        elif profile_id == "corporate-tech":
+            # Precision clarity, high speech articulation, balanced neutral contour
+            filters.append("equalizer=f=160:t=q:w=1.2:g=-1.5")
+            filters.append("equalizer=f=3800:t=q:w=1.0:g=3.0")
+            filters.append("equalizer=f=9500:t=h:w=2000:g=2.5")
+            filters.append("acompressor=threshold=-18dB:ratio=3:attack=15:release=120")
+        else:
+            # Default balanced vocal master
+            filters.append("equalizer=f=250:t=q:w=1.0:g=-2.0")
+            filters.append("equalizer=f=3500:t=q:w=1.0:g=3.0")
+            filters.append("equalizer=f=10000:t=h:w=2000:g=2.5")
+
+        # 4. De-Esser for harsh sibilant 's' / 'sh' reduction
+        if deesser > 0.2:
+            filters.append("deesser=i=0.6:m=0.5:f=0.5:s=o")
+
+        # 5. Broadcast Master Limiting & LUFS Loudness
+        filters.append(f"loudnorm=I={target_lufs}:TP=-1.0:LRA=11")
+
+        filter_chain = ",".join(filters)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i", str(input_path),
+            "-af", filter_chain,
+            "-ar", "48000",
+            "-ac", "2",
+            "-c:a", "pcm_s24le",
+            str(output_path)
+        ]
+
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            if res.returncode == 0 and output_path.exists():
+                return {
+                    "success": True,
+                    "outputPath": str(output_path),
+                    "profileId": profile_id,
+                    "targetLufs": target_lufs
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": res.stderr.decode('utf-8', errors='ignore')[-300:]
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e)
+            }
