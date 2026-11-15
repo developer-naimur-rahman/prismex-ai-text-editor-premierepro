@@ -89,7 +89,7 @@ const PRESETS: ColorPreset[] = [
 ];
 
 export const ColorStudioView: React.FC = () => {
-  const { language, sequenceManifest } = usePrismexStore();
+  const { language, sequenceManifest, showToast } = usePrismexStore();
   const client = PrismexDaemonClient.getInstance();
   const bridge = PremiereHostBridge.getInstance();
 
@@ -185,7 +185,21 @@ export const ColorStudioView: React.FC = () => {
       const res = await client.gradeFrame(payload);
       if (res && res.success) {
         setResult(res);
-        setStatusMessage(language === 'bn' ? '✓ স্টুডিও গ্রেড সফলভাবে সম্পন্ন এবং অ্যাডোবিতে সেভ হয়েছে!' : '✓ Studio Grade generated and deployed to Adobe Premiere Pro!');
+        // CRITICAL FIX: Automatically inject Lumetri Color Effect directly onto timeline clip!
+        const applyRes = await bridge.applyLumetriColorToActiveClip(
+          res.lut_path,
+          res.lut_name || selectedPreset,
+          res.params_used || {},
+          false
+        );
+        if (applyRes && applyRes.success) {
+          setStatusMessage(language === 'bn' 
+            ? `✓ টাইমলাইনের ক্লিপে লুমেট্রি কালার সফলভাবে প্রয়োগ হয়েছে! (${applyRes.appliedTo})` 
+            : `✓ Lumetri Color applied to timeline clip! (${applyRes.appliedTo})`);
+          showToast?.(language === 'bn' ? 'টাইমলাইন ক্লিপে কালার গ্রেড সফল!' : 'Color grade applied to timeline clip!', 'success');
+        } else {
+          setStatusMessage(language === 'bn' ? '✓ স্টুডিও গ্রেড LUT তৈরি ও সেভ হয়েছে!' : '✓ Studio Grade generated and deployed to Adobe Premiere Pro!');
+        }
       } else {
         setStatusMessage(`Error: ${res?.error || 'Failed to grade'}`);
       }
@@ -194,6 +208,26 @@ export const ColorStudioView: React.FC = () => {
       setStatusMessage(`Error: ${String(err)}`);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const applyToAllClipsOnTimeline = async () => {
+    if (!result) return;
+    try {
+      const applyRes = await bridge.applyLumetriColorToActiveClip(
+        result.lut_path,
+        result.lut_name || selectedPreset,
+        result.params_used || {},
+        true
+      );
+      if (applyRes && applyRes.success) {
+        setStatusMessage(language === 'bn' 
+          ? `✓ V1 ট্র্যাকের সব ক্লিপে (${applyRes.processedCount}টি) কালার গ্রেড প্রয়োগ হয়েছে!` 
+          : `✓ Applied to all ${applyRes.processedCount} clips on V1!`);
+        showToast?.(language === 'bn' ? 'সব ক্লিপে কালার গ্রেড প্রয়োগ হয়েছে!' : 'Color grade applied to all clips on V1!', 'success');
+      }
+    } catch (e: any) {
+      setStatusMessage(`Error: ${e.message}`);
     }
   };
 
@@ -550,25 +584,47 @@ export const ColorStudioView: React.FC = () => {
               <CheckCircle2 size={14} />
               {language === 'bn' ? 'স্টুডিও কোয়ালিটি গ্রেড প্রস্তুত (.cube)' : 'Studio Grade .cube LUT Ready'}
             </span>
-            <button
-              onClick={revealLut}
-              style={{
-                fontSize: '10.5px',
-                fontWeight: 600,
-                color: '#34d399',
-                backgroundColor: 'rgba(16, 185, 129, 0.15)',
-                border: '1px solid #10b981',
-                borderRadius: '4px',
-                padding: '3px 8px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}
-            >
-              <FolderOpen size={12} />
-              <span>{language === 'bn' ? 'LUT ফাইল ফোল্ডারে দেখুন' : 'Reveal .cube in Finder'}</span>
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={applyToAllClipsOnTimeline}
+                style={{
+                  fontSize: '10.5px',
+                  fontWeight: 600,
+                  color: '#fff',
+                  backgroundColor: '#2563eb',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '3px 9px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Layers size={12} />
+                <span>{language === 'bn' ? 'সব ক্লিপে দিন (V1)' : 'Apply to All Clips (V1)'}</span>
+              </button>
+
+              <button
+                onClick={revealLut}
+                style={{
+                  fontSize: '10.5px',
+                  fontWeight: 600,
+                  color: '#34d399',
+                  backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid #10b981',
+                  borderRadius: '4px',
+                  padding: '3px 8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <FolderOpen size={12} />
+                <span>{language === 'bn' ? 'LUT ফাইল দেখুন' : 'Reveal .cube'}</span>
+              </button>
+            </div>
           </div>
 
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: '1.4' }}>

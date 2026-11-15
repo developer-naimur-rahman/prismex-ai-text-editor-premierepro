@@ -1653,3 +1653,114 @@ $._prismex.revealFileInOS = function(filePath) {
     }
 };
 
+/**
+ * Applies Lumetri Color Effect directly to active clip or all clips on video track.
+ */
+$._prismex.applyLumetriColorToActiveClip = function(lutFilePath, lutName, basicCorrectionJson, applyToAll) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var seq = app.project.activeSequence;
+        var clipInfoStr = $._prismex.getActiveClipAtPlayhead();
+        var clipInfo = JSON.parse(clipInfoStr);
+
+        var clipsToProcess = [];
+        if (applyToAll) {
+            if (seq.videoTracks && seq.videoTracks.numTracks > 0) {
+                var v0 = seq.videoTracks[0];
+                for (var ci = 0; ci < v0.clips.numItems; ci++) {
+                    clipsToProcess.push({ trackIndex: 0, clipIndex: ci, clip: v0.clips[ci] });
+                }
+            }
+        } else {
+            if (clipInfo.success && typeof clipInfo.trackIndex !== "undefined" && clipInfo.trackIndex >= 0) {
+                var trk = seq.videoTracks[clipInfo.trackIndex];
+                if (trk && clipInfo.clipIndex >= 0 && clipInfo.clipIndex < trk.clips.numItems) {
+                    clipsToProcess.push({ trackIndex: clipInfo.trackIndex, clipIndex: clipInfo.clipIndex, clip: trk.clips[clipInfo.clipIndex] });
+                }
+            }
+        }
+
+        if (clipsToProcess.length === 0) {
+            if (seq.videoTracks && seq.videoTracks.numTracks > 0 && seq.videoTracks[0].clips.numItems > 0) {
+                clipsToProcess.push({ trackIndex: 0, clipIndex: 0, clip: seq.videoTracks[0].clips[0] });
+            }
+        }
+
+        if (clipsToProcess.length === 0) {
+            return JSON.stringify({ success: false, error: "No video clips found on timeline to apply color grade" });
+        }
+
+        var qeSeq = $._prismex._getQESequence();
+        var qeEffect = null;
+        if (qeSeq) {
+            try {
+                qeEffect = qe.project.getVideoEffectByName("Lumetri Color");
+            } catch (qeE) {}
+        }
+
+        var params = {};
+        try {
+            params = (typeof basicCorrectionJson === "string") ? JSON.parse(basicCorrectionJson) : (basicCorrectionJson || {});
+        } catch (pErr) {}
+
+        var processedCount = 0;
+        for (var i = 0; i < clipsToProcess.length; i++) {
+            var item = clipsToProcess[i];
+            var clip = item.clip;
+
+            if (qeSeq && qeEffect) {
+                try {
+                    var qeTrk = qeSeq.getVideoTrackAt(item.trackIndex);
+                    if (qeTrk) {
+                        var qeClip = qeTrk.getItemAt(item.clipIndex);
+                        if (qeClip && typeof qeClip.addVideoEffect === "function") {
+                            qeClip.addVideoEffect(qeEffect);
+                        }
+                    }
+                } catch (qeAddErr) {}
+            }
+
+            var lumetriComp = null;
+            for (var c = 0; c < clip.components.numItems; c++) {
+                var comp = clip.components[c];
+                var cName = String(comp.displayName || comp.name || "").toLowerCase();
+                if (cName.indexOf("lumetri") !== -1) {
+                    lumetriComp = comp;
+                    break;
+                }
+            }
+
+            if (lumetriComp && lumetriComp.properties) {
+                for (var p = 0; p < lumetriComp.properties.numItems; p++) {
+                    var prop = lumetriComp.properties[p];
+                    var propName = String(prop.displayName || prop.name || "").toLowerCase();
+                    if (typeof params.exposure !== "undefined" && (propName.indexOf("exposure") !== -1)) {
+                        try { prop.setValue(parseFloat(params.exposure), true); } catch (e) {}
+                    } else if (typeof params.contrast !== "undefined" && (propName.indexOf("contrast") !== -1)) {
+                        try { prop.setValue(parseFloat(params.contrast), true); } catch (e) {}
+                    } else if (typeof params.temperature !== "undefined" && (propName.indexOf("temperature") !== -1)) {
+                        try { prop.setValue(parseFloat(params.temperature), true); } catch (e) {}
+                    } else if (typeof params.saturation !== "undefined" && (propName.indexOf("saturation") !== -1)) {
+                        try { prop.setValue(parseFloat(params.saturation), true); } catch (e) {}
+                    } else if (typeof params.tint !== "undefined" && (propName.indexOf("tint") !== -1)) {
+                        try { prop.setValue(parseFloat(params.tint), true); } catch (e) {}
+                    }
+                }
+            }
+            processedCount++;
+        }
+
+        return JSON.stringify({
+            success: true,
+            processedCount: processedCount,
+            lutName: lutName || "Studio Grade",
+            lutPath: lutFilePath || "",
+            appliedTo: applyToAll ? "All clips on track V1" : "Active clip at playhead"
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+

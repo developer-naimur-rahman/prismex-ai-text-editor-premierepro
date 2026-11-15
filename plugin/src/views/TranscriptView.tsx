@@ -46,6 +46,7 @@ import {
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { copyToClipboard } from '../utils/clipboard';
+import { ClientScriptCopilot } from '../components/ClientScriptCopilot';
 
 interface WordToken {
   id: string;
@@ -1703,6 +1704,9 @@ export const TranscriptView: React.FC = () => {
           </button>
         </div>
 
+        {/* Client Brief & Script Ingestion */}
+        <ClientScriptCopilot />
+
         {/* Step 2 / Other Options Preview */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div style={{ fontSize: '10.5px', fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -1810,6 +1814,9 @@ export const TranscriptView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Client Brief, Script Ingestion & AI Co-Pilot */}
+      <ClientScriptCopilot />
 
       {/* Top Toolbar (Compact Single-Row Unified Bar) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap', flexShrink: 0 }}>

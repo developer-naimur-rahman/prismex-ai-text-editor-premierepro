@@ -147,6 +147,14 @@ interface PrismexState {
   recommendedBgmData: any | null;
   setRecommendedBgmData: (data: any | null) => void;
 
+  // Client Brief & Script Co-Pilot State
+  clientScriptText: string;
+  setClientScriptText: (text: string) => void;
+  clientBriefText: string;
+  setClientBriefText: (text: string) => void;
+  scriptAuditReport: any[];
+  setScriptAuditReport: (report: any[]) => void;
+
   // Global Busy & Activity Tracker
   globalBusyAction: string | null;
   setGlobalBusyAction: (action: string | null) => void;
@@ -235,6 +243,9 @@ export interface PrismexProjectSavePayload {
   detectedSfxCues?: any[];
   soundDesignTips?: string[];
   recommendedBgmData?: any;
+  clientScriptText?: string;
+  clientBriefText?: string;
+  scriptAuditReport?: any[];
 }
 
 export async function persistProjectData(
@@ -289,6 +300,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
           detectedSfxCues: parsed.detectedSfxCues || [],
           soundDesignTips: parsed.soundDesignTips || [],
           recommendedBgmData: parsed.recommendedBgmData || null,
+          clientScriptText: parsed.clientScriptText || '',
+          clientBriefText: parsed.clientBriefText || '',
+          scriptAuditReport: parsed.scriptAuditReport || [],
           jobStatus: 'COMPLETE',
           jobProgress: 100,
           jobMessage: 'Loaded from project cache'
@@ -318,6 +332,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
         detectedSfxCues: daemonData.detectedSfxCues || [],
         soundDesignTips: daemonData.soundDesignTips || [],
         recommendedBgmData: daemonData.recommendedBgmData || null,
+        clientScriptText: daemonData.clientScriptText || '',
+        clientBriefText: daemonData.clientBriefText || '',
+        scriptAuditReport: daemonData.scriptAuditReport || [],
         jobStatus: 'COMPLETE',
         jobProgress: 100,
         jobMessage: 'Loaded from daemon project cache'
@@ -349,6 +366,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
             detectedSfxCues: parsed.detectedSfxCues || [],
             soundDesignTips: parsed.soundDesignTips || [],
             recommendedBgmData: parsed.recommendedBgmData || null,
+            clientScriptText: parsed.clientScriptText || '',
+            clientBriefText: parsed.clientBriefText || '',
+            scriptAuditReport: parsed.scriptAuditReport || [],
             jobStatus: 'COMPLETE',
             jobProgress: 100
           });
@@ -444,6 +464,22 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   recommendedBgmData: null,
   setRecommendedBgmData: (data) => {
     set({ recommendedBgmData: data });
+    get().saveCurrentProjectState();
+  },
+
+  clientScriptText: '',
+  setClientScriptText: (text) => {
+    set({ clientScriptText: text });
+    get().saveCurrentProjectState();
+  },
+  clientBriefText: '',
+  setClientBriefText: (text) => {
+    set({ clientBriefText: text });
+    get().saveCurrentProjectState();
+  },
+  scriptAuditReport: [],
+  setScriptAuditReport: (report) => {
+    set({ scriptAuditReport: report });
     get().saveCurrentProjectState();
   },
 
@@ -764,7 +800,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       audioSettings: s.audioSettings,
       detectedSfxCues: s.detectedSfxCues,
       soundDesignTips: s.soundDesignTips,
-      recommendedBgmData: s.recommendedBgmData
+      recommendedBgmData: s.recommendedBgmData,
+      clientScriptText: s.clientScriptText,
+      clientBriefText: s.clientBriefText,
+      scriptAuditReport: s.scriptAuditReport
     });
   },
 

@@ -2348,3 +2348,390 @@ Return strictly a JSON object:
             "musicTracks": tracks,
             "engine": "Prismex Contextual Music Engine"
         }
+
+    @classmethod
+    def script_aligned_spell_check(
+        cls,
+        words: List[Dict[str, Any]],
+        client_script: str,
+        client_brief: str = "",
+        language: str = "auto"
+    ) -> Dict[str, Any]:
+        """
+        Cross-references transcribed speech words with the client's official script & brief.
+        GUARANTEE: The spoken video dialogue is ground truth! Spoken words are never deleted,
+        and unspoken words are never added. Only phonetic misspellings, brand names, proper
+        nouns, and jargon are aligned while preserving exact 1-to-1 word timecodes.
+        Returns: { words, corrections, auditReport, engine, summary }
+        """
+        if not words:
+            return {"words": [], "corrections": 0, "auditReport": [], "engine": "none", "summary": "কোনো শব্দ পাওয়া যায়নি।"}
+
+        corrected_words = [dict(w) for w in words]
+        audit_report: List[Dict[str, Any]] = []
+        total_corrections = 0
+        gemini_success = False
+
+        script_clean = (client_script or "").strip()
+        brief_clean = (client_brief or "").strip()
+
+        # Build vocabulary lookup table from client script for offline/fallback matching
+        script_words = set(re.findall(r"[\w\u0980-\u09FF]+", f"{script_clean} {brief_clean}"))
+        script_vocab_lower = {w.lower(): w for w in script_words}
+
+        CHUNK_SIZE = 25
+        for i in range(0, len(words), CHUNK_SIZE):
+            chunk = corrected_words[i:i + CHUNK_SIZE]
+            chunk_texts = [str(w.get("word", "")).strip() for w in chunk]
+
+            prompt = (
+                "You are an expert video dialogue proofreader and script alignment engine for Bengali and English.\n"
+                "A client provided an official script and creative brief for this video.\n"
+                f"CLIENT BRIEF:\n\"\"\"{brief_clean[:1500]}\"\"\"\n\n"
+                f"CLIENT SCRIPT:\n\"\"\"{script_clean[:3500]}\"\"\"\n\n"
+                "Here are sequential words transcribed from the spoken audio (Whisper STT):\n"
+                f"{json.dumps(chunk_texts, ensure_ascii=False)}\n\n"
+                "STRICT RULES:\n"
+                "1. Spoken audio is GROUND TRUTH: DO NOT add unspoken dialogue, DO NOT delete words, DO NOT rephrase.\n"
+                "2. Align phonetically misheard words, typos, brand names, proper nouns, and technical jargon with the client script.\n"
+                "3. If a spoken word matches a term in the client script but STT misspelled it (or wrote phonetically in another script), correct the spelling.\n"
+                f"4. You MUST return exactly {len(chunk)} words in the output list.\n\n"
+                "Return strictly a JSON object with this structure:\n"
+                "{\n"
+                f'  "words": ["word_1", "word_2", ..., "word_{len(chunk)}"],\n'
+                '  "audits": [\n'
+                '    {"original": "misspelled_word", "replacement": "corrected_word", "reason": "Brand name alignment", "scriptContext": "excerpt from script"}\n'
+                '  ]\n'
+                "}"
+            )
+
+            res = cls._call_gemini_json(prompt)
+            word_list = None
+            chunk_audits = []
+
+            if isinstance(res, dict):
+                if "words" in res and isinstance(res["words"], list):
+                    word_list = [str(x) for x in res["words"]]
+                if "audits" in res and isinstance(res["audits"], list):
+                    chunk_audits = res["audits"]
+
+            if word_list is not None and len(word_list) == len(chunk):
+                gemini_success = True
+                for c_idx, fixed in enumerate(word_list):
+                    clean_fixed = str(fixed).strip()
+                    orig_w = str(chunk[c_idx].get("word", ""))
+                    if clean_fixed and clean_fixed != orig_w:
+                        start_time = float(chunk[c_idx].get("start_seconds", chunk[c_idx].get("start", 0.0)))
+                        end_time = float(chunk[c_idx].get("end_seconds", chunk[c_idx].get("end", 0.0)))
+                        
+                        chunk[c_idx]["original_word"] = orig_w
+                        chunk[c_idx]["originalWord"] = orig_w
+                        chunk[c_idx]["word"] = clean_fixed
+                        chunk[c_idx]["is_polished"] = True
+                        chunk[c_idx]["isPolished"] = True
+                        chunk[c_idx]["alignment_source"] = "client_script"
+                        total_corrections += 1
+
+                        matching_audit = next((a for a in chunk_audits if str(a.get("original", "")).lower() == orig_w.lower()), None)
+                        reason = matching_audit.get("reason", "ক্লায়েন্ট স্ক্রিপ্ট অনুসারে বানান সংশোধন") if matching_audit else "ক্লায়েন্ট স্ক্রিপ্ট অনুসারে বানান সংশোধন"
+                        snippet = matching_audit.get("scriptContext", "") if matching_audit else ""
+
+                        audit_report.append({
+                            "id": f"audit_{len(audit_report) + 1}",
+                            "original": orig_w,
+                            "replacement": clean_fixed,
+                            "start": round(start_time, 2),
+                            "end": round(end_time, 2),
+                            "reason": reason,
+                            "scriptContext": snippet,
+                            "applied": True
+                        })
+            else:
+                # Offline rule-based fallback against client script vocabulary
+                for c_idx, w in enumerate(chunk):
+                    orig = str(w.get("word", "")).strip()
+                    clean_lookup = re.sub(r"[^\w\u0980-\u09FF]", "", orig).lower()
+                    if clean_lookup in script_vocab_lower:
+                        target_vocab = script_vocab_lower[clean_lookup]
+                        if target_vocab != orig and target_vocab.lower() == orig.lower():
+                            start_time = float(w.get("start_seconds", w.get("start", 0.0)))
+                            end_time = float(w.get("end_seconds", w.get("end", 0.0)))
+                            w["original_word"] = orig
+                            w["originalWord"] = orig
+                            w["word"] = target_vocab
+                            w["is_polished"] = True
+                            w["isPolished"] = True
+                            total_corrections += 1
+                            audit_report.append({
+                                "id": f"audit_{len(audit_report) + 1}",
+                                "original": orig,
+                                "replacement": target_vocab,
+                                "start": round(start_time, 2),
+                                "end": round(end_time, 2),
+                                "reason": "ক্লায়েন্ট স্ক্রিপ্ট ডিকশনারি ক্যাপিটালাইজেশন ও স্পেলিং ম্যাচ",
+                                "scriptContext": target_vocab,
+                                "applied": True
+                            })
+
+        engine_name = "Gemini Flash Script-Grounding" if gemini_success else "Prismex Script Vocabulary Matcher (Offline)"
+        summary_msg = f"{total_corrections}টি শব্দ ক্লায়েন্ট স্ক্রিপ্ট এবং ব্রিফের সাথে মিলিয়ে নিখুঁতভাবে সংশোধন করা হয়েছে।" if total_corrections > 0 else "স্ক্রিপ্ট অনুসারে কোনো নতুন বানান সংশোধনের প্রয়োজন নেই।"
+
+        return {
+            "words": corrected_words,
+            "corrections": total_corrections,
+            "auditReport": audit_report,
+            "engine": engine_name,
+            "summary": summary_msg
+        }
+
+    @classmethod
+    def execute_assistant_command(
+        cls,
+        command: str,
+        words: List[Dict[str, Any]],
+        srt_cues: Optional[List[Dict[str, Any]]] = None,
+        client_script: str = "",
+        client_brief: str = "",
+        language: str = "auto"
+    ) -> Dict[str, Any]:
+        """
+        Interactive Natural Language Assistant / Voice Co-Pilot.
+        Interprets conversational instructions (Bengali or English) from text or voice microphone,
+        grounded in [Client Brief + Official Script + Spoken Transcript + User Command].
+        Can perform:
+        - Text transformations (Strip punctuation/commas, replace words, format numbers/symbols)
+        - Color grading recommendation & parameters (Teal & Orange, Kodak 2383, etc.)
+        - Background music curation tailored to scene/brief
+        - Script alignment & auditing
+        """
+        cmd_clean = (command or "").strip()
+        if not cmd_clean:
+            return {"action": "none", "message": "কোনো কমান্ড পাওয়া যায়নি।"}
+
+        cmd_lower = cmd_clean.lower()
+        modified_words = [dict(w) for w in (words or [])]
+        modified_cues = [dict(c) for c in (srt_cues or [])]
+        audit_records: List[Dict[str, Any]] = []
+
+        # 1. INTENT: Strip Punctuation / Remove Commas & Periods
+        # Matches Bengali: দাড়ি কমা বাদ দাও, কমা মুছে ফেলো, বিরামচিহ্ন সরাও
+        # Matches English: strip punctuation, remove commas and periods, delete punctuation
+        punct_match = re.search(r"(দাঁড়ি|দাড়ি|কমা|বিরামচিহ্ন|punctuation|commas?|periods?|symbols?)", cmd_lower)
+        remove_match = re.search(r"(বাদ|মুছ|ডিলিট|হটাও|ফেলে|remove|strip|clean|delete|without|clear)", cmd_lower)
+
+        if punct_match and remove_match:
+            punct_regex = re.compile(r"[।,?!:;\"'“”‘’—\-\.]")
+            changed_count = 0
+            for w in modified_words:
+                orig_w = str(w.get("word", ""))
+                clean_w = punct_regex.sub("", orig_w).strip()
+                if clean_w != orig_w:
+                    w["original_word"] = orig_w
+                    w["word"] = clean_w
+                    w["is_polished"] = True
+                    changed_count += 1
+
+            for c in modified_cues:
+                orig_txt = str(c.get("text", ""))
+                c["text"] = punct_regex.sub("", orig_txt).strip()
+
+            return {
+                "action": "update_text",
+                "message": f"সফলভাবে {changed_count}টি শব্দ ও SRT থেকে সকল দাড়ি, কমা ও বিরামচিহ্ন মুছে দেওয়া হয়েছে।",
+                "words": modified_words,
+                "srtCues": modified_cues,
+                "corrections": changed_count,
+                "auditReport": [{
+                    "id": "audit_strip_punct",
+                    "original": "বিরামচিহ্নসহ টেক্সট",
+                    "replacement": "ক্লিন টেক্সট (দাড়ি/কমা বিহীন)",
+                    "reason": "ইউজার কমান্ড: দাড়ি-কমা অপসারণ",
+                    "applied": True
+                }]
+            }
+
+        # 2. INTENT: Color Grade Request
+        # Matches: কালার গ্রেড, টিল অ্যান্ড অরেঞ্জ, কোডাক, teal and orange, color grade, look
+        color_match = re.search(r"(কালার|color|grade|লুক|look|lut|cinematic|সিনেমাটিক|teal|orange|kodak|moody|warm)", cmd_lower)
+        if color_match and ("কালার" in cmd_lower or "color" in cmd_lower or "grade" in cmd_lower or "lut" in cmd_lower or "look" in cmd_lower):
+            preset = "teal_orange"
+            preset_title = "Teal & Orange (সিনেমাটিক হাই-কনট্রাস্ট)"
+            lut_file = "Prismex_Teal_Orange.cube"
+            basic_correction = {"exposure": 0.1, "contrast": 16.0, "temperature": 6.0, "tint": -3.0, "saturation": 118.0}
+
+            if "kodak" in cmd_lower or "film" in cmd_lower or "ফিল্ম" in cmd_lower:
+                preset = "kodak_2383"
+                preset_title = "Kodak 2383 Film Print"
+                lut_file = "Prismex_Kodak_2383.cube"
+                basic_correction = {"exposure": 0.05, "contrast": 12.0, "temperature": 4.0, "tint": 1.0, "saturation": 108.0}
+            elif "vintage" in cmd_lower or "warm" in cmd_lower or "উষ্ণ" in cmd_lower:
+                preset = "warm_vintage"
+                preset_title = "Warm Vintage Golden"
+                lut_file = "Prismex_Warm_Vintage.cube"
+                basic_correction = {"exposure": 0.15, "contrast": 10.0, "temperature": 12.0, "tint": 2.0, "saturation": 105.0}
+            elif "moody" in cmd_lower or "noir" in cmd_lower or "মুডি" in cmd_lower:
+                preset = "moody_noir"
+                preset_title = "Moody Drama Noir"
+                lut_file = "Prismex_Moody_Noir.cube"
+                basic_correction = {"exposure": -0.1, "contrast": 22.0, "temperature": -4.0, "tint": -4.0, "saturation": 92.0}
+
+            return {
+                "action": "color_grade",
+                "message": f"আপনার কমান্ড অনুসারে '{preset_title}' কালার গ্রেড নির্বাচন করা হয়েছে। টাইমলাইনের ক্লিপে Lumetri Color Effect প্রয়োগের জন্য প্রস্তুত!",
+                "preset": preset,
+                "lutFileName": lut_file,
+                "basicCorrection": basic_correction
+            }
+
+        # 3. INTENT: Background Music / BGM Suggestion
+        # Matches: ব্যাকগ্রাউন্ড মিউজিক, মিউজিক সাজেস্ট, bgm, music, background track
+        bgm_match = re.search(r"(মিউজিক|music|bgm|গান|soundtrack|sound\s*track|অডিও\s*ট্র্যাক)", cmd_lower)
+        if bgm_match and ("সাজেস্ট" in cmd_lower or "suggest" in cmd_lower or "দাও" in cmd_lower or "খুঁজ" in cmd_lower or "recommend" in cmd_lower or "find" in cmd_lower or "কিউরেট" in cmd_lower):
+            genre = "cinematic"
+            if "lofi" in cmd_lower or "chill" in cmd_lower or "চিল" in cmd_lower:
+                genre = "lofi"
+            elif "tech" in cmd_lower or "আধুনিক" in cmd_lower:
+                genre = "tech"
+            elif "corporate" in cmd_lower or "বিজনেস" in cmd_lower:
+                genre = "corporate"
+            elif "action" in cmd_lower or "rock" in cmd_lower:
+                genre = "energetic"
+
+            rec_res = cls.recommend_background_music(words=words, sentences=[], genre=genre, duration_seconds=60.0)
+            return {
+                "action": "music_recommendation",
+                "message": f"ক্লায়েন্ট ব্রিফ ও স্ক্রিপ্ট অনুসারে '{genre.title()}' ঘরানার ফ্রি ব্যাকগ্রাউন্ড মিউজিক কিউরেট করা হয়েছে। Pixabay ও Chosic থেকে সরাসরি ডাউনলোড করতে পারবেন।",
+                "musicData": rec_res
+            }
+
+        # 4. INTENT: Word Replacement (e.g. "replace X with Y" or "X এর জায়গায় Y বসাও")
+        replace_patterns = [
+            r"(?:replace|change)\s+[\"']?([\w\u0980-\u09FF]+)[\"']?\s+(?:with|to)\s+[\"']?([\w\u0980-\u09FF]+)[\"']?",
+            r"[\"']?([\w\u0980-\u09FF]+)[\"']?\s+(?:এর\s*জায়গায়|পরিবর্তে|বদলে)\s+[\"']?([\w\u0980-\u09FF]+)[\"']?\s*(?:দাও|বসাও|করো|লেখো)"
+        ]
+        target_orig = None
+        target_new = None
+        for pat in replace_patterns:
+            m = re.search(pat, cmd_clean, re.IGNORECASE)
+            if m:
+                target_orig = m.group(1).strip()
+                target_new = m.group(2).strip()
+                break
+
+        if target_orig and target_new:
+            changed_count = 0
+            for w in modified_words:
+                orig_w = str(w.get("word", ""))
+                if orig_w.lower() == target_orig.lower():
+                    w["original_word"] = orig_w
+                    w["word"] = target_new
+                    w["is_polished"] = True
+                    changed_count += 1
+                    audit_records.append({
+                        "id": f"audit_rep_{changed_count}",
+                        "original": orig_w,
+                        "replacement": target_new,
+                        "reason": f"ইউজার কমান্ড: '{target_orig}' -> '{target_new}'",
+                        "applied": True
+                    })
+
+            for c in modified_cues:
+                pattern = re.compile(re.escape(target_orig), re.IGNORECASE)
+                c["text"] = pattern.sub(target_new, str(c.get("text", "")))
+
+            return {
+                "action": "update_text",
+                "message": f"সফলভাবে {changed_count}টি স্থানে '{target_orig}' পরিবর্তন করে '{target_new}' করা হয়েছে।",
+                "words": modified_words,
+                "srtCues": modified_cues,
+                "corrections": changed_count,
+                "auditReport": audit_records
+            }
+
+        # 5. INTENT: Deep Gemini Reasoning for Complex Instructions
+        transcript_sample = " ".join(str(w.get("word", "")) for w in modified_words[:120])
+        prompt = (
+            "You are Prismex AI, an intelligent video editing voice and text co-pilot inside Adobe Premiere Pro.\n"
+            "The user gave this voice or text instruction:\n"
+            f"\"{cmd_clean}\"\n\n"
+            f"CLIENT BRIEF:\n\"\"\"{client_brief[:800]}\"\"\"\n\n"
+            f"CLIENT SCRIPT:\n\"\"\"{client_script[:1200]}\"\"\"\n\n"
+            f"TRANSCRIPT SAMPLE (Whisper STT):\n\"{transcript_sample}\"\n\n"
+            "Analyze the command and respond strictly in JSON with:\n"
+            "{\n"
+            '  "action": "update_text" | "color_grade" | "music_recommendation" | "advice",\n'
+            '  "message": "Polite explanation in Bengali (or English if user asked in English)",\n'
+            '  "replacements": [{"original": "word_to_find", "replacement": "new_word"}],\n'
+            '  "colorPreset": "teal_orange" | "kodak_2383" | "warm_vintage" | "moody_noir" | null,\n'
+            '  "musicGenre": "cinematic" | "lofi" | "tech" | "corporate" | null\n'
+            "}"
+        )
+
+        res = cls._call_gemini_json(prompt)
+        if isinstance(res, dict):
+            act = res.get("action", "advice")
+            msg = res.get("message", "কমান্ডটি সফলভাবে বিশ্লেষণ করা হয়েছে।")
+            reps = res.get("replacements", [])
+            color_p = res.get("colorPreset")
+            music_g = res.get("musicGenre")
+
+            if act == "color_grade" or color_p:
+                preset = color_p or "teal_orange"
+                return {
+                    "action": "color_grade",
+                    "message": msg,
+                    "preset": preset,
+                    "lutFileName": f"Prismex_{preset.title().replace('_', '')}.cube",
+                    "basicCorrection": {"exposure": 0.1, "contrast": 15.0, "temperature": 5.0, "tint": -2.0, "saturation": 115.0}
+                }
+            elif act == "music_recommendation" or music_g:
+                genre = music_g or "cinematic"
+                rec_res = cls.recommend_background_music(words=words, sentences=[], genre=genre, duration_seconds=60.0)
+                return {
+                    "action": "music_recommendation",
+                    "message": msg,
+                    "musicData": rec_res
+                }
+            elif reps and isinstance(reps, list):
+                changed_count = 0
+                for r in reps:
+                    orig_target = str(r.get("original", "")).strip()
+                    new_val = str(r.get("replacement", "")).strip()
+                    if orig_target and new_val:
+                        for w in modified_words:
+                            curr = str(w.get("word", ""))
+                            if curr.lower() == orig_target.lower():
+                                w["original_word"] = curr
+                                w["word"] = new_val
+                                w["is_polished"] = True
+                                changed_count += 1
+                                audit_records.append({
+                                    "id": f"audit_gem_{changed_count}",
+                                    "original": curr,
+                                    "replacement": new_val,
+                                    "reason": "AI কো-পাইলট কনটেক্সচুয়াল কারেকশন",
+                                    "applied": True
+                                })
+                        for c in modified_cues:
+                            pattern = re.compile(re.escape(orig_target), re.IGNORECASE)
+                            c["text"] = pattern.sub(new_val, str(c.get("text", "")))
+
+                return {
+                    "action": "update_text",
+                    "message": msg,
+                    "words": modified_words,
+                    "srtCues": modified_cues,
+                    "corrections": changed_count,
+                    "auditReport": audit_records
+                }
+            else:
+                return {
+                    "action": "advice",
+                    "message": msg
+                }
+
+        # Offline fallback when no model response
+        return {
+            "action": "advice",
+            "message": f"আপনার কমান্ড: '{cmd_clean}' বিবেচনা করা হয়েছে। আরও নির্দিষ্ট অ্যাকশন যেমন 'দাড়ি কমা বাদ দাও', 'X কে Y দিয়ে রিপ্লেস করো', বা 'কালার গ্রেড দাও' বলতে পারেন।"
+        }

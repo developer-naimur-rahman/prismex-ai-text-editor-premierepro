@@ -803,6 +803,61 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async scriptAlignedSpellCheck(
+    words: any[],
+    clientScript: string,
+    clientBrief?: string,
+    language?: string
+  ): Promise<{ words: any[]; corrections: number; auditReport: any[]; engine: string; summary: string } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/ai-script-align`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, clientScript, clientBrief, language })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async executeAssistantCommand(
+    command: string,
+    words: any[],
+    srtCues?: any[],
+    clientScript?: string,
+    clientBrief?: string,
+    language?: string
+  ): Promise<{
+    action: string;
+    message: string;
+    words?: any[];
+    srtCues?: any[];
+    corrections?: number;
+    auditReport?: any[];
+    preset?: string;
+    lutFileName?: string;
+    basicCorrection?: any;
+    musicData?: any;
+  } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/assistant/execute-command`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command, words, srtCues, clientScript, clientBrief, language })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public connectWebSocket(onEvent: (event: any) => void): () => void {
     this.eventListeners.push(onEvent);
 

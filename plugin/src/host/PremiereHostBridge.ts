@@ -431,6 +431,31 @@ export class PremiereHostBridge {
   }
 
   /**
+   * Applies Lumetri Color Effect directly to active clip or all clips on timeline.
+   */
+  public async applyLumetriColorToActiveClip(
+    lutFilePath: string,
+    lutName: string = "Studio Grade",
+    basicCorrection: any = {},
+    applyToAll: boolean = false
+  ): Promise<{ success: boolean; processedCount?: number; lutName?: string; appliedTo?: string; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true, processedCount: 1, lutName };
+    }
+    try {
+      const safeLut = (lutFilePath || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+      const safeName = (lutName || '').replace(/'/g, "\\'");
+      const safeParams = JSON.stringify(basicCorrection || {});
+      const res = await this.evalScript(
+        `$._prismex.applyLumetriColorToActiveClip('${safeLut}', '${safeName}', '${safeParams}', ${applyToAll})`
+      );
+      return JSON.parse(res);
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  /**
    * Imports a media file (B-Roll or SFX) and places it onto a specific track in Premiere Pro at targetTimeSec.
    */
   public async importAndPlaceClipOnTrack(

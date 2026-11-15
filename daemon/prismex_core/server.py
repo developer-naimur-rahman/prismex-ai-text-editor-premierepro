@@ -113,6 +113,20 @@ class SpellCheckRequest(BaseModel):
     words: List[Dict[str, Any]] = []
     language: Optional[str] = "auto"
 
+class ScriptAlignedSpellCheckRequest(BaseModel):
+    words: List[Dict[str, Any]] = []
+    clientScript: str = ""
+    clientBrief: Optional[str] = ""
+    language: Optional[str] = "auto"
+
+class AssistantExecuteCommandRequest(BaseModel):
+    command: str
+    words: List[Dict[str, Any]] = []
+    srtCues: Optional[List[Dict[str, Any]]] = None
+    clientScript: Optional[str] = ""
+    clientBrief: Optional[str] = ""
+    language: Optional[str] = "auto"
+
 class ViralShortsRequest(BaseModel):
     words: List[Dict[str, Any]] = []
     sentences: List[Dict[str, Any]] = []
@@ -710,6 +724,28 @@ def ai_spell_check(req: SpellCheckRequest):
 def ai_polish_sentence(req: SpellCheckRequest):
     """Polishes a single sentence with Google Gemini, preserving exact 1-to-1 word timestamps."""
     return CreativeAI.polish_sentence(req.words, language=req.language or "auto")
+
+@app.post("/api/v1/transcript/ai-script-align")
+def ai_script_align(req: ScriptAlignedSpellCheckRequest):
+    """Aligns Whisper STT transcript with client-provided script and brief, correcting phonetic errors while keeping timeline ground truth."""
+    return CreativeAI.script_aligned_spell_check(
+        words=req.words,
+        client_script=req.clientScript,
+        client_brief=req.clientBrief or "",
+        language=req.language or "auto"
+    )
+
+@app.post("/api/v1/assistant/execute-command")
+def assistant_execute_command(req: AssistantExecuteCommandRequest):
+    """Natural Language & Voice Co-Pilot interpreter for conversational commands across transcript, SRT, color grading, and BGM."""
+    return CreativeAI.execute_assistant_command(
+        command=req.command,
+        words=req.words,
+        srt_cues=req.srtCues,
+        client_script=req.clientScript or "",
+        client_brief=req.clientBrief or "",
+        language=req.language or "auto"
+    )
 
 @app.post("/api/v1/transcript/ai-viral-shorts")
 def ai_viral_shorts(req: ViralShortsRequest):
