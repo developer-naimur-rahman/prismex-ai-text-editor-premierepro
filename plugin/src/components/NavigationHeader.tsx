@@ -17,7 +17,9 @@ import {
   Subtitles,
   Flame,
   Palette,
-  Volume2
+  Volume2,
+  Briefcase,
+  Mic
 } from 'lucide-react';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
@@ -30,7 +32,9 @@ export const NavigationHeader: React.FC = () => {
     daemonOnline,
     reviewItems,
     language,
-    setLanguage
+    setLanguage,
+    isGlobalCopilotOpen,
+    setIsGlobalCopilotOpen
   } = usePrismexStore();
 
   const [undoStatus, setUndoStatus] = React.useState<string | null>(null);
@@ -39,6 +43,7 @@ export const NavigationHeader: React.FC = () => {
   const pendingReviewCount = reviewItems.filter(i => i.status === 'PENDING').length;
 
   const tabs: Array<{ id: ActiveTab; label: string; icon: React.ReactNode; badge?: number }> = [
+    { id: 'client-hub', label: language === 'bn' ? 'ক্লায়েন্ট হাব ও রিভিশন' : 'Client Hub & Revisions', icon: <Briefcase size={12} /> },
     { id: 'transcript', label: t.tabTranscript, icon: <FileText size={12} /> },
     { id: 'magic-cut', label: t.tabMagicCut, icon: <Sparkles size={12} /> },
     { id: 'silence', label: t.tabSilence, icon: <Sliders size={12} /> },
@@ -125,6 +130,29 @@ export const NavigationHeader: React.FC = () => {
             }} />
             <span>{daemonOnline ? t.engineReady : t.engineOffline}</span>
           </div>
+
+          <button
+            onClick={() => setIsGlobalCopilotOpen(!isGlobalCopilotOpen)}
+            title={language === 'bn' ? 'এআই ভয়েস ও টেক্সট কো-পাইলট অন/অফ' : 'Toggle AI Voice & Text Co-Pilot'}
+            style={{
+              backgroundColor: isGlobalCopilotOpen ? '#4f46e5' : 'rgba(99, 102, 241, 0.15)',
+              border: isGlobalCopilotOpen ? '1px solid #818cf8' : '1px solid rgba(99, 102, 241, 0.4)',
+              borderRadius: '10px',
+              color: isGlobalCopilotOpen ? '#ffffff' : '#a5b4fc',
+              fontSize: '9.5px',
+              fontWeight: 700,
+              padding: '2px 8px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              boxShadow: isGlobalCopilotOpen ? '0 0 10px rgba(99, 102, 241, 0.5)' : 'none',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <Mic size={10} />
+            <span>Co-Pilot</span>
+          </button>
 
           <button
             onClick={async () => {

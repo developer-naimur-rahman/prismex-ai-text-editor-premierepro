@@ -21,6 +21,7 @@ import { AppLanguage } from '../i18n/translations';
 
 export type ActiveTab = 
   | 'transcript'
+  | 'client-hub'
   | 'magic-cut' 
   | 'silence' 
   | 'takes' 
@@ -155,6 +156,50 @@ interface PrismexState {
   scriptAuditReport: any[];
   setScriptAuditReport: (report: any[]) => void;
 
+  // Brand Kit & Visual Palette State
+  brandKit: {
+    brandName: string;
+    logoBase64?: string;
+    primaryColor: string;
+    secondaryColor: string;
+    accentColor: string;
+    backgroundColor: string;
+    textColor: string;
+    palette: string[];
+    fontSuggestion?: string;
+  };
+  setBrandKit: (kit: any) => void;
+
+  // Step-by-Step Editing Roadmap & Checklist
+  editingRoadmap: Array<{
+    id: string;
+    step: number;
+    title: string;
+    description: string;
+    category: string;
+    priority?: string;
+    completed: boolean;
+  }>;
+  setEditingRoadmap: (roadmap: any[]) => void;
+  toggleRoadmapItem: (id: string) => void;
+
+  // Client Revisions & Timecode Action Log
+  clientRevisions: Array<{
+    id: string;
+    timecode: string;
+    seconds: number;
+    clientRequest: string;
+    category: string;
+    status: 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+    actionTaken?: string;
+  }>;
+  setClientRevisions: (revs: any[]) => void;
+  updateRevisionStatus: (id: string, status: 'PENDING' | 'IN_PROGRESS' | 'RESOLVED', actionTaken?: string) => void;
+
+  // Global Universal Co-Pilot Floating Drawer
+  isGlobalCopilotOpen: boolean;
+  setIsGlobalCopilotOpen: (open: boolean) => void;
+
   // Global Busy & Activity Tracker
   globalBusyAction: string | null;
   setGlobalBusyAction: (action: string | null) => void;
@@ -246,6 +291,9 @@ export interface PrismexProjectSavePayload {
   clientScriptText?: string;
   clientBriefText?: string;
   scriptAuditReport?: any[];
+  brandKit?: any;
+  editingRoadmap?: any[];
+  clientRevisions?: any[];
 }
 
 export async function persistProjectData(
@@ -303,6 +351,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
           clientScriptText: parsed.clientScriptText || '',
           clientBriefText: parsed.clientBriefText || '',
           scriptAuditReport: parsed.scriptAuditReport || [],
+          brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
+          editingRoadmap: parsed.editingRoadmap || [],
+          clientRevisions: parsed.clientRevisions || [],
           jobStatus: 'COMPLETE',
           jobProgress: 100,
           jobMessage: 'Loaded from project cache'
@@ -335,6 +386,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
         clientScriptText: daemonData.clientScriptText || '',
         clientBriefText: daemonData.clientBriefText || '',
         scriptAuditReport: daemonData.scriptAuditReport || [],
+        brandKit: daemonData.brandKit || usePrismexStore.getState().brandKit,
+        editingRoadmap: daemonData.editingRoadmap || [],
+        clientRevisions: daemonData.clientRevisions || [],
         jobStatus: 'COMPLETE',
         jobProgress: 100,
         jobMessage: 'Loaded from daemon project cache'
@@ -369,6 +423,9 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
             clientScriptText: parsed.clientScriptText || '',
             clientBriefText: parsed.clientBriefText || '',
             scriptAuditReport: parsed.scriptAuditReport || [],
+            brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
+            editingRoadmap: parsed.editingRoadmap || [],
+            clientRevisions: parsed.clientRevisions || [],
             jobStatus: 'COMPLETE',
             jobProgress: 100
           });
@@ -482,6 +539,52 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     set({ scriptAuditReport: report });
     get().saveCurrentProjectState();
   },
+
+  brandKit: {
+    brandName: '',
+    primaryColor: '#1E40AF',
+    secondaryColor: '#3B82F6',
+    accentColor: '#F59E0B',
+    backgroundColor: '#0F172A',
+    textColor: '#F8FAFC',
+    palette: ['#1E40AF', '#3B82F6', '#F59E0B', '#10B981', '#0F172A'],
+    fontSuggestion: 'Inter / Montserrat (Clean Modern Sans-Serif)'
+  },
+  setBrandKit: (kit) => {
+    set((state) => ({ brandKit: { ...state.brandKit, ...kit } }));
+    get().saveCurrentProjectState();
+  },
+
+  editingRoadmap: [],
+  setEditingRoadmap: (roadmap) => {
+    set({ editingRoadmap: roadmap });
+    get().saveCurrentProjectState();
+  },
+  toggleRoadmapItem: (id) => {
+    set((state) => ({
+      editingRoadmap: state.editingRoadmap.map((item) =>
+        item.id === id ? { ...item, completed: !item.completed } : item
+      )
+    }));
+    get().saveCurrentProjectState();
+  },
+
+  clientRevisions: [],
+  setClientRevisions: (revs) => {
+    set({ clientRevisions: revs });
+    get().saveCurrentProjectState();
+  },
+  updateRevisionStatus: (id, status, actionTaken) => {
+    set((state) => ({
+      clientRevisions: state.clientRevisions.map((rev) =>
+        rev.id === id ? { ...rev, status, ...(actionTaken !== undefined ? { actionTaken } : {}) } : rev
+      )
+    }));
+    get().saveCurrentProjectState();
+  },
+
+  isGlobalCopilotOpen: false,
+  setIsGlobalCopilotOpen: (open) => set({ isGlobalCopilotOpen: open }),
 
   globalBusyAction: null,
   setGlobalBusyAction: (action) => set({ globalBusyAction: action }),
@@ -803,7 +906,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       recommendedBgmData: s.recommendedBgmData,
       clientScriptText: s.clientScriptText,
       clientBriefText: s.clientBriefText,
-      scriptAuditReport: s.scriptAuditReport
+      scriptAuditReport: s.scriptAuditReport,
+      brandKit: s.brandKit,
+      editingRoadmap: s.editingRoadmap,
+      clientRevisions: s.clientRevisions
     });
   },
 

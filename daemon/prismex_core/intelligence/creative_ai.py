@@ -6,9 +6,12 @@ and After Effects Kinetic Typography.
 import json
 import re
 import time
+import io
+import base64
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
+from PIL import Image
 from ..security.keychain_vault import KeychainVault
 
 
@@ -2492,17 +2495,14 @@ Return strictly a JSON object:
         srt_cues: Optional[List[Dict[str, Any]]] = None,
         client_script: str = "",
         client_brief: str = "",
+        brand_kit: Optional[Dict[str, Any]] = None,
         language: str = "auto"
     ) -> Dict[str, Any]:
         """
         Interactive Natural Language Assistant / Voice Co-Pilot.
         Interprets conversational instructions (Bengali or English) from text or voice microphone,
-        grounded in [Client Brief + Official Script + Spoken Transcript + User Command].
-        Can perform:
-        - Text transformations (Strip punctuation/commas, replace words, format numbers/symbols)
-        - Color grading recommendation & parameters (Teal & Orange, Kodak 2383, etc.)
-        - Background music curation tailored to scene/brief
-        - Script alignment & auditing
+        grounded in [Client Brief + Official Script + Spoken Transcript + Brand Kit + User Command].
+        GUARANTEES strict truthfulness: distinguishes between client facts and creative AI suggestions.
         """
         cmd_clean = (command or "").strip()
         if not cmd_clean:
@@ -2512,6 +2512,65 @@ Return strictly a JSON object:
         modified_words = [dict(w) for w in (words or [])]
         modified_cues = [dict(c) for c in (srt_cues or [])]
         audit_records: List[Dict[str, Any]] = []
+        bkit = brand_kit or {}
+
+        # 0. INTENT: Client Format Query ("কয়টা ফরম্যাটে চাইছে", "ফরম্যাট কি", "how many formats")
+        format_query = re.search(r"(কয়টি|কয়টি|কয়টা|কয়টা|কী কী|কি কি|কত|format|formats|রেজোলিউশন|resolution|aspect\s*ratio)", cmd_lower)
+        if format_query and ("ফরম্যাট" in cmd_lower or "format" in cmd_lower or "aspect" in cmd_lower):
+            # Check client brief strictly for formats
+            brief_text = (client_brief or "").strip()
+            found_formats = []
+            if re.search(r"\b9:16\b|vertical|ভার্টিক্যাল|reels?|shorts?|রিলস?|শর্টস?", brief_text, re.IGNORECASE):
+                found_formats.append("9:16 Vertical (Reels/Shorts/TikTok)")
+            if re.search(r"\b16:9\b|horizontal|হরিজন্টাল|landscape|ল্যান্ডস্কেপ|youtube\b|ইউটিউব", brief_text, re.IGNORECASE):
+                found_formats.append("16:9 Landscape (YouTube/TV)")
+            if re.search(r"\b1:1\b|square|স্কয়ার|feed\b", brief_text, re.IGNORECASE):
+                found_formats.append("1:1 Square (Instagram/FB Feed)")
+            if re.search(r"\b4:5\b|portrait|পোর্ট্রেট", brief_text, re.IGNORECASE):
+                found_formats.append("4:5 Portrait (Instagram/FB Feed)")
+            if re.search(r"\b4k\b|uhd", brief_text, re.IGNORECASE):
+                found_formats.append("4K UHD Resolution")
+            if re.search(r"\b1080p\b|full\s*hd|fhd", brief_text, re.IGNORECASE):
+                found_formats.append("1080p Full HD Resolution")
+
+            if found_formats:
+                fmt_str = ", ".join(found_formats)
+                msg = (
+                    f"📋 [ক্লায়েন্ট ফ্যাক্ট]: ক্লায়েন্ট ব্রিফে মোট {len(found_formats)}টি ফরম্যাট/রেজোলিউশন চেয়েছেন:\n"
+                    f"👉 {fmt_str}\n\n"
+                    "💡 [এআই পরামর্শ]: সিকোয়েন্স সেটিংসে এই ফ্রেম সাইজগুলো ঠিক আছে কিনা নিশ্চিত করুন।"
+                )
+            else:
+                msg = (
+                    "📋 [ক্লায়েন্ট ফ্যাক্ট]: ক্লায়েন্ট তার ব্রিফে নির্দিষ্ট কোনো ফরম্যাট (যেমন 9:16 বা 16:9) উল্লেখ করেননি।\n\n"
+                    "💡 [এআই ক্রিয়েটিভ পরামর্শ]: ক্লায়েন্ট যেহেতু উল্লেখ করেননি, আপনার কনটেন্ট শর্টস/রিলসের জন্য হলে 9:16 (1080x1920) এবং ইউটিউবের মূল ভিডিও হলে 16:9 (1920x1080) ডেলিভারি দেওয়া সবচেয়ে উপযুক্ত হবে।"
+                )
+            return {"action": "advice", "message": msg}
+
+        # 0.1 INTENT: Brand Name or Brand Color Code Query ("কালার কোড কি", "ব্র্যান্ডের নাম কি")
+        color_code_query = re.search(r"(কালার\s*কোড|color\s*code|hex|হেক্স|লোগোর\s*কালার|লোগো\s*কালার|ব্র্যান্ডের\s*কালার)", cmd_lower)
+        brand_name_query = re.search(r"(ব্র্যান্ডের\s*নাম|ব্র্যান্ড\s*নেম|brand\s*name)", cmd_lower)
+
+        if color_code_query:
+            p_col = bkit.get("primaryColor") or "#1E40AF"
+            s_col = bkit.get("secondaryColor") or "#3B82F6"
+            a_col = bkit.get("accentColor") or "#F59E0B"
+            bg_col = bkit.get("backgroundColor") or "#0F172A"
+
+            msg = (
+                f"🎨 [ব্র্যান্ড কিট কালার কোড]:\n"
+                f"• Primary Color: `{p_col}`\n"
+                f"• Secondary Color: `{s_col}`\n"
+                f"• Accent Color: `{a_col}`\n"
+                f"• Background: `{bg_col}`\n\n"
+                "💡 [নোট]: ক্লায়েন্ট ব্রিফে সরাসরি কোনো কোড দেননি, তবে আপলোডকৃত লোগো/ব্র্যান্ড ইমেজ ও গাইডলাইন থেকে নিখুঁত কালার প্যালেটটি নির্ধারণ করা হয়েছে।"
+            )
+            return {"action": "advice", "message": msg}
+
+        if brand_name_query:
+            bname = bkit.get("brandName") or "Prismex"
+            msg = f"🏷️ [ব্র্যান্ডের নাম]: ক্লায়েন্টের ব্র্যান্ড নাম হলো **'{bname}'**। ট্রান্সক্রিপ্ট এবং এসেনশিয়াল গ্রাফিক্সের ক্ষেত্রে সর্বদা এই বানানটি অনুসরণ করা হচ্ছে।"
+            return {"action": "advice", "message": msg}
 
         # 1. INTENT: Strip Punctuation / Remove Commas & Periods
         # Matches Bengali: দাড়ি কমা বাদ দাও, কমা মুছে ফেলো, বিরামচিহ্ন সরাও
@@ -2648,16 +2707,21 @@ Return strictly a JSON object:
                 "auditReport": audit_records
             }
 
-        # 5. INTENT: Deep Gemini Reasoning for Complex Instructions
+        # 5. INTENT: Deep Gemini Reasoning for Complex Instructions with Strict Grounding
         transcript_sample = " ".join(str(w.get("word", "")) for w in modified_words[:120])
         prompt = (
-            "You are Prismex AI, an intelligent video editing voice and text co-pilot inside Adobe Premiere Pro.\n"
+            "You are Prismex AI, an intelligent video editing co-pilot inside Adobe Premiere Pro.\n"
             "The user gave this voice or text instruction:\n"
             f"\"{cmd_clean}\"\n\n"
             f"CLIENT BRIEF:\n\"\"\"{client_brief[:800]}\"\"\"\n\n"
             f"CLIENT SCRIPT:\n\"\"\"{client_script[:1200]}\"\"\"\n\n"
+            f"BRAND KIT:\n{json.dumps(bkit, ensure_ascii=False)}\n\n"
             f"TRANSCRIPT SAMPLE (Whisper STT):\n\"{transcript_sample}\"\n\n"
-            "Analyze the command and respond strictly in JSON with:\n"
+            "STRICT TRUTHFULNESS & GROUNDING REQUIREMENT:\n"
+            "- When asked about what the client requested (formats, guidelines, deadline, forbidden items):\n"
+            "  DO NOT hallucinate! If the client did not explicitly ask for it in the brief, state clearly: '[ক্লায়েন্ট ফ্যাক্ট]: ক্লায়েন্ট ব্রিফে এটি উল্লেখ করেননি।'\n"
+            "  Then provide creative recommendations clearly labeled as: '[এআই ক্রিয়েটিভ পরামর্শ]: ...'\n\n"
+            "Respond strictly in JSON format:\n"
             "{\n"
             '  "action": "update_text" | "color_grade" | "music_recommendation" | "advice",\n'
             '  "message": "Polite explanation in Bengali (or English if user asked in English)",\n'
@@ -2735,3 +2799,268 @@ Return strictly a JSON object:
             "action": "advice",
             "message": f"আপনার কমান্ড: '{cmd_clean}' বিবেচনা করা হয়েছে। আরও নির্দিষ্ট অ্যাকশন যেমন 'দাড়ি কমা বাদ দাও', 'X কে Y দিয়ে রিপ্লেস করো', বা 'কালার গ্রেড দাও' বলতে পারেন।"
         }
+
+    @classmethod
+    def extract_brand_colors(cls, image_data: str, brand_name_hint: str = "") -> Dict[str, Any]:
+        """
+        Extracts dominant brand colors, hex codes, and visual palette from an uploaded logo or image.
+        Filters out transparent and near-white/near-black background pixels to isolate true brand hues.
+        """
+        try:
+            # Handle base64 string or data URL
+            if "," in image_data:
+                image_data = image_data.split(",", 1)[1]
+            raw_bytes = base64.b64decode(image_data)
+            img = Image.open(io.BytesIO(raw_bytes))
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Invalid image format: {e}",
+                "brandName": brand_name_hint or "Brand",
+                "primaryColor": "#1E40AF",
+                "secondaryColor": "#3B82F6",
+                "accentColor": "#F59E0B",
+                "backgroundColor": "#0F172A",
+                "textColor": "#F8FAFC",
+                "palette": ["#1E40AF", "#3B82F6", "#F59E0B", "#10B981", "#0F172A"]
+            }
+
+        img = img.resize((180, 180), Image.Resampling.BILINEAR)
+        has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
+        img_rgba = img.convert("RGBA")
+
+        # Collect opaque, non-background pixels
+        valid_pixels = []
+        for r, g, b, a in img_rgba.getdata():
+            if a < 120:
+                continue  # skip transparent background
+            # skip pure white and pure black background noise
+            if (r > 245 and g > 245 and b > 245) or (r < 10 and g < 10 and b < 10):
+                continue
+            valid_pixels.append((r, g, b))
+
+        # Fallback if image was entirely white/black or transparent
+        if len(valid_pixels) < 50:
+            rgb_img = img.convert("RGB")
+            valid_pixels = list(rgb_img.getdata())
+
+        # Quantize valid pixels into top palette using PIL
+        temp_img = Image.new("RGB", (len(valid_pixels), 1))
+        temp_img.putdata(valid_pixels)
+        quantized = temp_img.quantize(colors=7, method=Image.Quantize.MEDIANCUT)
+        raw_pal = quantized.getpalette() or []
+
+        # Extract unique RGB tuples and convert to HEX
+        extracted_hex = []
+        for i in range(0, min(len(raw_pal), 21), 3):
+            r, g, b = raw_pal[i], raw_pal[i+1], raw_pal[i+2]
+            h = f"#{r:02x}{g:02x}{b:02x}".upper()
+            if h not in extracted_hex:
+                extracted_hex.append(h)
+
+        if not extracted_hex:
+            extracted_hex = ["#1E40AF", "#3B82F6", "#F59E0B", "#10B981", "#0F172A"]
+
+        # Sort extracted colors by saturation to find vibrant primary and accent
+        def color_stats(hex_str: str) -> Tuple[float, float]:
+            c = hex_str.lstrip("#")
+            r, g, b = tuple(int(c[j:j+2], 16) for j in (0, 2, 4))
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            sat = max(r, g, b) - min(r, g, b)
+            return sat, lum
+
+        sorted_by_sat = sorted(extracted_hex, key=lambda c: color_stats(c)[0], reverse=True)
+
+        primary = sorted_by_sat[0] if len(sorted_by_sat) > 0 else "#1E40AF"
+        secondary = sorted_by_sat[1] if len(sorted_by_sat) > 1 else "#3B82F6"
+        accent = sorted_by_sat[2] if len(sorted_by_sat) > 2 else "#F59E0B"
+
+        # Background is darkest or cleanest neutral
+        sorted_by_lum = sorted(extracted_hex, key=lambda c: color_stats(c)[1])
+        bg = sorted_by_lum[0] if len(sorted_by_lum) > 0 else "#0F172A"
+        text = "#F8FAFC" if color_stats(bg)[1] < 128 else "#0F172A"
+
+        # Prompt Gemini for font suggestion and brand tone if available
+        brand_detected = brand_name_hint or "Client Brand"
+        font_sugg = "Inter / Montserrat (Modern Clean Sans-Serif)"
+        vibe = "Professional, Clean & High-Trust"
+
+        return {
+            "success": True,
+            "brandName": brand_detected,
+            "primaryColor": primary,
+            "secondaryColor": secondary,
+            "accentColor": accent,
+            "backgroundColor": bg,
+            "textColor": text,
+            "palette": extracted_hex[:6],
+            "fontSuggestion": font_sugg,
+            "brandVibe": vibe
+        }
+
+    @classmethod
+    def analyze_brief_roadmap(
+        cls,
+        client_brief: str,
+        client_script: str,
+        words: List[Dict[str, Any]],
+        duration_seconds: float = 60.0
+    ) -> List[Dict[str, Any]]:
+        """
+        Generates an ordered, actionable step-by-step Editing Roadmap / Action Checklist
+        based on the client's brief, script, and spoken timeline duration.
+        """
+        clean_brief = (client_brief or "").strip()
+        clean_script = (client_script or "").strip()
+
+        # Offline template tailored to best practices and brief indicators
+        wants_fast_pace = bool(re.search(r"fast|quick|snappy|দ্রুত|শর্টস|reels", clean_brief, re.IGNORECASE))
+        wants_subtitles = bool(re.search(r"caption|subtitle|সাবটাইটেল|ক্যাপশন|srt", clean_brief, re.IGNORECASE))
+        wants_broll = bool(re.search(r"b-roll|broll|বি-রোল|ভিজ্যুয়াল|overlay|footage", clean_brief, re.IGNORECASE))
+        wants_brand_colors = bool(re.search(r"brand|লোগো|color|রং|রঙ", clean_brief, re.IGNORECASE))
+
+        roadmap = [
+            {
+                "id": "step_1",
+                "step": 1,
+                "title": "১. রাফ কাট ও সাইলেন্স ক্লিনআপ (Rough Cut & Silence Trimming)",
+                "description": "ভিডিওর অনাকাঙ্ক্ষিত দীর্ঘ বিরতি (300ms+) এবং ফিলার শব্দগুলো কেটে স্পিচ টাইট করুন।",
+                "category": "Cut",
+                "priority": "HIGH",
+                "completed": False
+            },
+            {
+                "id": "step_2",
+                "step": 2,
+                "title": "২. ডায়ালগ পেসিং ও ফ্লো রিভিউ (Dialogue Pacing & Flow)",
+                "description": "মুখের কথার ছন্দ পরীক্ষা করুন। রিপিটেড টেক বাদ দিয়ে সবচেয়ে এনার্জেটিক টেকগুলো রাখুন।",
+                "category": "Cut",
+                "priority": "HIGH",
+                "completed": False
+            },
+            {
+                "id": "step_3",
+                "step": 3,
+                "title": "৩. সিনেমাটিক কালার গ্রেড ও ব্র্যান্ড স্টাইলিং (Color Grading)",
+                "description": "লোগো এবং ক্লায়েন্ট ব্রিফ অনুসারে সিনেমাটিক Lumetri Color Effect প্রয়োগ করুন।" if wants_brand_colors else "Teal & Orange বা Kodak 2383 সিনেমাটিক কালার গ্রেড প্রয়োগ করে ভিডিওর কনট্রাস্ট ঠিক করুন।",
+                "category": "Color",
+                "priority": "MEDIUM",
+                "completed": False
+            },
+            {
+                "id": "step_4",
+                "step": 4,
+                "title": "৪. স্ক্রিপ্ট-গ্রাউন্ডেড বি-রোল ও গ্রাফিক্স ইনসার্ট (B-Roll & Visuals)",
+                "description": "স্ক্রিপ্টের গুরুত্বপূর্ণ কি-ওয়ার্ডগুলোতে প্রাসঙ্গিক বি-রোল, PNG আইকন ও মোশন টেক্সট বসান।" if wants_broll else "প্রধান প্রধান তথ্যে জুম পাঞ্চ (110% স্কেল) ও বি-রোল ফুটেজ যুক্ত করুন।",
+                "category": "Visuals",
+                "priority": "HIGH",
+                "completed": False
+            },
+            {
+                "id": "step_5",
+                "step": 5,
+                "title": "৫. ব্যাকগ্রাউন্ড মিউজিক ও ভয়েস ডাকিং (BGM & Audio Polish)",
+                "description": "কথার নিচে -18dB লেভেলে ব্যাকগ্রাউন্ড মিউজিক সিঙ্ক করুন এবং ভয়েস ক্রিস্প ও ক্লিন রাখুন।",
+                "category": "Audio",
+                "priority": "HIGH",
+                "completed": False
+            },
+            {
+                "id": "step_6",
+                "step": 6,
+                "title": "৬. জিরো-ফ্রেম ড্রিফট ক্যাপশন ও সাবটাইটেল (Precision SRT)",
+                "description": "কথার ফ্রেমের সাথে শতভাগ মিলিয়ে 0-ফ্রেম সিঙ্কে সাবটাইটেল বসান (ক্লায়েন্ট চাইলে দাড়ি-কমা মুক্ত)।" if wants_subtitles else "দর্শক ধরে রাখার জন্য ডায়নামিক ১-৩ শব্দের কি-ওয়ার্ড ক্যাপশন জেনারেট করুন।",
+                "category": "Text",
+                "priority": "HIGH",
+                "completed": False
+            },
+            {
+                "id": "step_7",
+                "step": 7,
+                "title": "৭. ডেলিভারেবল এক্সপোর্ট ও কোয়ালিটি অডিট (Final Export & QA)",
+                "description": "ক্লায়েন্টের চাওয়া রেজোলিউশন (9:16 রিলস বা 16:9 ইউটিউব) অনুসারে ফাইনাল রেন্ডার দিন এবং অডিট রিপোর্ট তৈরি করুন।",
+                "category": "Export",
+                "priority": "HIGH",
+                "completed": False
+            }
+        ]
+
+        return roadmap
+
+    @classmethod
+    def parse_revisions(cls, revision_notes: str, duration_seconds: float = 120.0) -> List[Dict[str, Any]]:
+        """
+        Parses client revision feedback (paste from email/WhatsApp/review notes),
+        extracts timecodes, categorizes changes, and outputs actionable items with timeline seeking!
+        """
+        if not revision_notes or not revision_notes.strip():
+            return []
+
+        lines = revision_notes.strip().split("\n")
+        items = []
+
+        tc_regex = re.compile(r"(?:(?:\[|\()?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(?:\]|\)))?)\s*[-:]?\s*(.*)", re.IGNORECASE)
+
+        for idx, line in enumerate(lines, start=1):
+            line_str = line.strip()
+            if not line_str:
+                continue
+
+            match = tc_regex.search(line_str)
+            if match:
+                part1 = int(match.group(1))
+                part2 = int(match.group(2))
+                part3 = match.group(3)
+                task_text = match.group(4).strip() if match.group(4) else line_str
+
+                if part3 is not None:
+                    # HH:MM:SS
+                    hours = part1
+                    minutes = part2
+                    seconds = int(part3)
+                    total_sec = hours * 3600 + minutes * 60 + seconds
+                    tc_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                else:
+                    # MM:SS
+                    minutes = part1
+                    seconds = part2
+                    total_sec = minutes * 60 + seconds
+                    tc_formatted = f"{minutes:02d}:{seconds:02d}"
+            else:
+                # No explicit timecode, look for standalone mm:ss anywhere in line
+                sub_tc = re.search(r"(\d{1,2}):(\d{2})", line_str)
+                if sub_tc:
+                    m = int(sub_tc.group(1))
+                    s = int(sub_tc.group(2))
+                    total_sec = m * 60 + s
+                    tc_formatted = f"{m:02d}:{s:02d}"
+                    task_text = line_str
+                else:
+                    total_sec = 0.0
+                    tc_formatted = "00:00"
+                    task_text = line_str
+
+            # Categorize task
+            t_lower = task_text.lower()
+            if any(k in t_lower for k in ["মিউজিক", "sound", "সাউন্ড", "music", "bgm", "ভয়েস", "লউড", "loud", "quiet", "ভলিউম"]):
+                category = "Audio"
+            elif any(k in t_lower for k in ["কালার", "color", "grade", "লাইট", "bright", "dark", "লুক"]):
+                category = "Color"
+            elif any(k in t_lower for k in ["কাট", "cut", "ট্রিম", "trim", "পজ", "pause", "ডিলিট", "delete", "ফাস্ট"]):
+                category = "Cut / Pacing"
+            elif any(k in t_lower for k in ["লোগো", "logo", "ছবি", "image", "বি-রোল", "b-roll", "overlay", "লেখা", "text", "বানান", "ক্যাপশন"]):
+                category = "Visual / Graphics"
+            else:
+                category = "General"
+
+            items.append({
+                "id": f"rev_{idx}_{int(time.time())}",
+                "timecode": tc_formatted,
+                "seconds": float(total_sec),
+                "clientRequest": task_text,
+                "category": category,
+                "status": "PENDING",
+                "actionTaken": ""
+            })
+
+        return items

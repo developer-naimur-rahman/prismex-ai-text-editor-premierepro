@@ -830,6 +830,7 @@ export class PrismexDaemonClient {
     srtCues?: any[],
     clientScript?: string,
     clientBrief?: string,
+    brandKit?: any,
     language?: string
   ): Promise<{
     action: string;
@@ -847,7 +848,66 @@ export class PrismexDaemonClient {
       const resp = await fetch(`${this.baseUrl}/api/v1/assistant/execute-command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command, words, srtCues, clientScript, clientBrief, language })
+        body: JSON.stringify({ command, words, srtCues, clientScript, clientBrief, brandKit, language })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async extractBrandColors(
+    imageData: string,
+    brandName?: string
+  ): Promise<any | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/client/extract-brand-colors`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageData, brandName })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async analyzeBriefRoadmap(
+    clientBrief: string,
+    clientScript?: string,
+    words: any[] = [],
+    durationSeconds: number = 60.0
+  ): Promise<any[] | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/client/analyze-brief-roadmap`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientBrief, clientScript, words, durationSeconds })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async parseRevisions(
+    revisionNotes: string,
+    durationSeconds: number = 120.0
+  ): Promise<any[] | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/client/parse-revisions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revisionNotes, durationSeconds })
       });
       if (resp.ok) {
         return await resp.json();

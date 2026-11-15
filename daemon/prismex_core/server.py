@@ -125,7 +125,22 @@ class AssistantExecuteCommandRequest(BaseModel):
     srtCues: Optional[List[Dict[str, Any]]] = None
     clientScript: Optional[str] = ""
     clientBrief: Optional[str] = ""
+    brandKit: Optional[Dict[str, Any]] = None
     language: Optional[str] = "auto"
+
+class BrandColorExtractRequest(BaseModel):
+    imageData: str
+    brandName: Optional[str] = ""
+
+class BriefRoadmapRequest(BaseModel):
+    clientBrief: str = ""
+    clientScript: Optional[str] = ""
+    words: List[Dict[str, Any]] = []
+    durationSeconds: Optional[float] = 60.0
+
+class ParseRevisionsRequest(BaseModel):
+    revisionNotes: str
+    durationSeconds: Optional[float] = 120.0
 
 class ViralShortsRequest(BaseModel):
     words: List[Dict[str, Any]] = []
@@ -744,7 +759,31 @@ def assistant_execute_command(req: AssistantExecuteCommandRequest):
         srt_cues=req.srtCues,
         client_script=req.clientScript or "",
         client_brief=req.clientBrief or "",
+        brand_kit=req.brandKit,
         language=req.language or "auto"
+    )
+
+@app.post("/api/v1/client/extract-brand-colors")
+def extract_brand_colors_endpoint(req: BrandColorExtractRequest):
+    """Extracts dominant brand colors, hex codes, and visual palette from an uploaded logo or image."""
+    return CreativeAI.extract_brand_colors(req.imageData, brand_name_hint=req.brandName or "")
+
+@app.post("/api/v1/client/analyze-brief-roadmap")
+def analyze_brief_roadmap_endpoint(req: BriefRoadmapRequest):
+    """Generates an ordered, actionable step-by-step Editing Roadmap / Action Checklist from client brief."""
+    return CreativeAI.analyze_brief_roadmap(
+        client_brief=req.clientBrief,
+        client_script=req.clientScript or "",
+        words=req.words,
+        duration_seconds=req.durationSeconds or 60.0
+    )
+
+@app.post("/api/v1/client/parse-revisions")
+def parse_revisions_endpoint(req: ParseRevisionsRequest):
+    """Parses client revision notes, extracts timecodes, and categorizes changes for 1-click timeline seeking."""
+    return CreativeAI.parse_revisions(
+        revision_notes=req.revisionNotes,
+        duration_seconds=req.durationSeconds or 120.0
     )
 
 @app.post("/api/v1/transcript/ai-viral-shorts")

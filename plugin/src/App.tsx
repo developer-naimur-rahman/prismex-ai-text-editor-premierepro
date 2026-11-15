@@ -15,7 +15,9 @@ import { SrtEditorView } from './views/SrtEditorView';
 import { ViralShortsView } from './views/ViralShortsView';
 import { ColorStudioView } from './views/ColorStudioView';
 import { AudioStudioView } from './views/AudioStudioView';
-import { Loader2, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react';
+import { ClientHubView } from './views/ClientHubView';
+import { GlobalCopilotDrawer } from './components/GlobalCopilotDrawer';
+import { Loader2, CheckCircle2, AlertCircle, Sparkles, Mic } from 'lucide-react';
 
 export const App: React.FC = () => {
   const { 
@@ -32,7 +34,9 @@ export const App: React.FC = () => {
     jobMessage,
     jobStatus,
     globalBusyAction,
-    globalToast
+    globalToast,
+    isGlobalCopilotOpen,
+    setIsGlobalCopilotOpen
   } = usePrismexStore();
 
   useEffect(() => {
@@ -262,6 +266,7 @@ export const App: React.FC = () => {
       )}
 
       <main style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {activeTab === 'client-hub' && <ClientHubView />}
         {activeTab === 'transcript' && <TranscriptView />}
         {activeTab === 'magic-cut' && <MagicRoughCutView />}
         {activeTab === 'silence' && <SilenceView />}
@@ -277,6 +282,37 @@ export const App: React.FC = () => {
         {activeTab === 'settings' && <SettingsView />}
         {activeTab === 'history' && <HistoryView />}
       </main>
+
+      {/* Universal Floating Co-Pilot Action Button */}
+      <button
+        onClick={() => setIsGlobalCopilotOpen(!isGlobalCopilotOpen)}
+        title={language === 'bn' ? 'এআই কো-পাইলট ওপেন করুন' : 'Open AI Co-Pilot'}
+        style={{
+          position: 'fixed',
+          bottom: '16px',
+          right: '16px',
+          zIndex: 9990,
+          backgroundColor: '#4f46e5',
+          color: '#ffffff',
+          borderRadius: '50px',
+          padding: '8px 14px',
+          border: '1px solid rgba(255, 255, 255, 0.25)',
+          boxShadow: '0 8px 24px rgba(79, 70, 229, 0.5)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          fontSize: '11px',
+          fontWeight: 700,
+          cursor: 'pointer',
+          transition: 'all 0.2s ease'
+        }}
+      >
+        <Mic size={14} />
+        <span>Co-Pilot</span>
+      </button>
+
+      {/* Universal Co-Pilot Drawer */}
+      <GlobalCopilotDrawer />
     </div>
   );
 };
