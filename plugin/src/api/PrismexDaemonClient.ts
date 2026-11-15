@@ -831,6 +831,8 @@ export class PrismexDaemonClient {
     clientScript?: string,
     clientBrief?: string,
     brandKit?: any,
+    sequenceManifest?: any,
+    clientRevisions?: any[],
     language?: string
   ): Promise<{
     action: string;
@@ -848,7 +850,17 @@ export class PrismexDaemonClient {
       const resp = await fetch(`${this.baseUrl}/api/v1/assistant/execute-command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command, words, srtCues, clientScript, clientBrief, brandKit, language })
+        body: JSON.stringify({
+          command,
+          words,
+          srtCues,
+          clientScript,
+          clientBrief,
+          brandKit,
+          sequenceManifest,
+          clientRevisions,
+          language
+        })
       });
       if (resp.ok) {
         return await resp.json();

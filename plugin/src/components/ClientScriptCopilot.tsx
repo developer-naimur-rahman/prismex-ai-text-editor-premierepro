@@ -50,6 +50,8 @@ export const ClientScriptCopilot: React.FC = () => {
     setClientBriefText,
     scriptAuditReport,
     setScriptAuditReport,
+    brandKit,
+    clientRevisions,
     setRecommendedBgmData,
     setActiveTab,
     showToast
@@ -310,6 +312,9 @@ export const ClientScriptCopilot: React.FC = () => {
         srtCues || [],
         scriptDraft || clientScriptText || '',
         briefDraft || clientBriefText || '',
+        brandKit,
+        sequenceManifest,
+        clientRevisions,
         language
       );
 

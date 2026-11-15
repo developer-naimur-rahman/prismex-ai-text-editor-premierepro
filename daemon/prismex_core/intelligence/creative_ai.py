@@ -13,6 +13,7 @@ import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 from ..security.keychain_vault import KeychainVault
+from .editor_knowledge import EditorKnowledgeBase
 
 
 class CreativeAI:
@@ -2496,6 +2497,8 @@ Return strictly a JSON object:
         client_script: str = "",
         client_brief: str = "",
         brand_kit: Optional[Dict[str, Any]] = None,
+        sequence_manifest: Optional[Dict[str, Any]] = None,
+        client_revisions: Optional[List[Dict[str, Any]]] = None,
         language: str = "auto"
     ) -> Dict[str, Any]:
         """
@@ -2513,6 +2516,21 @@ Return strictly a JSON object:
         modified_cues = [dict(c) for c in (srt_cues or [])]
         audit_records: List[Dict[str, Any]] = []
         bkit = brand_kit or {}
+
+        # ---------------- TIER 1: DETERMINISTIC LOCAL KNOWLEDGE & PROJECT MEMORY ----------------
+        # Instant sub-millisecond answer without external API call or risk of hallucination
+        local_ans = EditorKnowledgeBase.lookup_local_knowledge(
+            cmd_clean,
+            project_context={
+                "brandKit": bkit,
+                "clientBrief": client_brief,
+                "clientScript": client_script,
+                "clientRevisions": client_revisions or [],
+                "sequenceManifest": sequence_manifest or {}
+            }
+        )
+        if local_ans:
+            return local_ans
 
         # 0. INTENT: Client Format Query ("কয়টা ফরম্যাটে চাইছে", "ফরম্যাট কি", "how many formats")
         format_query = re.search(r"(কয়টি|কয়টি|কয়টা|কয়টা|কী কী|কি কি|কত|format|formats|রেজোলিউশন|resolution|aspect\s*ratio)", cmd_lower)

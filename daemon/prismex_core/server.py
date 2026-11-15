@@ -126,6 +126,8 @@ class AssistantExecuteCommandRequest(BaseModel):
     clientScript: Optional[str] = ""
     clientBrief: Optional[str] = ""
     brandKit: Optional[Dict[str, Any]] = None
+    sequenceManifest: Optional[Dict[str, Any]] = None
+    clientRevisions: Optional[List[Dict[str, Any]]] = None
     language: Optional[str] = "auto"
 
 class BrandColorExtractRequest(BaseModel):
@@ -760,6 +762,8 @@ def assistant_execute_command(req: AssistantExecuteCommandRequest):
         client_script=req.clientScript or "",
         client_brief=req.clientBrief or "",
         brand_kit=req.brandKit,
+        sequence_manifest=req.sequenceManifest,
+        client_revisions=req.clientRevisions,
         language=req.language or "auto"
     )
 

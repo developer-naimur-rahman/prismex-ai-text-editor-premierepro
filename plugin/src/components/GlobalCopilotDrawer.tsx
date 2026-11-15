@@ -28,6 +28,8 @@ export const GlobalCopilotDrawer: React.FC = () => {
     clientScriptText,
     clientBriefText,
     brandKit,
+    sequenceManifest,
+    clientRevisions,
     setRecommendedBgmData,
     setScriptAuditReport,
     showToast
@@ -155,6 +157,8 @@ export const GlobalCopilotDrawer: React.FC = () => {
         clientScriptText || '',
         clientBriefText || '',
         brandKit,
+        sequenceManifest,
+        clientRevisions,
         language
       );
 
