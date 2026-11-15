@@ -137,6 +137,18 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async getJob(jobId: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/jobs/${jobId}`);
+      if (res.ok) {
+        return await res.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public async aiAnalyzeTranscript(words: any[], prompt?: string): Promise<{ summary: string; engine: string; wpm?: number; totalWords?: number; fillerCount?: number } | null> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/transcript/ai-analyze`, {

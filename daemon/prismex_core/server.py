@@ -42,6 +42,7 @@ app.add_middleware(
 )
 
 db = DatabaseManager()
+_completed_job_results: Dict[str, Any] = {}
 
 # In-memory WebSocket connection manager
 class WebSocketManager:
@@ -235,7 +236,10 @@ def get_job_status(job_id: str):
     job = db.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    res = dict(job)
+    if job_id in _completed_job_results:
+        res["result"] = _completed_job_results[job_id]
+    return res
 
 @app.get("/api/v1/review-queue/{job_id}")
 def get_review_queue(job_id: str):
@@ -271,32 +275,58 @@ def apply_review_queue(job_id: str, payload: ApplyReviewRequest):
 # ----------------- Master Pipeline Orchestrator -----------------
 
 async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutRequest):
-    """Executes the master 14-stage Magic Rough Cut pipeline asynchronously."""
+    """Executes the master 14-stage Magic Rough Cut pipeline asynchronously without blocking the event loop."""
     try:
         # Stage 1 & 2: Audio Extraction across all timeline clips
+        db.save_job({
+            "id": job_id,
+            "sequence_id": req.sequenceGuid,
+            "job_type": "MAGIC_ROUGH_CUT",
+            "status": "EXTRACTING",
+            "progress_percent": 15.0
+        })
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
-            "params": {"jobId": job_id, "stage": "EXTRACTING", "percent": 15.0, "message": "Extracting & stitching audio from sequence clips..."}
+            "params": {"jobId": job_id, "stage": "EXTRACTING", "percent": 15.0, "message": "Extracting audio from sequence clips..."}
         })
         
-        extracted_wav = AudioExtractor.extract_sequence_timeline_audio(req.sourceClips, req.durationSeconds)
+        extracted_wav = await asyncio.to_thread(
+            AudioExtractor.extract_sequence_timeline_audio, req.sourceClips, req.durationSeconds
+        )
 
         # Stage 3 & 4: Transcription across entire sequence timeline
+        db.save_job({
+            "id": job_id,
+            "sequence_id": req.sequenceGuid,
+            "job_type": "MAGIC_ROUGH_CUT",
+            "status": "TRANSCRIBING",
+            "progress_percent": 45.0
+        })
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
             "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": "Transcribing speech with Apple Silicon MLX-Whisper..."}
         })
-        transcript_data = TranscriptionService.transcribe(extracted_wav, max(0.1, req.durationSeconds))
+        transcript_data = await asyncio.to_thread(
+            TranscriptionService.transcribe, extracted_wav, max(0.1, req.durationSeconds)
+        )
 
         # Stage 5 & 6: Silence Detection
+        db.save_job({
+            "id": job_id,
+            "sequence_id": req.sequenceGuid,
+            "job_type": "MAGIC_ROUGH_CUT",
+            "status": "ANALYZING",
+            "progress_percent": 65.0
+        })
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
             "params": {"jobId": job_id, "stage": "ANALYZING", "percent": 65.0, "message": "Analyzing voice energy, noise floor, and dead air..."}
         })
-        silence_cuts = AudioDSP.detect_silence_intervals(
+        silence_cuts = await asyncio.to_thread(
+            AudioDSP.detect_silence_intervals,
             extracted_wav,
             threshold_dbfs=req.silenceThresholdDbfs,
             min_silence_duration_ms=req.minSilenceDurationMs,
@@ -322,6 +352,13 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             })
 
         # Stage 7 & 8: Repeated Take Clustering
+        db.save_job({
+            "id": job_id,
+            "sequence_id": req.sequenceGuid,
+            "job_type": "MAGIC_ROUGH_CUT",
+            "status": "ANALYZING",
+            "progress_percent": 80.0
+        })
         await ws_manager.broadcast({
             "jsonrpc": "2.0",
             "method": "job.progress",
@@ -361,7 +398,29 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
         # Cleanup ephemeral audio
         AudioExtractor.cleanup_temp_file(extracted_wav)
 
-        # Update Job Status
+        summary_report = {
+            "initialDuration": req.durationSeconds,
+            "finalDuration": round(max(0.0, req.durationSeconds - total_time_saved), 2),
+            "timeSaved": round(total_time_saved, 2),
+            "cutsExecuted": len(cuts),
+            "syncVerified": True
+        }
+
+        # Store in-memory result for immediate HTTP polling
+        _completed_job_results[job_id] = {
+            "jobId": job_id,
+            "executionMode": req.executionMode,
+            "totalCuts": len(cuts),
+            "timeSavedSeconds": round(total_time_saved, 2),
+            "cuts": cuts,
+            "words": transcript_data.get("words", []),
+            "sentences": transcript_data.get("sentences", []),
+            "silences": silence_cuts,
+            "reviewItems": all_suggestions,
+            "summary": summary_report
+        }
+
+        # Update Job Status in DB
         db.save_job({
             "id": job_id,
             "sequence_id": req.sequenceGuid,
@@ -370,7 +429,7 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             "progress_percent": 100.0
         })
 
-        # Broadcast completion
+        # Broadcast completion via WebSocket
         # Save to persistent daemon project cache
         try:
             clean_seq_name = re.sub(r"(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+", "", req.sequenceGuid).strip()
@@ -386,8 +445,8 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
                     "totalCuts": len(cuts),
                     "summary": summary_report,
                 }, cf, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
+        except Exception as cache_err:
+            print(f"[execute_magic_rough_cut_pipeline] Cache save error: {cache_err}")
 
         await ws_manager.broadcast({
             "jsonrpc": "2.0",

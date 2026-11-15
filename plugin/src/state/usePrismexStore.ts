@@ -707,8 +707,64 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     });
 
     const res = await client.startMagicRoughCut(seq, 'TRANSCRIBE_ONLY', get().activeProfileId, get().silenceSettings);
-    if (res) {
-      set({ currentJobId: res.jobId });
+    if (res && res.jobId) {
+      const jobId = res.jobId;
+      set({ currentJobId: jobId });
+
+      // Active fallback poller guarantees UI never gets stuck at 5% even if WebSocket drops
+      let pollAttempts = 0;
+      const pollInterval = setInterval(async () => {
+        pollAttempts++;
+        const job = await client.getJob(jobId);
+        if (job) {
+          const status = job.status;
+          const pct = Math.max(get().jobProgress, job.progress_percent || 15);
+
+          if (status === 'EXTRACTING') {
+            set({ jobProgress: pct, jobMessage: 'Extracting & stitching audio from sequence clips...', jobStatus: 'EXTRACTING' });
+          } else if (status === 'TRANSCRIBING') {
+            set({ jobProgress: pct, jobMessage: 'Transcribing speech with Apple Silicon MLX-Whisper...', jobStatus: 'TRANSCRIBING' });
+          } else if (status === 'ANALYZING') {
+            set({ jobProgress: pct, jobMessage: 'Analyzing voice energy, noise floor & silences...', jobStatus: 'ANALYZING' });
+          } else if (status === 'COMPLETE') {
+            clearInterval(pollInterval);
+            const rData = job.result;
+            const words = rData?.words || [];
+            const sentences = rData?.sentences || [];
+            const silences = rData?.silences || [];
+
+            set({
+              jobProgress: 100,
+              jobMessage: 'Transcription complete!',
+              jobStatus: 'COMPLETE',
+              transcriptWords: words,
+              transcriptSentences: sentences,
+              detectedSilences: silences
+            });
+
+            const currentSeq = get().sequenceManifest;
+            if (currentSeq) {
+              persistProjectData(currentSeq, {
+                words,
+                sentences,
+                silences,
+                reviewItems: rData?.reviewItems || []
+              });
+            }
+          } else if (status === 'FAILED') {
+            clearInterval(pollInterval);
+            set({
+              jobProgress: 0,
+              jobMessage: `Transcription failed: ${job.error_message || 'Unknown error'}`,
+              jobStatus: 'INITIALIZING'
+            });
+          }
+        }
+
+        if (pollAttempts > 180) { // 3 minutes timeout
+          clearInterval(pollInterval);
+        }
+      }, 1200);
     }
   },
 
