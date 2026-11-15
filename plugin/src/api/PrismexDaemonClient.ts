@@ -303,6 +303,60 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async getColorPresets(): Promise<any[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/color/presets`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.presets || [];
+      }
+      return [];
+    } catch (err) {
+      console.error('[PrismexDaemonClient] getColorPresets failed:', err);
+      return [];
+    }
+  }
+
+  public async gradeFrame(payload: {
+    frameBase64?: string;
+    framePath?: string;
+    referenceBase64?: string;
+    stylePreset: string;
+    userPrompt?: string;
+    intensity: number;
+    lockSkinTones: boolean;
+    customName?: string;
+  }): Promise<any> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/color/grade-frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) return await res.json();
+      const errText = await res.text();
+      return { success: false, error: errText };
+    } catch (err: any) {
+      console.error('[PrismexDaemonClient] gradeFrame failed:', err);
+      return { success: false, error: String(err) };
+    }
+  }
+
+  public async extractFrameFFmpeg(mediaPath: string, seconds: number): Promise<{ success: boolean; frameBase64: string; framePath: string } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/color/extract-frame-ffmpeg`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mediaPath, seconds })
+      });
+      if (res.ok) return await res.json();
+      return null;
+    } catch (err) {
+      console.error('[PrismexDaemonClient] extractFrameFFmpeg failed:', err);
+      return null;
+    }
+  }
+
   public async getReviewQueue(jobId: string): Promise<ReviewQueueItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/review-queue/${jobId}`);

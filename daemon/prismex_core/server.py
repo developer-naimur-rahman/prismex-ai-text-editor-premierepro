@@ -841,6 +841,95 @@ def open_urls_api(req: OpenUrlsRequest):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+# ----------------- Studio Grade AI Colorist Endpoints -----------------
+
+class ColorGradeApiRequest(BaseModel):
+    frameBase64: Optional[str] = None
+    framePath: Optional[str] = None
+    referenceBase64: Optional[str] = None
+    stylePreset: str = "auto_balance"
+    userPrompt: Optional[str] = None
+    intensity: float = 1.0
+    lockSkinTones: bool = True
+    customName: Optional[str] = None
+
+@app.get("/api/v1/color/presets")
+async def get_color_presets():
+    from .color.film_emulation import STUDIO_PRESETS
+    return {"presets": list(STUDIO_PRESETS.values())}
+
+@app.post("/api/v1/color/grade-frame")
+async def grade_frame_api(req: ColorGradeApiRequest):
+    from .color.color_service import ColorStudioService
+    try:
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if not gemini_key:
+            try:
+                providers = db.get_providers()
+                for p in providers:
+                    if p.get("id") == "google-gemini" or p.get("name") == "Google Gemini":
+                        gemini_key = p.get("api_key")
+                        break
+            except Exception:
+                pass
+
+        result = await ColorStudioService.grade_frame(
+            frame_base64=req.frameBase64,
+            frame_path=req.framePath,
+            reference_base64=req.referenceBase64,
+            style_preset=req.stylePreset,
+            user_prompt=req.userPrompt,
+            intensity=req.intensity,
+            lock_skin_tones=req.lockSkinTones,
+            gemini_api_key=gemini_key,
+            custom_name=req.customName
+        )
+        return result
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ExtractFrameRequest(BaseModel):
+    mediaPath: str
+    seconds: float = 0.0
+
+@app.post("/api/v1/color/extract-frame-ffmpeg")
+async def extract_frame_ffmpeg(req: ExtractFrameRequest):
+    """
+    Extracts a pristine 1-frame snapshot from source video at the exact time offset using ffmpeg.
+    """
+    import subprocess
+    import tempfile
+    import base64
+    from ..config import HOME_DIR
+
+    if not os.path.exists(req.mediaPath):
+        raise HTTPException(status_code=404, detail="Media file not found")
+
+    tmp_out = HOME_DIR / ".prismex" / "luts" / "current_frame.jpg"
+    tmp_out.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-ss", str(max(0.0, req.seconds)),
+        "-i", req.mediaPath,
+        "-vframes", "1",
+        "-q:v", "2",
+        str(tmp_out)
+    ]
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run, cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
+        )
+        if tmp_out.exists():
+            img_bytes = tmp_out.read_bytes()
+            b64 = "data:image/jpeg;base64," + base64.b64encode(img_bytes).decode("utf-8")
+            return {"success": True, "frameBase64": b64, "framePath": str(tmp_out)}
+        raise HTTPException(status_code=500, detail="Frame not generated")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"FFmpeg error: {e}")
+
 # ----------------- WebSocket Endpoint -----------------
 
 @app.websocket("/ws/events")

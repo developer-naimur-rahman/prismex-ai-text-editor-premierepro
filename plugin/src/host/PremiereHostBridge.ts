@@ -834,6 +834,47 @@ export class PremiereHostBridge {
     }
   }
 
+  public async getActiveClipAtPlayhead(): Promise<any> {
+    if (!this.isCEP) {
+      return { success: true, timelineSeconds: 12.5, clipName: "MockClip_01.mp4", mediaPath: "" };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const res = await this.evalScript(`$._prismex.getActiveClipAtPlayhead()`);
+      return JSON.parse(res || '{"success":false}');
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  public async exportFrameAtPlayhead(outputPath: string): Promise<any> {
+    if (!this.isCEP) {
+      return { success: true, domExported: false, outputPath, mock: true };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const escapedPath = outputPath.replace(/\\/g, '/');
+      const res = await this.evalScript(`$._prismex.exportFrameAtPlayhead("${escapedPath}")`);
+      return JSON.parse(res || '{"success":false}');
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  public async revealFileInOS(filePath: string): Promise<any> {
+    if (!this.isCEP) {
+      return { success: true };
+    }
+    try {
+      await this.ensureCEPScriptLoaded();
+      const escapedPath = filePath.replace(/\\/g, '/');
+      const res = await this.evalScript(`$._prismex.revealFileInOS("${escapedPath}")`);
+      return JSON.parse(res || '{"success":false}');
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
   private getMockSequenceManifest(): SequenceManifest {
     return {
       premiereProjectId: "mock_project_001",

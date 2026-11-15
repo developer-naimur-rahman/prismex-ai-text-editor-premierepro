@@ -1416,3 +1416,113 @@ $._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endS
     }];
     return $._prismex.createMultiSegmentVerticalShortSequence(shortTitle, JSON.stringify(segs), markersJson);
 };
+
+// ----------------- Studio Grade AI Color Studio Functions -----------------
+
+$._prismex.getActiveClipAtPlayhead = function() {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var seq = app.project.activeSequence;
+        var TICKS = $._prismex.TICKS_PER_SECOND;
+        var currentTicks = parseFloat(seq.getPlayerPosition().ticks);
+        var currentSeconds = currentTicks / TICKS;
+
+        // Search video tracks from top to bottom (V3, V2, V1)
+        for (var t = seq.videoTracks.numTracks - 1; t >= 0; t--) {
+            var track = seq.videoTracks[t];
+            for (var c = 0; c < track.clips.numItems; c++) {
+                var clip = track.clips[c];
+                var cStart = parseFloat(clip.start.ticks);
+                var cEnd = parseFloat(clip.end.ticks);
+                if (currentTicks >= cStart && currentTicks < cEnd) {
+                    var mediaPath = "";
+                    try {
+                        if (clip.projectItem) {
+                            mediaPath = clip.projectItem.getMediaPath();
+                        }
+                    } catch (mErr) {}
+
+                    var inTicks = parseFloat(clip.inPoint.ticks);
+                    var offsetTicks = currentTicks - cStart;
+                    var sourceFrameSeconds = (inTicks + offsetTicks) / TICKS;
+
+                    return JSON.stringify({
+                        success: true,
+                        trackIndex: t,
+                        clipIndex: c,
+                        clipName: clip.name,
+                        mediaPath: mediaPath,
+                        timelineSeconds: currentSeconds,
+                        sourceFrameSeconds: sourceFrameSeconds,
+                        startSeconds: cStart / TICKS,
+                        endSeconds: cEnd / TICKS
+                    });
+                }
+            }
+        }
+        return JSON.stringify({
+            success: true,
+            timelineSeconds: currentSeconds,
+            mediaPath: "",
+            clipName: ""
+        });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+};
+
+$._prismex.exportFrameAtPlayhead = function(outputPath) {
+    try {
+        if (!app.project || !app.project.activeSequence) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var seq = app.project.activeSequence;
+        var pos = seq.getPlayerPosition();
+        
+        var exported = false;
+        // Try exportFramePNG if supported
+        try {
+            if (typeof seq.exportFramePNG === "function") {
+                var timeDisplay = pos.getFormatted(seq.getSettings().videoDisplayFormat, seq.timebase);
+                exported = seq.exportFramePNG(timeDisplay, outputPath);
+            }
+        } catch (e1) {
+            exported = false;
+        }
+
+        // Also get active clip metadata for instant FFmpeg fallback
+        var clipInfoStr = $._prismex.getActiveClipAtPlayhead();
+        var clipInfo = JSON.parse(clipInfoStr);
+
+        return JSON.stringify({
+            success: true,
+            domExported: exported,
+            outputPath: outputPath,
+            clipInfo: clipInfo
+        });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+};
+
+$._prismex.revealFileInOS = function(filePath) {
+    try {
+        var f = new File(filePath);
+        if (f.exists) {
+            f.execute();
+            return JSON.stringify({ success: true });
+        }
+        // If file not found, try folder
+        var folder = new Folder(filePath);
+        if (folder.exists) {
+            folder.execute();
+            return JSON.stringify({ success: true });
+        }
+        return JSON.stringify({ success: false, error: "File not found" });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
+    }
+};
+

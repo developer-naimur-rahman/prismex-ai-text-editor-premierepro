@@ -15,7 +15,8 @@ import {
   RefreshCw,
   RotateCcw,
   Subtitles,
-  Flame 
+  Flame,
+  Palette 
 } from 'lucide-react';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 
@@ -44,6 +45,7 @@ export const NavigationHeader: React.FC = () => {
     { id: 'review-queue', label: t.tabReviewQueue, icon: <CheckSquare size={12} />, badge: pendingReviewCount },
     { id: 'srt-editor', label: t.tabSrtEditor, icon: <Subtitles size={12} /> },
     { id: 'viral-shorts', label: t.tabViralShorts, icon: <Flame size={12} /> },
+    { id: 'color-studio', label: language === 'bn' ? 'এআই কালার স্টুডিও' : 'AI Color Studio', icon: <Palette size={12} /> },
     { id: 'dashboard', label: t.tabDashboard, icon: <LayoutDashboard size={12} /> },
     { id: 'providers', label: t.tabProviders, icon: <Cpu size={12} /> },
     { id: 'settings', label: t.tabSettings, icon: <Settings size={12} /> },
@@ -80,7 +82,7 @@ export const NavigationHeader: React.FC = () => {
           }}>
             P
           </div>
-          <span style={{ fontWeight: 600, fontSize: '12px', letterSpacing: '0.3px' }}>Prismex AI Editor</span>
+          <span style={{ fontWeight: 600, fontSize: '12px', letterSpacing: '0.3px' }}>Prismex Studio Editor</span>
         </div>
 
         {/* Sequence & Status Pills */}

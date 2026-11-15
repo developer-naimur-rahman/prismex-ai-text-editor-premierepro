@@ -13,6 +13,7 @@ import { SettingsView } from './views/SettingsView';
 import { HistoryView } from './views/HistoryView';
 import { SrtEditorView } from './views/SrtEditorView';
 import { ViralShortsView } from './views/ViralShortsView';
+import { ColorStudioView } from './views/ColorStudioView';
 
 export const App: React.FC = () => {
   const { activeTab, language, initApp } = usePrismexStore();
@@ -43,6 +44,7 @@ export const App: React.FC = () => {
         {activeTab === 'review-queue' && <ReviewQueueView />}
         {activeTab === 'srt-editor' && <SrtEditorView />}
         {activeTab === 'viral-shorts' && <ViralShortsView />}
+        {activeTab === 'color-studio' && <ColorStudioView />}
         {activeTab === 'dashboard' && <DashboardView />}
         {activeTab === 'providers' && <ProvidersView />}
         {activeTab === 'profiles' && <ProfilesView />}
