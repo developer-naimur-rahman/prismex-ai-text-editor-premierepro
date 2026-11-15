@@ -5,6 +5,7 @@ Specification: docs/03-SYSTEM-ARCHITECTURE.md & docs/23-API-REFERENCE.md
 Binds strictly to loopback interface 127.0.0.1:49152 with zero external exposure.
 """
 
+import os
 import asyncio
 import json
 import uuid
@@ -90,6 +91,8 @@ class MagicRoughCutRequest(BaseModel):
     preCutPaddingMs: int = 80
     postCutPaddingMs: int = 120
     preserveBreathing: bool = True
+    whisperModel: Optional[str] = "base"
+    whisperLanguage: Optional[str] = "auto"
 
 class TranscriptAIAnalyzeRequest(BaseModel):
     words: List[Dict[str, Any]] = []
@@ -274,9 +277,69 @@ def apply_review_queue(job_id: str, payload: ApplyReviewRequest):
 
 # ----------------- Master Pipeline Orchestrator -----------------
 
+_transcription_semaphore = asyncio.Semaphore(1)
+
 async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutRequest):
     """Executes the master 14-stage Magic Rough Cut pipeline asynchronously without blocking the event loop."""
     try:
+        # Check if timeline has any audio/video clips
+        if not req.sourceClips or len(req.sourceClips) == 0:
+            print(f"[execute_magic_rough_cut_pipeline] Empty timeline detected for {req.sequenceGuid}. Clearing transcript.")
+            clean_seq_name = re.sub(r"(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+", "", req.sequenceGuid).strip()
+            safe_proj = re.sub(r"[^\w_-]", "_", req.premiereProjectId or "current_project")
+            safe_seq = re.sub(r"[^\w_-]", "_", clean_seq_name or "sequence")
+            cache_file = PROJECT_CACHE_DIR / f"{safe_proj}__{safe_seq}.json"
+            if cache_file.exists():
+                try:
+                    cache_file.unlink()
+                except Exception:
+                    pass
+
+            empty_summary = {
+                "initialDuration": 0.0,
+                "finalDuration": 0.0,
+                "timeSaved": 0.0,
+                "cutsExecuted": 0,
+                "syncVerified": True
+            }
+
+            _completed_job_results[job_id] = {
+                "jobId": job_id,
+                "executionMode": req.executionMode,
+                "totalCuts": 0,
+                "timeSavedSeconds": 0.0,
+                "cuts": [],
+                "words": [],
+                "sentences": [],
+                "silences": [],
+                "reviewItems": [],
+                "summary": empty_summary
+            }
+
+            db.save_job({
+                "id": job_id,
+                "sequence_id": req.sequenceGuid,
+                "job_type": "MAGIC_ROUGH_CUT",
+                "status": "COMPLETE",
+                "progress_percent": 100.0
+            })
+
+            await ws_manager.broadcast({
+                "jsonrpc": "2.0",
+                "method": "job.completed",
+                "params": {
+                    "jobId": job_id,
+                    "executionMode": req.executionMode,
+                    "totalCuts": 0,
+                    "timeSavedSeconds": 0.0,
+                    "cuts": [],
+                    "words": [],
+                    "sentences": [],
+                    "silences": []
+                }
+            })
+            return
+
         # Stage 1 & 2: Audio Extraction across all timeline clips
         db.save_job({
             "id": job_id,
@@ -291,26 +354,31 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
             "params": {"jobId": job_id, "stage": "EXTRACTING", "percent": 15.0, "message": "Extracting audio from sequence clips..."}
         })
         
-        extracted_wav = await asyncio.to_thread(
-            AudioExtractor.extract_sequence_timeline_audio, req.sourceClips, req.durationSeconds
-        )
+        async with _transcription_semaphore:
+            extracted_wav = await asyncio.to_thread(
+                AudioExtractor.extract_sequence_timeline_audio, req.sourceClips, req.durationSeconds
+            )
 
-        # Stage 3 & 4: Transcription across entire sequence timeline
-        db.save_job({
-            "id": job_id,
-            "sequence_id": req.sequenceGuid,
-            "job_type": "MAGIC_ROUGH_CUT",
-            "status": "TRANSCRIBING",
-            "progress_percent": 45.0
-        })
-        await ws_manager.broadcast({
-            "jsonrpc": "2.0",
-            "method": "job.progress",
-            "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": "Transcribing speech with Apple Silicon MLX-Whisper..."}
-        })
-        transcript_data = await asyncio.to_thread(
-            TranscriptionService.transcribe, extracted_wav, max(0.1, req.durationSeconds)
-        )
+            # Stage 3 & 4: Transcription across entire sequence timeline
+            db.save_job({
+                "id": job_id,
+                "sequence_id": req.sequenceGuid,
+                "job_type": "MAGIC_ROUGH_CUT",
+                "status": "TRANSCRIBING",
+                "progress_percent": 45.0
+            })
+            await ws_manager.broadcast({
+                "jsonrpc": "2.0",
+                "method": "job.progress",
+                "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": f"Transcribing speech with Apple Silicon MLX-Whisper ({req.whisperModel or 'base'})..."}
+            })
+            transcript_data = await asyncio.to_thread(
+                TranscriptionService.transcribe,
+                extracted_wav,
+                max(0.1, req.durationSeconds),
+                model_name=req.whisperModel or "base",
+                language=req.whisperLanguage or "auto"
+            )
 
         # Stage 5 & 6: Silence Detection
         db.save_job({

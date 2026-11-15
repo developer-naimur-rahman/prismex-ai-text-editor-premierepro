@@ -5352,7 +5352,11 @@ export const TranscriptView: React.FC = () => {
               <button
                 onClick={async () => {
                   setShowReTranscribeModal(false);
-                  await transcribeSequence();
+                  await transcribeSequence({
+                    model: reTranscribeModel,
+                    language: reTranscribeLang,
+                    forceReTranscribe: true
+                  });
                 }}
                 style={{
                   backgroundColor: '#dc2626',

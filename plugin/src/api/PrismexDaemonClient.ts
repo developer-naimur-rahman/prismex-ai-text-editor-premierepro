@@ -101,6 +101,10 @@ export class PrismexDaemonClient {
       preCutPaddingMs: number;
       postCutPaddingMs: number;
       preserveBreathing: boolean;
+    },
+    transcribeOptions?: {
+      model?: string;
+      language?: string;
     }
   ): Promise<{ jobId: string } | null> {
     try {
@@ -117,6 +121,8 @@ export class PrismexDaemonClient {
           executionMode: mode,
           profileId,
           sourceClips: manifest.sourceClips,
+          whisperModel: transcribeOptions?.model || 'base',
+          whisperLanguage: transcribeOptions?.language || 'auto',
           ...(silenceSettings ? {
             silenceThresholdDbfs: silenceSettings.thresholdDbfs,
             minSilenceDurationMs: silenceSettings.minDurationMs,

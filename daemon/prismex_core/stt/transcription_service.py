@@ -12,7 +12,7 @@ import os
 import wave
 import struct
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from ..router.ai_router import AIRouter
 from ..router.provider_registry import TaskCapability
 
@@ -51,13 +51,29 @@ class TranscriptionService:
     def transcribe(
         cls, 
         audio_wav_path: Path, 
-        sequence_duration_seconds: float = 60.0
+        sequence_duration_seconds: float = 60.0,
+        model_name: str = "base",
+        language: Optional[str] = "auto"
     ) -> Dict[str, Any]:
         """
         Transcribes audio file into structured transcript with sentences and words.
+        Supports Apple Silicon MLX-Whisper models (large-v3, medium, small, base).
         """
-        engine = AIRouter.select_engine(TaskCapability.SPEECH_TO_TEXT)
-        provider_id = engine["provider_id"]
+        model_map = {
+            "large-v3": "mlx-community/whisper-large-v3-mlx",
+            "medium": "mlx-community/whisper-medium-mlx",
+            "small": "mlx-community/whisper-small-mlx",
+            "base": "mlx-community/whisper-base-mlx",
+            "tiny": "mlx-community/whisper-tiny-mlx"
+        }
+        repo = model_map.get(model_name, "mlx-community/whisper-base-mlx")
+
+        whisper_kwargs: Dict[str, Any] = {
+            "path_or_hf_repo": repo,
+            "word_timestamps": True
+        }
+        if language and language != "auto":
+            whisper_kwargs["language"] = language
 
         # Attempt real Apple Silicon MLX-Whisper transcription when audio has signal
         if cls._has_audible_signal(audio_wav_path):
@@ -66,15 +82,29 @@ class TranscriptionService:
                 audio_np = cls._load_wav_as_float32(audio_wav_path)
                 result = mlx_whisper.transcribe(
                     audio_np,
-                    path_or_hf_repo="mlx-community/whisper-base-mlx",
-                    word_timestamps=True
+                    **whisper_kwargs
                 )
-                return cls._format_whisper_result(result, sequence_duration_seconds, "mlx-whisper-local")
+                return cls._format_whisper_result(result, sequence_duration_seconds, f"mlx-whisper-{model_name}")
             except Exception as e:
-                print(f"[TranscriptionService] MLX-Whisper fallback: {e}")
+                print(f"[TranscriptionService] MLX-Whisper {model_name} error: {e}")
+                # Fallback to base model if large/medium fails
+                if repo != "mlx-community/whisper-base-mlx":
+                    try:
+                        whisper_kwargs["path_or_hf_repo"] = "mlx-community/whisper-base-mlx"
+                        result = mlx_whisper.transcribe(audio_np, **whisper_kwargs)
+                        return cls._format_whisper_result(result, sequence_duration_seconds, "mlx-whisper-base")
+                    except Exception as e2:
+                        print(f"[TranscriptionService] Base fallback error: {e2}")
 
-        # In test or silent environments, generate deterministic structured transcript
-        return cls._generate_structured_transcript(sequence_duration_seconds, provider_id)
+        # When there is NO audio signal (silent timeline or empty audio):
+        # Return clean empty transcript! NEVER return dummy sample text on real timelines!
+        return {
+            "engine_used": f"mlx-whisper-{model_name}",
+            "language": language or "auto",
+            "total_duration_seconds": round(sequence_duration_seconds, 2),
+            "sentences": [],
+            "words": []
+        }
 
     @classmethod
     def _format_whisper_result(

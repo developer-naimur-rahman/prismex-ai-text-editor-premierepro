@@ -112,7 +112,7 @@ interface PrismexState {
 
   // Actions
   initApp: () => Promise<void>;
-  transcribeSequence: () => Promise<void>;
+  transcribeSequence: (options?: any) => Promise<void>;
   deleteTranscriptRange: (startSeconds: number, endSeconds: number) => Promise<void>;
   cutAllSilencesNow: () => Promise<void>;
   runTranscriptAI: (prompt?: string) => Promise<void>;
@@ -299,6 +299,34 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
   return false;
 }
 
+export async function clearPersistedProjectData(manifest: any): Promise<void> {
+  if (!manifest) return;
+  const cleanKey = getCleanSequenceKey(manifest.cleanSequenceName || manifest.sequenceName);
+  const projId = manifest.premiereProjectId || 'current_project';
+
+  // 1. ExtendScript Project Folder Cache
+  try {
+    await hostBridge.saveProjectCache(cleanKey, "{}");
+  } catch {}
+
+  // 2. Local Daemon Persistent Storage
+  try {
+    await client.saveProjectCache(projId, cleanKey, {
+      words: [],
+      sentences: [],
+      silences: [],
+      reviewItems: []
+    });
+  } catch {}
+
+  // 3. LocalStorage
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(`prismex_proj_${cleanKey}`);
+    } catch {}
+  }
+}
+
 export const usePrismexStore = create<PrismexState>((set, get) => ({
   activeTab: 'transcript',
   setActiveTab: (tab) => set({ activeTab: tab }),
@@ -349,6 +377,26 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     if (isDifferentSeq) {
       set({ sequenceManifest: newManifest, sequenceChangedNotice: null });
 
+      const hasClips = Boolean(newManifest.sourceClips && newManifest.sourceClips.length > 0 && newManifest.durationSeconds > 0.1);
+      if (!hasClips) {
+        set({
+          transcriptWords: [],
+          transcriptSentences: [],
+          detectedSilences: [],
+          reviewItems: [],
+          scriptDirectives: {},
+          customMarkers: [],
+          viralTopics: [],
+          viralShorts: [],
+          srtCues: [],
+          jobStatus: 'INITIALIZING',
+          jobProgress: 0,
+          jobMessage: 'Timeline is empty'
+        });
+        await clearPersistedProjectData(newManifest);
+        return;
+      }
+
       // Check if cache exists for this sequence
       const loaded = await loadPersistedProjectData(newManifest);
       if (loaded) {
@@ -373,7 +421,6 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       });
 
       // Auto-transcribe if enabled and sequence has audio clips / duration
-      const hasClips = (newManifest.sourceClips && newManifest.sourceClips.length > 0) || (newManifest.durationSeconds > 0.5);
       if (hasClips && get().autoTranscribeNewSequences) {
         await get().transcribeSequence();
       }
@@ -381,22 +428,47 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       // Same sequence: update manifest
       set({ sequenceManifest: newManifest });
 
-      const hasClips = (newManifest.sourceClips && newManifest.sourceClips.length > 0) || (newManifest.durationSeconds > 0.5);
+      const hasClips = Boolean(newManifest.sourceClips && newManifest.sourceClips.length > 0 && newManifest.durationSeconds > 0.1);
 
-      // If transcript was empty and clips were just dropped in
+      // CASE 1: All clips were deleted from the timeline!
+      if (!hasClips) {
+        if (get().transcriptWords.length > 0) {
+          set({
+            transcriptWords: [],
+            transcriptSentences: [],
+            detectedSilences: [],
+            reviewItems: [],
+            scriptDirectives: {},
+            customMarkers: [],
+            viralTopics: [],
+            viralShorts: [],
+            srtCues: [],
+            jobStatus: 'INITIALIZING',
+            jobProgress: 0,
+            sequenceChangedNotice: null,
+            jobMessage: 'Timeline is empty'
+          });
+          await clearPersistedProjectData(newManifest);
+        }
+        return;
+      }
+
+      // CASE 2: If transcript was empty and clips were just dropped in
       if (get().transcriptWords.length === 0 && hasClips && get().autoTranscribeNewSequences) {
         await get().transcribeSequence();
         return;
       }
 
-      // Check if new clips were added to an already transcribed sequence
+      // CASE 3: Timeline clips changed (clips added or deleted)
       const oldClipsCount = (currentSeq?.sourceClips || []).length;
       const newClipsCount = (newManifest.sourceClips || []).length;
       const oldDur = currentSeq?.durationSeconds || 0;
       const newDur = newManifest.durationSeconds || 0;
 
-      if (get().transcriptWords.length > 0 && (newClipsCount > oldClipsCount || newDur - oldDur > 2.0)) {
-        set({ sequenceChangedNotice: `${Math.round(newDur)}s` });
+      if (get().transcriptWords.length > 0) {
+        if (newClipsCount !== oldClipsCount || Math.abs(newDur - oldDur) > 1.5) {
+          set({ sequenceChangedNotice: `${Math.round(newDur)}s` });
+        }
       }
     }
   },
@@ -694,20 +766,61 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     });
   },
 
-  transcribeSequence: async () => {
+  transcribeSequence: async (options?: any) => {
+    const opts = (options && typeof options === 'object' && !('nativeEvent' in options)) ? options : undefined;
     const seq = await hostBridge.getActiveSequenceManifest();
     if (!seq) {
       alert('Please open an active sequence in Adobe Premiere Pro first.');
       return;
     }
+
+    const hasClips = Boolean(seq.sourceClips && seq.sourceClips.length > 0 && seq.durationSeconds > 0.1);
+    if (!hasClips) {
+      await clearPersistedProjectData(seq);
+      set({
+        sequenceManifest: seq,
+        transcriptWords: [],
+        transcriptSentences: [],
+        detectedSilences: [],
+        reviewItems: [],
+        sequenceChangedNotice: null,
+        jobProgress: 0,
+        jobStatus: 'INITIALIZING',
+        jobMessage: get().language === 'bn' ? 'টাইমলাইন খালি। কোনো ক্লিপ নেই।' : 'Timeline is empty. No clips found to transcribe.'
+      });
+      alert(get().language === 'bn' ? 'টাইমলাইনে কোনো অডিও বা ভিডিও ক্লিপ পাওয়া যায়নি! অনুগ্রহ করে প্রথমে টাইমলাইনে ক্লিপ যুক্ত করুন।' : 'Timeline has no audio or video clips. Please add media clips first.');
+      return;
+    }
+
+    if (opts?.forceReTranscribe) {
+      await clearPersistedProjectData(seq);
+      set({
+        transcriptWords: [],
+        transcriptSentences: [],
+        detectedSilences: [],
+        reviewItems: [],
+        sequenceChangedNotice: null
+      });
+    }
+
     set({
       sequenceManifest: seq,
+      sequenceChangedNotice: null,
       jobProgress: 5,
-      jobMessage: 'Extracting audio & transcribing speech...',
+      jobMessage: get().language === 'bn' ? 'অডিও এক্সট্র্যাক্ট ও ট্রান্সক্রাইব করা হচ্ছে...' : 'Extracting audio & transcribing speech...',
       jobStatus: 'TRANSCRIBING'
     });
 
-    const res = await client.startMagicRoughCut(seq, 'TRANSCRIBE_ONLY', get().activeProfileId, get().silenceSettings);
+    const res = await client.startMagicRoughCut(
+      seq,
+      'TRANSCRIBE_ONLY',
+      get().activeProfileId,
+      get().silenceSettings,
+      {
+        model: opts?.model || 'base',
+        language: opts?.language || 'auto'
+      }
+    );
     if (res && res.jobId) {
       const jobId = res.jobId;
       set({ currentJobId: jobId });
