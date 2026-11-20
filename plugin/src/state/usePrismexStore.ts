@@ -978,7 +978,59 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       const isBn = get().language === 'bn';
       const seqDisplay = newManifest.cleanSequenceName || newManifest.sequenceName;
 
-      // 1. Immediately show smooth sequence transition overlay & progress
+      // 1. AUTO-SAVE PREVIOUS SEQUENCE:
+      // If user had a sequence open with transcript data, save it immediately before switching!
+      const prevWords = get().transcriptWords;
+      const prevSentences = get().transcriptSentences;
+      const prevSilences = get().detectedSilences;
+      const prevReviewItems = get().reviewItems;
+      const prevScriptDirectives = get().scriptDirectives;
+      const prevCustomMarkers = get().customMarkers;
+      const prevViralTopics = get().viralTopics;
+      const prevViralShorts = get().viralShorts;
+      const prevSrtCues = get().srtCues;
+      const prevAudioSettings = get().audioSettings;
+      const prevDetectedSfxCues = get().detectedSfxCues;
+      const prevSoundDesignTips = get().soundDesignTips;
+      const prevRecommendedBgmData = get().recommendedBgmData;
+      const prevClientScriptText = get().clientScriptText;
+      const prevClientBriefText = get().clientBriefText;
+      const prevScriptAuditReport = get().scriptAuditReport;
+      const prevBrandKit = get().brandKit;
+      const prevEditingRoadmap = get().editingRoadmap;
+      const prevClientRevisions = get().clientRevisions;
+      const prevClientDossier = get().clientDossier;
+
+      if (currentSeq && prevWords && prevWords.length > 0) {
+        try {
+          await persistProjectData(currentSeq, {
+            words: prevWords,
+            sentences: prevSentences,
+            silences: prevSilences,
+            reviewItems: prevReviewItems,
+            scriptDirectives: prevScriptDirectives,
+            customMarkers: prevCustomMarkers,
+            viralTopics: prevViralTopics,
+            viralShorts: prevViralShorts,
+            srtCues: prevSrtCues,
+            audioSettings: prevAudioSettings,
+            detectedSfxCues: prevDetectedSfxCues,
+            soundDesignTips: prevSoundDesignTips,
+            recommendedBgmData: prevRecommendedBgmData,
+            clientScriptText: prevClientScriptText,
+            clientBriefText: prevClientBriefText,
+            scriptAuditReport: prevScriptAuditReport,
+            brandKit: prevBrandKit,
+            editingRoadmap: prevEditingRoadmap,
+            clientRevisions: prevClientRevisions,
+            clientDossier: prevClientDossier
+          });
+        } catch (savePrevErr) {
+          console.warn('Failed to auto-save previous sequence data before switch:', savePrevErr);
+        }
+      }
+
+      // 2. Immediately show smooth sequence transition overlay & progress
       set({
         isSwitchingSequence: true,
         sequenceSwitchProgress: 25,
@@ -1018,7 +1070,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         sequenceSwitchMessage: isBn ? 'সংরক্ষিত ট্রান্সক্রিপ্ট ও প্রজেক্ট ক্যাশ স্ক্যান হচ্ছে...' : 'Scanning project cache & saved transcripts...'
       });
 
-      // Check if cache exists for this sequence
+      // 3. Check if cache exists for this sequence (Returning to a previously saved sequence!)
       const loaded = await loadPersistedProjectData(newManifest);
       // Guarantee Project Master Client Data (Dossier, Brand Kit, Brief) is active across all sequences
       await loadClientMasterData(newManifest);
@@ -1026,7 +1078,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       if (loaded) {
         set({
           sequenceSwitchProgress: 88,
-          sequenceSwitchMessage: isBn ? 'ট্রান্সক্রিপ্ট ও কিউ সফলভাবে সিঙ্ক হয়েছে!' : 'Transcript and cues synced successfully!'
+          sequenceSwitchMessage: isBn ? 'পূর্বের সিকোয়েন্সের সংরক্ষিত ডাটা সফলভাবে রিস্টোর হয়েছে!' : 'Restored saved sequence transcript & data!'
         });
         await new Promise((r) => setTimeout(r, 120));
         set({
@@ -1037,7 +1089,79 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         return;
       }
 
-      // No cache found -> Brand new sequence!
+      // 4. SMART INHERITANCE:
+      // If sequence has no cache yet, but is derived/cloned from previous sequence
+      // (e.g. 1:1 Square, 9:16 Shorts, RoughCut, Duplicate Copy, or shares source clips):
+      const isDerivative = Boolean(
+        currentSeq &&
+        prevWords && prevWords.length > 0 &&
+        (
+          newManifest.sequenceName.toLowerCase().includes(currentSeq.sequenceName.toLowerCase()) ||
+          currentSeq.sequenceName.toLowerCase().includes(newManifest.sequenceName.toLowerCase()) ||
+          /(?:copy|1:1|9:16|16:9|4:5|4:3|roughcut|shorts|reels|cut|format)/i.test(newManifest.sequenceName) ||
+          (newManifest.sourceClips && currentSeq.sourceClips &&
+           newManifest.sourceClips.some((c: any) => currentSeq.sourceClips.some((sc: any) => sc.mediaPath === c.mediaPath || sc.name === c.name)))
+        )
+      );
+
+      if (isDerivative) {
+        set({
+          sequenceSwitchProgress: 90,
+          sequenceSwitchMessage: isBn ? 'মূল সিকোয়েন্স থেকে ট্রান্সক্রিপ্ট সিঙ্ক করা হয়েছে...' : 'Inherited transcript from source sequence...',
+          transcriptWords: prevWords,
+          transcriptSentences: prevSentences,
+          detectedSilences: prevSilences,
+          reviewItems: prevReviewItems,
+          scriptDirectives: prevScriptDirectives,
+          customMarkers: prevCustomMarkers,
+          viralTopics: prevViralTopics,
+          viralShorts: prevViralShorts,
+          srtCues: prevSrtCues,
+          audioSettings: prevAudioSettings,
+          detectedSfxCues: prevDetectedSfxCues,
+          soundDesignTips: prevSoundDesignTips,
+          recommendedBgmData: prevRecommendedBgmData,
+          clientScriptText: prevClientScriptText,
+          clientBriefText: prevClientBriefText,
+          scriptAuditReport: prevScriptAuditReport,
+          brandKit: prevBrandKit,
+          editingRoadmap: prevEditingRoadmap,
+          clientRevisions: prevClientRevisions,
+          clientDossier: prevClientDossier,
+          jobStatus: 'COMPLETE',
+          jobProgress: 100,
+          jobMessage: isBn ? 'সিকোয়েন্স প্রস্তুত (সিঙ্কড)' : 'Sequence ready (Synced)'
+        });
+
+        // Immediately persist for the new sequence so it has its own independent cache from now on!
+        await persistProjectData(newManifest, {
+          words: prevWords,
+          sentences: prevSentences,
+          silences: prevSilences,
+          reviewItems: prevReviewItems,
+          scriptDirectives: prevScriptDirectives,
+          customMarkers: prevCustomMarkers,
+          viralTopics: prevViralTopics,
+          viralShorts: prevViralShorts,
+          srtCues: prevSrtCues,
+          audioSettings: prevAudioSettings,
+          detectedSfxCues: prevDetectedSfxCues,
+          soundDesignTips: prevSoundDesignTips,
+          recommendedBgmData: prevRecommendedBgmData,
+          clientScriptText: prevClientScriptText,
+          clientBriefText: prevClientBriefText,
+          scriptAuditReport: prevScriptAuditReport,
+          brandKit: prevBrandKit,
+          editingRoadmap: prevEditingRoadmap,
+          clientRevisions: prevClientRevisions,
+          clientDossier: prevClientDossier
+        });
+
+        setTimeout(() => set({ isSwitchingSequence: false }), 350);
+        return;
+      }
+
+      // 5. Truly Brand New / Unrelated Sequence:
       // Clear previous sequence transcript cleanly while keeping Client Master Dossier & Brand Kit 100% intact
       set({
         transcriptWords: [],

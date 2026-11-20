@@ -8,9 +8,11 @@ if (typeof $._prismex === "undefined") {
     $._prismex = {};
 }
 
-$._prismex.SCRIPT_BUILD = 2026111905;
+$._prismex.SCRIPT_BUILD = 2026112001;
 $._prismex.TICKS_PER_SECOND = 254016000000.0;
 $._prismex._lastActiveSequence = null;
+$._prismex._lastActiveSequenceID = null;
+$._prismex._lastActiveSequenceName = null;
 
 /**
  * Robust Sequence Resolver:
@@ -18,8 +20,9 @@ $._prismex._lastActiveSequence = null;
  * an HTML/CEP panel takes window focus. This resolver checks:
  * 1. app.project.activeSequence (direct)
  * 2. Cached _lastActiveSequence (if still valid)
- * 3. QE DOM active sequence
- * 4. Fallback to active/open sequence in project
+ * 3. Re-finding sequence in app.project.sequences by persistent sequenceID or Name
+ * 4. QE DOM active sequence
+ * 5. Fallback ONLY on initial startup when no sequence has ever been active
  */
 $._prismex.getResolvedActiveSequence = function() {
     try {
@@ -28,6 +31,10 @@ $._prismex.getResolvedActiveSequence = function() {
         // 1. Direct activeSequence (available when timeline panel is focused)
         if (app.project.activeSequence) {
             $._prismex._lastActiveSequence = app.project.activeSequence;
+            try {
+                $._prismex._lastActiveSequenceID = app.project.activeSequence.sequenceID;
+                $._prismex._lastActiveSequenceName = app.project.activeSequence.name;
+            } catch (e) {}
             return app.project.activeSequence;
         }
 
@@ -42,7 +49,32 @@ $._prismex.getResolvedActiveSequence = function() {
             }
         }
 
-        // 3. QE Active Sequence: Premiere Pro's QE DOM reliably holds the active sequence even when HTML panel has focus
+        // 3. Re-find sequence in app.project.sequences by persistent sequenceID or Name
+        if ($._prismex._lastActiveSequenceID || $._prismex._lastActiveSequenceName) {
+            try {
+                if (app.project.sequences && app.project.sequences.numSequences > 0) {
+                    for (var sIdx = 0; sIdx < app.project.sequences.numSequences; sIdx++) {
+                        var candidate = app.project.sequences[sIdx];
+                        if (candidate) {
+                            var matched = false;
+                            try {
+                                if ($._prismex._lastActiveSequenceID && candidate.sequenceID === $._prismex._lastActiveSequenceID) {
+                                    matched = true;
+                                } else if ($._prismex._lastActiveSequenceName && candidate.name === $._prismex._lastActiveSequenceName) {
+                                    matched = true;
+                                }
+                            } catch (matchErr) {}
+                            if (matched) {
+                                $._prismex._lastActiveSequence = candidate;
+                                return candidate;
+                            }
+                        }
+                    }
+                }
+            } catch (seqIterErr) {}
+        }
+
+        // 4. QE Active Sequence: Premiere Pro's QE DOM reliably holds the active sequence even when HTML panel has focus
         try {
             app.enableQE();
             if (typeof qe !== "undefined" && qe && qe.project) {
@@ -58,6 +90,10 @@ $._prismex.getResolvedActiveSequence = function() {
                             var cand = app.project.sequences[qIdx];
                             if (cand && ((qeName && cand.name === qeName) || (qeGuid && cand.sequenceID === qeGuid))) {
                                 $._prismex._lastActiveSequence = cand;
+                                try {
+                                    $._prismex._lastActiveSequenceID = cand.sequenceID;
+                                    $._prismex._lastActiveSequenceName = cand.name;
+                                } catch (e) {}
                                 return cand;
                             }
                         }
@@ -66,13 +102,19 @@ $._prismex.getResolvedActiveSequence = function() {
             }
         } catch (qeErr) {}
 
-        // 4. Fallback to first available sequence in project
-        if (app.project.sequences && app.project.sequences.numSequences > 0) {
-            for (var si = 0; si < app.project.sequences.numSequences; si++) {
-                var s = app.project.sequences[si];
-                if (s && s.name) {
-                    $._prismex._lastActiveSequence = s;
-                    return s;
+        // 5. Initial Fallback: ONLY if no sequence was EVER active or tracked yet!
+        if (!$._prismex._lastActiveSequenceID && !$._prismex._lastActiveSequenceName) {
+            if (app.project.sequences && app.project.sequences.numSequences > 0) {
+                for (var si = 0; si < app.project.sequences.numSequences; si++) {
+                    var s = app.project.sequences[si];
+                    if (s && s.name) {
+                        $._prismex._lastActiveSequence = s;
+                        try {
+                            $._prismex._lastActiveSequenceID = s.sequenceID;
+                            $._prismex._lastActiveSequenceName = s.name;
+                        } catch (e) {}
+                        return s;
+                    }
                 }
             }
         }
@@ -312,6 +354,11 @@ $._prismex.cloneActiveSequence = function(suffix) {
             newSeq.name = targetName;
             $._prismex._previousSequenceID = origSeq.sequenceID;
             $._prismex._lastClonedSequenceID = newSeq.sequenceID;
+            $._prismex._lastActiveSequence = newSeq;
+            try {
+                $._prismex._lastActiveSequenceID = newSeq.sequenceID;
+                $._prismex._lastActiveSequenceName = newSeq.name;
+            } catch (idErr) {}
             try {
                 app.project.openSequence(newSeq.sequenceID);
                 app.project.activeSequence = newSeq;
@@ -422,8 +469,8 @@ $._prismex.stopPlayback = function() {
 
 $._prismex.addTimelineMarkers = function(markersJson) {
     try {
-        if (!app.project || !app.project.activeSequence) return JSON.stringify({ success: false, error: "No active sequence" });
-        var seq = app.project.activeSequence;
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) return JSON.stringify({ success: false, error: "No active sequence found" });
         var markers = JSON.parse(markersJson);
         var count = 0;
         for (var i = 0; i < markers.length; i++) {
@@ -464,11 +511,10 @@ $._prismex.addTimelineMarkers = function(markersJson) {
  */
 $._prismex.importAndPlaceClipOnTrack = function(filePath, targetTimeSec, targetTrackIndex, trackType, durationSec) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
-
-        var seq = app.project.activeSequence;
         var TICKS = $._prismex.TICKS_PER_SECOND;
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
         var tSec = Math.max(0, parseFloat(targetTimeSec) || 0);
@@ -591,10 +637,10 @@ $._prismex.saveProject = function() {
  */
 $._prismex.applyEnhancedAudioTrack = function(wavPath, targetTrackIndex, muteOriginal) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
-        var seq = app.project.activeSequence;
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
 
         // 1. Get or create bin for Prismex Audio
@@ -670,11 +716,11 @@ $._prismex.applyEnhancedAudioTrack = function(wavPath, targetTrackIndex, muteOri
  */
 $._prismex.applyDynamicPunchZoom = function(punchTimesJson, zoomPercent) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
 
-        var seq = app.project.activeSequence;
         var TICKS = $._prismex.TICKS_PER_SECOND;
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
         var zoomVal = parseFloat(zoomPercent) || 114.0;
@@ -736,11 +782,11 @@ $._prismex.applyDynamicPunchZoom = function(punchTimesJson, zoomPercent) {
  */
 $._prismex.importAndPlaceSfxBatch = function(sfxFilePath, timesJson, trackIndex) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
 
-        var seq = app.project.activeSequence;
         var TICKS = $._prismex.TICKS_PER_SECOND;
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
         var trkIdx = parseInt(trackIndex) || 2; // Default A3 (0-indexed: 2)
@@ -1143,8 +1189,9 @@ $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
 
 $._prismex.executeCuts = function(cutsJsonString) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
 
         var rawCuts = JSON.parse(cutsJsonString);
@@ -1153,7 +1200,6 @@ $._prismex.executeCuts = function(cutsJsonString) {
             return JSON.stringify({ success: true, cutsExecuted: 0 });
         }
 
-        var seq = app.project.activeSequence;
         var TICKS = $._prismex.TICKS_PER_SECOND;
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
 
@@ -1311,10 +1357,10 @@ $._prismex.executeCuts = function(cutsJsonString) {
 
 $._prismex.importSrtAndCreateCaptionTrack = function(srtFilePath) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
-        var seq = app.project.activeSequence;
         var rootBin = app.project.rootItem;
         var beforeCount = rootBin.children.numItems;
 
@@ -1465,11 +1511,11 @@ $._prismex.loadProjectCache = function(cacheKey) {
 
 $._prismex.createMultiSegmentVerticalShortSequence = function(shortTitle, segmentsJson, markersJson) {
     try {
-        if (!app.project || !app.project.activeSequence) {
+        var origSeq = $._prismex.getResolvedActiveSequence();
+        if (!origSeq) {
             return JSON.stringify({ success: false, error: "No active sequence found" });
         }
 
-        var origSeq = app.project.activeSequence;
         var TICKS = $._prismex.TICKS_PER_SECOND;
         var zeroTicks = parseFloat(origSeq.zeroPoint || 0) || 0;
         var initialTicks = Math.max(0, parseFloat(origSeq.end || 0) - zeroTicks);
@@ -1572,6 +1618,11 @@ $._prismex.createMultiSegmentVerticalShortSequence = function(shortTitle, segmen
             app.project.openSequence(newSeq.sequenceID);
             app.project.activeSequence = newSeq;
         } catch (openErr) {}
+        $._prismex._lastActiveSequence = newSeq;
+        try {
+            $._prismex._lastActiveSequenceID = newSeq.sequenceID;
+            $._prismex._lastActiveSequenceName = newSeq.name;
+        } catch (le) {}
 
         // 3. Set resolution to 1080x1920 (9:16 Vertical)
         try {
@@ -1727,10 +1778,10 @@ $._prismex.createVerticalShortSequence = function(shortTitle, startSeconds, endS
 
 $._prismex.getActiveClipAtPlayhead = function() {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
-        var seq = app.project.activeSequence;
         var TICKS = $._prismex.TICKS_PER_SECOND;
         var currentTicks = parseFloat(seq.getPlayerPosition().ticks);
         var currentSeconds = currentTicks / TICKS;
@@ -1781,10 +1832,10 @@ $._prismex.getActiveClipAtPlayhead = function() {
 
 $._prismex.exportFrameAtPlayhead = function(outputPath) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
-        var seq = app.project.activeSequence;
         var pos = seq.getPlayerPosition();
         
         var exported = false;
@@ -1837,10 +1888,10 @@ $._prismex.revealFileInOS = function(filePath) {
  */
 $._prismex.applyLumetriColorToActiveClip = function(lutFilePath, lutName, basicCorrectionJson, applyToAll) {
     try {
-        if (!app.project || !app.project.activeSequence) {
-            return JSON.stringify({ success: false, error: "No active sequence" });
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found" });
         }
-        var seq = app.project.activeSequence;
         var clipInfoStr = $._prismex.getActiveClipAtPlayhead();
         var clipInfo = JSON.parse(clipInfoStr);
 
@@ -1988,6 +2039,10 @@ $._prismex.createScriptRoughCutSequence = function(payloadJson) {
         var newSeq = (numSeq > 0) ? app.project.sequences[numSeq - 1] : app.project.activeSequence;
         if (newSeq) {
             $._prismex._lastActiveSequence = newSeq;
+            try {
+                $._prismex._lastActiveSequenceID = newSeq.sequenceID;
+                $._prismex._lastActiveSequenceName = newSeq.name;
+            } catch (e) {}
             try { app.project.activeSequence = newSeq; } catch(ae) {}
         }
         var targetName = cloneRes.clonedSequenceName || (newSeq ? newSeq.name : "AI_Script_RoughCut");
@@ -2256,6 +2311,11 @@ $._prismex.changeSequenceAspectRatio = function(optionsJson) {
                         app.project.openSequence(targetSeq.sequenceID);
                         app.project.activeSequence = targetSeq;
                     } catch(oe) {}
+                    $._prismex._lastActiveSequence = targetSeq;
+                    try {
+                        $._prismex._lastActiveSequenceID = targetSeq.sequenceID;
+                        $._prismex._lastActiveSequenceName = targetSeq.name;
+                    } catch(e) {}
                 }
             } catch(cloneErr) {
                 targetSeq = seq;
