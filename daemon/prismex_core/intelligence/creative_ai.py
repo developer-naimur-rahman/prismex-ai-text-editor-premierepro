@@ -190,6 +190,48 @@ class CreativeAI:
                     except Exception as e:
                         print(f"[CreativeAI] OpenRouter model {om} error: {e}")
 
+        # 3. Tertiary: Groq Cloud API (Ultra-fast Llama-3.3-70b / Llama-3.1-8b)
+        groq_key = KeychainVault.get_api_key("groq")
+        if groq_key:
+            groq_models = ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+            for gm in groq_models:
+                try:
+                    resp = requests.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {groq_key}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "model": gm,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": "You are Prismex AI, an expert video editing co-pilot in Adobe Premiere Pro. Respond strictly with valid JSON only."
+                                },
+                                {
+                                    "role": "user",
+                                    "content": prompt
+                                }
+                            ],
+                            "response_format": {"type": "json_object"},
+                            "temperature": 0.2
+                        },
+                        timeout=7
+                    )
+                    if resp.status_code == 200:
+                        content = resp.json()["choices"][0]["message"]["content"]
+                        cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip(), flags=re.IGNORECASE)
+                        cleaned = re.sub(r"\s*```$", "", cleaned)
+                        try:
+                            return json.loads(cleaned)
+                        except Exception:
+                            match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+                            if match:
+                                return json.loads(match.group(1))
+                except Exception as e:
+                    print(f"[CreativeAI] Groq model {gm} error: {e}")
+
         return None
 
     @classmethod
@@ -445,7 +487,18 @@ class CreativeAI:
 
         # Offline Local Heuristic Planner: Group sentences into structured Hook -> Body -> CTA
         shorts = []
-        sent_list = sentences if sentences else []
+        sent_list = list(sentences) if sentences else []
+        if not sent_list and words:
+            # Reconstruct sentence segments from words
+            WORDS_PER_SENT = 8
+            for i in range(0, len(words), WORDS_PER_SENT):
+                chunk = words[i:i + WORDS_PER_SENT]
+                sent_text = " ".join(str(w.get("word", "")).strip() for w in chunk)
+                sent_list.append({
+                    "text": sent_text,
+                    "start_seconds": float(chunk[0].get("start_seconds", 0.0)),
+                    "end_seconds": float(chunk[-1].get("end_seconds", 0.0))
+                })
         n_sent = len(sent_list)
 
         if n_sent == 0:
@@ -3273,25 +3326,55 @@ Return strictly a JSON object:
             cmd_lower
         )
 
-        # 3e. INTENT: Batch Multi-Script to Shorts (5, 8, 10+ Shorts)
-        # Matches: "৫টা শর্টস বানাও", "শর্টস বানাও", "make 5 shorts", "create shorts", "রিলস বানাও"
-        shorts_match = re.search(
-            r"((?:(\d+|[০-৯]+)\s*(?:টি|টা|খানা)?\s*)?(?:শর্টস?|রিলস?|shorts?|reels?)\s*(?:বানাও|তৈরি\s*করো|কাটো|করো|মেক|বানিয়ে\s*দাও|সাজাও|make|create|generate))",
-            cmd_lower
-        )
-        if shorts_match:
-            # Extract target count if specified (e.g. 5, 8, 10, ৫, ৮, ১০)
-            num_str = shorts_match.group(2)
+        # 3e. INTENT: Shorts / Reels Creation & Conforming Request
+        # Matches: "3 ta shorts banate hobe", "3টি শর্টস বানাও", "shorts banate chai", "রিলস তৈরি করো", "make 3 shorts", "1 minute length", etc.
+        shorts_kw_match = re.search(r"(?:(\d+|[০-৯]+)\s*(?:টি|টা|খানা)?\s*)?(?:শর্টস?|রিলস?|shorts?|reels?)\b", cmd_lower)
+        is_shorts_creation_intent = False
+        if shorts_kw_match:
+            action_words = [
+                "বানাও", "তৈরি", "কাটো", "বানাতে", "বানিয়ে", "সাজাও", "মেক", "লাগবে", "দরকার", "চাই", "হবে",
+                "make", "create", "generate", "cut", "build", "want", "need", "convert", "length", "minute", "মিনিট", "সেকেন্ড", "second"
+            ]
+            if any(w in cmd_lower for w in action_words):
+                is_shorts_creation_intent = True
+            elif re.search(r"(\d+|[০-৯]+)\s*(?:টি|টা|খানা)?\s*(?:শর্টস?|রিলস?|shorts?|reels?)", cmd_lower):
+                is_shorts_creation_intent = True
+
+        if is_shorts_creation_intent:
+            # 1. Extract target count (e.g. 3, 5, 8, 10, ৩, ৫, ৮, ১০, 3 ta, 3 ti)
             target_count = 5
-            if num_str:
+            count_match = re.search(r"(\d+|[০-৯]+)\s*(?:টি|টা|খানা|ta|ti)?\s*(?:শর্টস?|রিলস?|shorts?|reels?)", cmd_lower)
+            if not count_match:
+                count_match = re.search(r"(?:শর্টস?|রিলস?|shorts?|reels?)\s*(\d+|[০-৯]+)", cmd_lower)
+            if count_match:
+                num_str = count_match.group(1)
                 bn_to_en = {'০':'0', '১':'1', '২':'2', '৩':'3', '৪':'4', '৫':'5', '৬':'6', '৭':'7', '৮':'8', '৯':'9'}
                 normalized_num = "".join(bn_to_en.get(c, c) for c in num_str)
                 try:
-                    target_count = int(normalized_num)
+                    target_count = max(1, min(15, int(normalized_num)))
                 except ValueError:
                     target_count = 5
 
-            # Determine script to use: either included in the command after colon, or project client_script
+            # 2. Extract duration target if mentioned (e.g. 1 minute, 60s, 30s)
+            dur_seconds = 60.0
+            dur_match = re.search(r"(\d+|[০-৯]+)\s*(?:মিনিট|মি\.|min|minute)", cmd_lower)
+            if dur_match:
+                bn_to_en = {'০':'0', '১':'1', '২':'2', '৩':'3', '৪':'4', '৫':'5', '৬':'6', '৭':'7', '৮':'8', '৯':'9'}
+                norm_min = "".join(bn_to_en.get(c, c) for c in dur_match.group(1))
+                try:
+                    dur_seconds = float(norm_min) * 60.0
+                except ValueError:
+                    dur_seconds = 60.0
+            sec_match = re.search(r"(\d+|[০-৯]+)\s*(?:সেকেন্ড|sec|second)", cmd_lower)
+            if sec_match:
+                bn_to_en = {'০':'0', '১':'1', '২':'2', '৩':'3', '৪':'4', '৫':'5', '৬':'6', '৭':'7', '৮':'8', '৯':'9'}
+                norm_sec = "".join(bn_to_en.get(c, c) for c in sec_match.group(1))
+                try:
+                    dur_seconds = float(norm_sec)
+                except ValueError:
+                    pass
+
+            # 3. Check if explicit client script is provided in command or stored in project
             script_for_shorts = ""
             colon_match = re.search(r"[:：\n]+(.*)", cmd_clean, re.DOTALL)
             if colon_match and len(colon_match.group(1).strip()) > 30:
@@ -3299,34 +3382,70 @@ Return strictly a JSON object:
             elif client_script and len(client_script.strip()) > 30:
                 script_for_shorts = client_script.strip()
 
-            batch_res = cls.batch_script_to_shorts(
-                scripts_text=script_for_shorts,
-                words=words or [],
-                sentences=[],
-                fps=24.0,
-                target_count=target_count
-            )
-
-            if batch_res.get("success") and batch_res.get("shorts"):
-                shorts_list = batch_res["shorts"]
-                titles_summary = "\n".join(f"  • {s.get('title')} (~{s.get('totalDurationSeconds')}s)" for s in shorts_list)
-                msg = (
-                    f"⚡ **সফলভাবে {len(shorts_list)}টি ৯:১৬ শর্টস সিকোয়েন্স কনফর্ম করা হয়েছে!**\n\n"
-                    f"🎬 **শনাক্তকৃত শর্টস তালিকা:**\n{titles_summary}\n\n"
-                    f"💡 আপনি 'AI Viral Shorts' ট্যাবের 'Client Script' সাব-ট্যাব থেকেও এই শর্টসগুলো দেখতে পাবেন এবং ১-ক্লিকে প্রিমিয়ার প্রোর '_Prismex_Viral_Shorts' বিনে তৈরি করতে পারবেন।"
+            if script_for_shorts:
+                batch_res = cls.batch_script_to_shorts(
+                    scripts_text=script_for_shorts,
+                    words=words or [],
+                    sentences=[],
+                    fps=24.0,
+                    target_count=target_count
                 )
-                return {
-                    "action": "batch_shorts",
-                    "message": msg,
-                    "count": len(shorts_list),
-                    "shorts": shorts_list
-                }
-            else:
-                return {
-                    "action": "batch_shorts_fallback",
-                    "message": f"স্ক্রিপ্ট থেকে {target_count}টি শর্টস তৈরি করার জন্য দয়া করে স্ক্রিপ্টটি প্রদান করুন বা 'AI Viral Shorts' ট্যাবে যান।",
-                    "targetCount": target_count
-                }
+                if batch_res.get("success") and batch_res.get("shorts"):
+                    shorts_list = batch_res["shorts"]
+                    titles_summary = "\n".join(f"  • **{s.get('title')}** (~{s.get('totalDurationSeconds')}s)" for s in shorts_list)
+                    msg = (
+                        f"⚡ **সফলভাবে ক্লায়েন্ট স্ক্রিপ্ট থেকে {len(shorts_list)}টি ৯:১৬ শর্টস সিকোয়েন্স কনফর্ম করা হয়েছে!**\n\n"
+                        f"🎬 **শনাক্তকৃত শর্টস তালিকা:**\n{titles_summary}\n\n"
+                        f"💡 আপনি 'AI Viral Shorts' ট্যাবের 'Client Script' সাব-ট্যাব থেকেও এই শর্টসগুলো দেখতে পাবেন এবং ১-ক্লিকে প্রিমিয়ার প্রোর '_Prismex_Viral_Shorts' বিনে তৈরি করতে পারবেন।"
+                    )
+                    return {
+                        "action": "batch_shorts",
+                        "message": msg,
+                        "count": len(shorts_list),
+                        "shorts": shorts_list
+                    }
+
+            # 4. If no script provided, generate high-engagement viral shorts directly from video words/timeline!
+            active_words = modified_words or words or []
+            if active_words:
+                dur_display = f"{int(dur_seconds // 60)} মিনিট" if dur_seconds >= 60 else f"{int(dur_seconds)} সেকেন্ড"
+                custom_editorial = f"Duration around {int(dur_seconds)} seconds. Highly engaging educational hook, story body and punchy CTA."
+                viral_shorts = cls.detect_viral_shorts(
+                    words=active_words,
+                    sentences=[],
+                    target_count=target_count,
+                    fps=24.0,
+                    custom_prompt=custom_editorial
+                )
+                if viral_shorts:
+                    titles_summary = "\n".join(
+                        f"  • **{s.get('title')}** (~{s.get('totalDurationSeconds', int(dur_seconds))}s) — 🔥 {s.get('viralityScore', 92)}% ভাইরাল স্কোর"
+                        for s in viral_shorts
+                    )
+                    msg = (
+                        f"⚡ **আপনার নির্দেশ অনুযায়ী টাইমলাইন ভিডিও থেকে {len(viral_shorts)}টি ৯:১৬ শর্টস (টার্গেট দৈর্ঘ্য: ~{dur_display}) তৈরি করা হয়েছে!**\n\n"
+                        f"🎬 **তৈরিকৃত শর্টস আইডিয়াস:**\n{titles_summary}\n\n"
+                        f"💡 শর্টসগুলো স্বয়ংক্রিয়ভাবে **'Shorts Studio'**-তে লোড করা হয়েছে। নিচের বাটনটিতে ক্লিক করে সরাসরি প্রিমিয়ার প্রোতে ৯:১৬ সিকোয়েন্স বানাতে পারেন।"
+                    )
+                    return {
+                        "action": "viral_shorts",
+                        "message": msg,
+                        "count": len(viral_shorts),
+                        "shorts": viral_shorts,
+                        "targetCount": target_count
+                    }
+
+            # 5. If words are completely empty:
+            msg = (
+                f"🎬 **{target_count}টি শর্টস তৈরি করতে টাইমলাইনের ট্রান্সক্রিপ্ট প্রয়োজন:**\n\n"
+                "বর্তমানে আপনার সিকোয়েন্সের ডায়ালগ ট্রান্সক্রাইব করা নেই।\n"
+                "👉 অনুগ্রহ করে প্রথমে **Editor > Text Panel**-এ গিয়ে সিকোয়েন্সটি ট্রান্সক্রাইব করুন।\n"
+                "অথবা সরাসরি **'Studios > AI Viral Shorts'** ট্যাবে গিয়ে 'টপিক বের করুন' বাটনে ক্লিক করতে পারেন।"
+            )
+            return {
+                "action": "advice",
+                "message": msg
+            }
 
         if rough_cut_match:
             script_candidate = (client_script or "").strip()
@@ -3519,10 +3638,50 @@ Return strictly a JSON object:
                     "message": msg
                 }
 
-        # Context-aware fallback if model call failed
+        # Intelligent Offline / Local Knowledge Fallback if cloud model call was unavailable
+        # 1. First, check if EditorKnowledgeBase has an authoritative domain answer
+        local_ans = EditorKnowledgeBase.lookup_local_knowledge(
+            cmd_clean,
+            project_context={
+                "brandKit": bkit,
+                "clientBrief": client_brief,
+                "clientScript": client_script,
+                "clientRevisions": client_revisions or [],
+                "sequenceManifest": sequence_manifest or {}
+            }
+        )
+        if local_ans and local_ans.get("message"):
+            return local_ans
+
+        # 2. Check Provider Key status
+        has_gemini_key = bool(KeychainVault.get_api_key("google-gemini") or KeychainVault.get_api_key("gemini-cloud"))
+        has_groq_key = bool(KeychainVault.get_api_key("groq"))
+        has_openrouter_key = bool(KeychainVault.get_api_key("openrouter"))
+        any_cloud_key = has_gemini_key or has_groq_key or has_openrouter_key
+
+        key_tip = ""
+        if not any_cloud_key:
+            key_tip = (
+                "\n\n⚙️ **এআই প্রোভাইডার স্ট্যাটাস:**\n"
+                "বর্তমানে প্রজেক্টে কোনো ক্লাউড এআই কি (Cloud API Key) যুক্ত নেই।\n"
+                "ফ্রি ও আনলিমিটেড লাইভ জেনারেটিভ উত্তরের জন্য **Settings > Providers**-এ গিয়ে আপনার ফ্রি **Google Gemini** বা **Groq API Key** যুক্ত করে নিতে পারেন।"
+            )
+
+        # Context-aware professional guidance
+        fallback_msg = (
+            f"🎬 **আপনার বার্তা পেয়েছি:** \"{cmd_clean}\"\n\n"
+            f"আমি আপনার টাইমলাইন সিকোয়েন্স ও অডিও প্রস্তুত রেখেছি। আপনি সরাসরি নিচের যেকোনো অ্যাকশন মুখে বলতে বা টাইপ করতে পারেন:\n\n"
+            f"• **শর্টস ও রিলস:** `৩টি ১ মিনিটের শর্টস বানাও` বা `রিলস তৈরি করো`\n"
+            f"• **কালার গ্রেডিং:** `Teal & Orange কালার গ্রেড দাও` বা `Kodak 2383 লুক`\n"
+            f"• **অডিও ব্যালেন্স:** `অডিও ঠিক করো` (ভোকাল রাইডার ও -৬.০ dB পিক লিমিটিং)\n"
+            f"• **বি-রোল ও মার্কার:** `মার্কার সাজাও` বা `বি-রোল সাজেস্ট করো`\n"
+            f"• **টেক্সট এডিটিং:** `দাড়ি-কমা মুছে ফেলো` বা `[শব্দ] এর জায়গায় [নতুন শব্দ] বসাও`"
+            f"{key_tip}"
+        )
+
         return {
             "action": "advice",
-            "message": f"আপনার বার্তাটি পেয়েছি: '{cmd_clean}'। আপনি ব্রিফ, স্ক্রিপ্ট বা টাইমলাইন সম্পর্কিত যেকোনো এডিটিং কমান্ড (যেমন: 'দাড়ি-কমা মুছুন', 'কালার গ্রেড দাও', 'স্ক্রিপ্ট মিলিয়ে নাও') দিতে পারেন।"
+            "message": fallback_msg
         }
 
     @classmethod

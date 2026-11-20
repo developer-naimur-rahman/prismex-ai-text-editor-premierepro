@@ -39,7 +39,9 @@ export const GlobalCopilotDrawer: React.FC = () => {
     setRecommendedBgmData,
     setScriptAuditReport,
     showToast,
-    changeSequenceAspectRatio
+    changeSequenceAspectRatio,
+    setViralShorts,
+    setActiveTab
   } = usePrismexStore();
 
   const isBn = language === 'bn';
@@ -366,6 +368,14 @@ export const GlobalCopilotDrawer: React.FC = () => {
             showToast?.(isBn ? '✓ নতুন রাফ-কাট সিকোয়েন্স তৈরি হয়েছে!' : '✓ Script rough-cut created!', 'success');
           }
         }
+      } else if (res.action === 'viral_shorts' || res.action === 'batch_shorts') {
+        if ((res as any).shorts && (res as any).shorts.length > 0) {
+          setViralShorts((res as any).shorts);
+          showToast?.(
+            isBn ? `✓ ${(res as any).shorts.length}টি ৯:১৬ শর্টস তৈরি ও লোড হয়েছে!` : `✓ ${(res as any).shorts.length} shorts created!`,
+            'success'
+          );
+        }
       }
     } catch (e: any) {
       setResponseHistory((prev) => [
@@ -665,6 +675,34 @@ export const GlobalCopilotDrawer: React.FC = () => {
                       </button>
                     </div>
                   </div>
+                )}
+
+                {/* Render Direct Action Button for Viral Shorts */}
+                {(item.action === 'viral_shorts' || item.action === 'batch_shorts') && (
+                  <button
+                    onClick={() => {
+                      setActiveTab('viral-shorts');
+                      setIsGlobalCopilotOpen(false);
+                    }}
+                    style={{
+                      marginTop: '8px',
+                      padding: '5px 12px',
+                      backgroundColor: '#ea580c',
+                      color: '#ffffff',
+                      borderRadius: '5px',
+                      fontSize: '10.5px',
+                      fontWeight: 700,
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      boxShadow: '0 2px 8px rgba(234, 88, 12, 0.4)'
+                    }}
+                  >
+                    <Sparkles size={12} />
+                    <span>{isBn ? '👉 শর্টস স্টুডিওতে দেখুন ও সিকোয়েন্স বানান' : '👉 Open in Shorts Studio'}</span>
+                  </button>
                 )}
               </div>
               <div
