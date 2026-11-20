@@ -1125,9 +1125,12 @@ export class PrismexDaemonClient {
     clientDossier?: any;
   } | null> {
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 14000);
       const resp = await fetch(`${this.baseUrl}/api/v1/assistant/execute-command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           command,
           words,
@@ -1140,6 +1143,7 @@ export class PrismexDaemonClient {
           language
         })
       });
+      clearTimeout(timeoutId);
       if (resp.ok) {
         return await resp.json();
       }

@@ -3327,25 +3327,22 @@ Return strictly a JSON object:
         )
 
         # 3e. INTENT: Shorts / Reels Creation & Conforming Request
-        # Matches: "3 ta shorts banate hobe", "3টি শর্টস বানাও", "shorts banate chai", "রিলস তৈরি করো", "make 3 shorts", "1 minute length", etc.
-        shorts_kw_match = re.search(r"(?:(\d+|[০-৯]+)\s*(?:টি|টা|খানা)?\s*)?(?:শর্টস?|রিলস?|shorts?|reels?)\b", cmd_lower)
-        is_shorts_creation_intent = False
-        if shorts_kw_match:
-            action_words = [
-                "বানাও", "তৈরি", "কাটো", "বানাতে", "বানিয়ে", "সাজাও", "মেক", "লাগবে", "দরকার", "চাই", "হবে",
-                "make", "create", "generate", "cut", "build", "want", "need", "convert", "length", "minute", "মিনিট", "সেকেন্ড", "second"
-            ]
-            if any(w in cmd_lower for w in action_words):
-                is_shorts_creation_intent = True
-            elif re.search(r"(\d+|[০-৯]+)\s*(?:টি|টা|খানা)?\s*(?:শর্টস?|রিলস?|shorts?|reels?)", cmd_lower):
-                is_shorts_creation_intent = True
+        # Matches: "3 ta shorts banate hobe", "3টি শর্টস বানাও", "shorts banate chai", "রিলস তৈরি করো", "make 3 shorts", "1 minute length", "ei video thake , script dao", etc.
+        has_shorts = bool(re.search(r"\b(shorts?|reels?|শর্টস?|রিলস?)\b", cmd_lower))
+        action_words = [
+            "banate", "banao", "banano", "banaye", "hobe", "lagbe", "chai", "dorkar", "dao", "koro", "ei", "video", "thake", "theke",
+            "বানাও", "তৈরি", "কাটো", "বানাতে", "বানিয়ে", "সাজাও", "মেক", "লাগবে", "দরকার", "চাই", "হবে", "দাও", "ভিডিও",
+            "make", "create", "generate", "cut", "build", "want", "need", "convert", "script", "স্ক্রিপ্ট",
+            "length", "minute", "min", "মিনিট", "সেকেন্ড", "second", "sec"
+        ]
+        is_shorts_creation_intent = has_shorts and any(w in cmd_lower for w in action_words)
 
         if is_shorts_creation_intent:
             # 1. Extract target count (e.g. 3, 5, 8, 10, ৩, ৫, ৮, ১০, 3 ta, 3 ti)
-            target_count = 5
+            target_count = 3 if ("3" in cmd_lower or "৩" in cmd_lower) else 5
             count_match = re.search(r"(\d+|[০-৯]+)\s*(?:টি|টা|খানা|ta|ti)?\s*(?:শর্টস?|রিলস?|shorts?|reels?)", cmd_lower)
             if not count_match:
-                count_match = re.search(r"(?:শর্টস?|রিলস?|shorts?|reels?)\s*(\d+|[০-৯]+)", cmd_lower)
+                count_match = re.search(r"(?:শর্টস?|রিলস?|shorts?|reels?)\s*(?:of\s*)?(\d+|[০-৯]+)", cmd_lower)
             if count_match:
                 num_str = count_match.group(1)
                 bn_to_en = {'০':'0', '১':'1', '২':'2', '৩':'3', '৪':'4', '৫':'5', '৬':'6', '৭':'7', '৮':'8', '৯':'9'}
@@ -3353,7 +3350,7 @@ Return strictly a JSON object:
                 try:
                     target_count = max(1, min(15, int(normalized_num)))
                 except ValueError:
-                    target_count = 5
+                    target_count = 3
 
             # 2. Extract duration target if mentioned (e.g. 1 minute, 60s, 30s)
             dur_seconds = 60.0
@@ -3379,7 +3376,7 @@ Return strictly a JSON object:
             colon_match = re.search(r"[:：\n]+(.*)", cmd_clean, re.DOTALL)
             if colon_match and len(colon_match.group(1).strip()) > 30:
                 script_for_shorts = colon_match.group(1).strip()
-            elif client_script and len(client_script.strip()) > 30:
+            elif client_script and len(client_script.strip()) > 30 and not ("ei video" in cmd_lower or "এই ভিডিও" in cmd_lower):
                 script_for_shorts = client_script.strip()
 
             if script_for_shorts:
@@ -3405,7 +3402,7 @@ Return strictly a JSON object:
                         "shorts": shorts_list
                     }
 
-            # 4. If no script provided, generate high-engagement viral shorts directly from video words/timeline!
+            # 4. Generate high-engagement viral shorts directly from video words/timeline!
             active_words = modified_words or words or []
             if active_words:
                 dur_display = f"{int(dur_seconds // 60)} মিনিট" if dur_seconds >= 60 else f"{int(dur_seconds)} সেকেন্ড"
@@ -3418,14 +3415,24 @@ Return strictly a JSON object:
                     custom_prompt=custom_editorial
                 )
                 if viral_shorts:
-                    titles_summary = "\n".join(
-                        f"  • **{s.get('title')}** (~{s.get('totalDurationSeconds', int(dur_seconds))}s) — 🔥 {s.get('viralityScore', 92)}% ভাইরাল স্কোর"
-                        for s in viral_shorts
-                    )
+                    script_blocks = []
+                    for idx, s in enumerate(viral_shorts):
+                        h_txt = s.get('hook', {}).get('text') if isinstance(s.get('hook'), dict) else str(s.get('hook', ''))
+                        b_txt = s.get('body', {}).get('text') if isinstance(s.get('body'), dict) else str(s.get('body', ''))
+                        c_txt = s.get('cta', {}).get('text') if isinstance(s.get('cta'), dict) else str(s.get('cta', ''))
+                        dur = s.get('totalDurationSeconds', int(dur_seconds))
+                        score = s.get('viralityScore', 92)
+                        script_blocks.append(
+                            f"🎬 **শর্টস #{idx + 1}: {s.get('title')}** (~{dur}s) — 🔥 {score}% ভাইরাল স্কোর\n"
+                            f"🎯 **HOOK:** \"{h_txt}\"\n\n"
+                            f"📖 **STORY:** \"{b_txt}\"\n\n"
+                            f"📢 **CTA:** \"{c_txt}\""
+                        )
+
                     msg = (
-                        f"⚡ **আপনার নির্দেশ অনুযায়ী টাইমলাইন ভিডিও থেকে {len(viral_shorts)}টি ৯:১৬ শর্টস (টার্গেট দৈর্ঘ্য: ~{dur_display}) তৈরি করা হয়েছে!**\n\n"
-                        f"🎬 **তৈরিকৃত শর্টস আইডিয়াস:**\n{titles_summary}\n\n"
-                        f"💡 শর্টসগুলো স্বয়ংক্রিয়ভাবে **'Shorts Studio'**-তে লোড করা হয়েছে। নিচের বাটনটিতে ক্লিক করে সরাসরি প্রিমিয়ার প্রোতে ৯:১৬ সিকোয়েন্স বানাতে পারেন।"
+                        f"⚡ **আপনার ভিডিও ট্রান্সক্রিপ্ট থেকে {len(viral_shorts)}টি ৯:১৬ শর্টস স্ক্রিপ্ট প্রস্তুত (দৈর্ঘ্য: ~{dur_display}):**\n\n"
+                        + "\n\n---\n\n".join(script_blocks) +
+                        f"\n\n💡 শর্টসগুলো স্বয়ংক্রিয়ভাবে **'Shorts Studio'**-তে লোড করা হয়েছে। নিচের বাটনটিতে ক্লিক করে সরাসরি প্রিমিয়ার প্রোতে আলাদা আলাদা ৯:১৬ সিকোয়েন্স বানাতে পারেন।"
                     )
                     return {
                         "action": "viral_shorts",
