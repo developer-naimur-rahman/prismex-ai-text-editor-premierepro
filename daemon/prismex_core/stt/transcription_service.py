@@ -19,23 +19,47 @@ from ..router.provider_registry import TaskCapability
 class TranscriptionService:
     @staticmethod
     def _has_audible_signal(wav_path: Path) -> bool:
-        """Checks if WAV file contains non-zero audio energy (vs silent test dummy)."""
+        """Checks if WAV file contains non-zero audio energy across the file (vs completely silent buffer)."""
         try:
             if not wav_path or not wav_path.exists():
                 return False
+            if wav_path.stat().st_size < 1000:
+                return False
             with wave.open(str(wav_path), 'rb') as wf:
-                n_frames = min(wf.getnframes(), 16000 * 30)  # Check up to first 30s
-                if n_frames == 0:
+                total_frames = wf.getnframes()
+                if total_frames == 0:
                     return False
-                raw_data = wf.readframes(n_frames)
-                total_samples = len(raw_data) // 2
-                if total_samples == 0:
-                    return False
-                raw_ints = struct.unpack(f"<{total_samples}h", raw_data)
-                max_amp = max(abs(x) for x in raw_ints)
-                return max_amp > 50  # > ~ -56 dBFS
+                
+                # Check several positions across the audio file (beginning, 25%, 50%, 75%)
+                sample_points = [0]
+                if total_frames > 32000:
+                    sample_points.extend([
+                        int(total_frames * 0.25),
+                        int(total_frames * 0.5),
+                        int(total_frames * 0.75)
+                    ])
+                
+                chunk_size = 16000 * 5  # 5 seconds chunk
+                for pos in sample_points:
+                    try:
+                        wf.setpos(pos)
+                        frames_to_read = min(wf.getnframes() - pos, chunk_size)
+                        if frames_to_read <= 0:
+                            continue
+                        raw_data = wf.readframes(frames_to_read)
+                        total_samples = len(raw_data) // 2
+                        if total_samples > 0:
+                            raw_ints = struct.unpack(f"<{total_samples}h", raw_data)
+                            max_amp = max(abs(x) for x in raw_ints)
+                            if max_amp > 15:  # Any detectable signal above digital zero
+                                return True
+                    except Exception:
+                        continue
+                        
+                return False
         except Exception:
-            return False
+            # If wave inspection fails but file exists, let Whisper try anyway
+            return wav_path.exists() and wav_path.stat().st_size > 2000
 
     @staticmethod
     def _load_wav_as_float32(wav_path: Path):

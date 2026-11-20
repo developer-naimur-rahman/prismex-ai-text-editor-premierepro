@@ -3,6 +3,7 @@ import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimecodeConverter } from '../host/TimecodeConverter';
 import { translations } from '../i18n/translations';
+import { EditorTopRibbon } from '../components/EditorTopRibbon';
 import {
   Search,
   Mic,
@@ -42,11 +43,13 @@ import {
   Globe,
   FileText,
   AlertTriangle,
-  ShieldCheck
+  ShieldCheck,
+  ChevronUp,
+  ChevronDown,
+  Filter
 } from 'lucide-react';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { copyToClipboard } from '../utils/clipboard';
-import { ClientScriptCopilot } from '../components/ClientScriptCopilot';
 
 interface WordToken {
   id: string;
@@ -109,12 +112,64 @@ export const TranscriptView: React.FC = () => {
     customMarkers,
     setCustomMarkers,
     sequenceChangedNotice,
-    setSequenceChangedNotice
+    setSequenceChangedNotice,
+    setIsGlobalCopilotOpen
   } = usePrismexStore();
 
+  const hostBridge = PremiereHostBridge.getInstance();
+  const client = PrismexDaemonClient.getInstance();
   const t = translations[language];
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterMode, setFilterMode] = useState<'ALL' | 'FILLERS' | 'PAUSES' | 'TAKES'>('ALL');
+  const [activeMatchIdx, setActiveMatchIdx] = useState<number>(0);
+  const [autoSeekOnMatch, setAutoSeekOnMatch] = useState<boolean>(true);
+  const [filterMode, setFilterMode] = useState<'ALL' | 'FILLERS' | 'PAUSES' | 'TAKES' | 'KEYWORDS' | 'POLISHED'>('ALL');
+
+  // Compute matching word indices across all transcript words
+  const matchingWordIndices = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term || transcriptWords.length === 0) return [];
+    const indices: number[] = [];
+    transcriptWords.forEach((w, idx) => {
+      const text = String(w.word || '').toLowerCase();
+      if (text.includes(term)) {
+        indices.push(idx);
+      }
+    });
+    return indices;
+  }, [searchTerm, transcriptWords]);
+
+  // Reset active match index when search term changes
+  useEffect(() => {
+    setActiveMatchIdx(0);
+  }, [searchTerm]);
+
+  const handleNextMatch = useCallback(() => {
+    if (matchingWordIndices.length === 0) return;
+    setActiveMatchIdx((prev) => (prev + 1) % matchingWordIndices.length);
+  }, [matchingWordIndices.length]);
+
+  const handlePrevMatch = useCallback(() => {
+    if (matchingWordIndices.length === 0) return;
+    setActiveMatchIdx((prev) => (prev - 1 + matchingWordIndices.length) % matchingWordIndices.length);
+  }, [matchingWordIndices.length]);
+
+  // Smoothly scroll and center the active matched word into view & optionally seek timeline
+  useEffect(() => {
+    if (matchingWordIndices.length > 0 && activeMatchIdx >= 0 && activeMatchIdx < matchingWordIndices.length) {
+      const targetGlobalIdx = matchingWordIndices[activeMatchIdx];
+      const el = document.getElementById(`word-token-${targetGlobalIdx}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      if (autoSeekOnMatch) {
+        const targetWord = transcriptWords[targetGlobalIdx];
+        const sTime = targetWord?.start ?? targetWord?.start_seconds;
+        if (sTime !== undefined && typeof sTime === 'number') {
+          hostBridge.setPlayheadPosition(sTime);
+        }
+      }
+    }
+  }, [activeMatchIdx, matchingWordIndices, autoSeekOnMatch, transcriptWords, hostBridge]);
   const [selStartIdx, setSelStartIdx] = useState<number | null>(null);
   const [selEndIdx, setSelEndIdx] = useState<number | null>(null);
   const [aiPrompt, setAiPrompt] = useState('');
@@ -159,6 +214,7 @@ export const TranscriptView: React.FC = () => {
   const [popoverWord, setPopoverWord] = useState<{ wordIdx: number; word: string; start: number; end: number; x: number; y: number } | null>(null);
   const [showBrollModal, setShowBrollModal] = useState<boolean>(false);
   const [brollSearchQuery, setBrollSearchQuery] = useState<string>('');
+  const [copiedKw, setCopiedKw] = useState<string | null>(null);
   const [brollResults, setBrollResults] = useState<any[]>([]);
   const [isSearchingBroll, setIsSearchingBroll] = useState<boolean>(false);
   const [targetBrollTime, setTargetBrollTime] = useState<number>(0);
@@ -168,6 +224,12 @@ export const TranscriptView: React.FC = () => {
   const [showChaptersModal, setShowChaptersModal] = useState<boolean>(false);
   const [isGeneratingChapters, setIsGeneratingChapters] = useState<boolean>(false);
   const [copiedChapters, setCopiedChapters] = useState<boolean>(false);
+  const brollFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Seamless Zero-Shift Inline Word Editing (Instant in-place caret, no separate box)
+  const [editingWordIdx, setEditingWordIdx] = useState<number | null>(null);
+  const [editingWordText, setEditingWordText] = useState<string>('');
+  const editingWordInputRef = useRef<HTMLInputElement | null>(null);
 
   // Per-line action state: editing, copied feedback, typography
   const [editingParaIdx, setEditingParaIdx] = useState<number | null>(null);
@@ -177,6 +239,13 @@ export const TranscriptView: React.FC = () => {
   const [isAnalyzingLineIdx, setIsAnalyzingLineIdx] = useState<number | null>(null);
   const [typographyCopiedIdx, setTypographyCopiedIdx] = useState<number | null>(null);
   const [hoveredWordIdx, setHoveredWordIdx] = useState<number | null>(null);
+
+  // Triple-click auto-play & double-click inline edit tracker
+  const clickTrackerRef = useRef<{ time: number; count: number; idx: number | null }>({ time: 0, count: 0, idx: null });
+  const editTimeoutRef = useRef<any>(null);
+  const editingInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const floatingToolbarRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-play on seek/jump preference & Repeated Take comparison modal
   const [autoPlayOnJump, setAutoPlayOnJump] = useState<boolean>(() => {
@@ -203,10 +272,9 @@ export const TranscriptView: React.FC = () => {
   // Full Script Contextual AI Directives (B-Roll, PNG, Typography, Punch & Bengali Explanations)
   const [isAnalyzingScript, setIsAnalyzingScript] = useState<boolean>(false);
   const [expandedDirectiveIdx, setExpandedDirectiveIdx] = useState<number | null>(null);
+  const [directiveTab, setDirectiveTab] = useState<'meaning' | 'editing' | 'broll' | 'png'>('meaning');
   const [liveTranslations, setLiveTranslations] = useState<Record<number, string>>({});
 
-  const client = PrismexDaemonClient.getInstance();
-  const hostBridge = PremiereHostBridge.getInstance();
   const fps = sequenceManifest?.fps || 24;
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
 
@@ -349,7 +417,26 @@ export const TranscriptView: React.FC = () => {
     });
   }, [expandedDirectiveIdx, paragraphs, scriptDirectives]);
 
-  // Auto-Follow Playhead: Track Premiere timeline playhead and smoothly scroll to spoken text
+  // Active Word Index with Gap Bridging (prevents highlight vanishing during 50-280ms pauses between words)
+  const activeWordGlobalIdx = useMemo(() => {
+    if (playheadSec <= 0 || words.length === 0) return -1;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      if (playheadSec >= w.start && playheadSec <= w.end) {
+        return i;
+      }
+      // Gap bridging: if playhead is in a small gap between this word and the next (< 0.28s)
+      if (playheadSec > w.end && playheadSec < w.end + 0.28) {
+        const nextW = words[i + 1];
+        if (!nextW || playheadSec < nextW.start) {
+          return i;
+        }
+      }
+    }
+    return -1;
+  }, [playheadSec, words]);
+
+  // Auto-Follow Playhead: Track Premiere timeline playhead with high-frequency 80ms poller
   useEffect(() => {
     if (transcriptWords.length === 0) return;
     const timer = setInterval(async () => {
@@ -383,7 +470,7 @@ export const TranscriptView: React.FC = () => {
           }
         }
       }
-    }, 200);
+    }, 80);
     return () => clearInterval(timer);
   }, [transcriptWords.length, paragraphs, followPlayhead, hostBridge]);
 
@@ -394,6 +481,40 @@ export const TranscriptView: React.FC = () => {
     x: number;
     y: number;
   } | null>(null);
+
+  // Outside click listener: Dismiss popoverWord & floatingSelection immediately when clicking anywhere outside
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (popoverWord && popoverRef.current && !popoverRef.current.contains(target)) {
+        setPopoverWord(null);
+      }
+      if (floatingSelection && floatingToolbarRef.current && !floatingToolbarRef.current.contains(target)) {
+        setFloatingSelection(null);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [popoverWord, floatingSelection]);
+
+  // Auto-expand textarea immediately on inline edit mount
+  useEffect(() => {
+    if (editingParaIdx !== null && editingInputRef.current) {
+      editingInputRef.current.style.height = 'auto';
+      editingInputRef.current.style.height = `${editingInputRef.current.scrollHeight}px`;
+      editingInputRef.current.focus();
+      const val = editingInputRef.current.value;
+      editingInputRef.current.setSelectionRange(val.length, val.length);
+    }
+  }, [editingParaIdx]);
+
+  // Seamless Inline Word Edit: Auto-focus & select text with zero layout jump
+  useEffect(() => {
+    if (editingWordIdx !== null && editingWordInputRef.current) {
+      editingWordInputRef.current.focus();
+      editingWordInputRef.current.select();
+    }
+  }, [editingWordIdx]);
 
   const wordMarkersMap = useMemo(() => {
     const map: { [wordIdx: number]: {
@@ -687,15 +808,54 @@ export const TranscriptView: React.FC = () => {
     }
   }, [autoPlayOnJump, hostBridge]);
 
+  // Triple-click Auto-Play execution
+  const startAutoPlayFrom = useCallback((timeSec: number) => {
+    if (editTimeoutRef.current) {
+      clearTimeout(editTimeoutRef.current);
+      editTimeoutRef.current = null;
+    }
+    setEditingParaIdx(null);
+    setEditingParaText('');
+    setPopoverWord(null);
+
+    hostBridge.setPlayheadPosition(timeSec);
+    setPlayheadSec(timeSec);
+    setTimeout(() => {
+      hostBridge.startPlayback(1);
+    }, 50);
+
+    setCreativeStatus(language === 'bn' ? '▶ ৩-ক্লিক অটো-প্লে চালু হয়েছে!' : '▶ Triple-Click Auto-Play Started!');
+    setTimeout(() => setCreativeStatus(null), 2500);
+  }, [hostBridge, language]);
+
   const handleWordClick = (idx: number, e: React.MouseEvent) => {
+    const now = Date.now();
+    const isFastClick = now - clickTrackerRef.current.time < 380;
+    const newCount = isFastClick ? clickTrackerRef.current.count + 1 : 1;
+    clickTrackerRef.current = { time: now, count: newCount, idx };
+
+    const token = words[idx];
+    if (!token) return;
+
+    // TRIPLE-CLICK DETECTED (৩ বার পরপর ক্লিক) -> START AUTO-PLAY!
+    if (newCount >= 3 || e.detail >= 3) {
+      e.preventDefault();
+      e.stopPropagation();
+      startAutoPlayFrom(token.start);
+      return;
+    }
+
+    // Double-click is delegated to onDoubleClick
+    if (newCount === 2 || e.detail === 2) {
+      return;
+    }
+
     const winSel = window.getSelection();
     if (winSel && winSel.toString().trim().length > 1) {
       handleCheckTextSelection();
       return;
     }
 
-    const token = words[idx];
-    if (!token) return;
     seekAndAutoPlay(token.start);
 
     if (e.shiftKey && selStartIdx !== null) {
@@ -780,20 +940,46 @@ export const TranscriptView: React.FC = () => {
     setTimeout(() => setCreativeStatus(null), 4000);
   };
 
-  // Place B-Roll on Track 2 (V2)
-  const handlePlaceBrollOnTrack2 = async (stockItem: any) => {
+  // Place B-Roll on Track 2 (V2) or import local file
+  const handlePlaceBrollOnTrack2 = async (stockItem?: any, explicitFilePath?: string) => {
     setCreativeStatus(`Placing B-Roll on Video Track 2 at ${targetBrollTime.toFixed(1)}s...`);
     try {
+      let finalPath = explicitFilePath;
+      if (!finalPath && stockItem?.directDownloadUrl) {
+        setCreativeStatus(language === 'bn' ? 'ক্যাশে ডাউনলোড করা হচ্ছে...' : 'Downloading asset...');
+        const dlRes = await client.downloadAsset(stockItem.directDownloadUrl, 'video');
+        if (dlRes && dlRes.success && dlRes.filePath) {
+          finalPath = dlRes.filePath;
+        }
+      }
+
+      if (finalPath) {
+        const placeRes = await hostBridge.importAndPlaceClipOnTrack(
+          finalPath,
+          targetBrollTime,
+          2, // Video Track 2
+          'video',
+          stockItem?.durationSeconds || 4.0
+        );
+        if (placeRes && placeRes.success) {
+          setCreativeStatus(`✓ মিডিয়া সফলভাবে V2 ট্র্যাকে ইমপোর্ট ও প্লেস করা হয়েছে!`);
+          setExportStatus(language === 'bn' ? '✓ মিডিয়া V2 ট্র্যাকে প্লেস হয়েছে!' : 'Media placed on Track V2!');
+          setShowBrollModal(false);
+          return;
+        }
+      }
+
+      // Fallback: place timeline marker so editor knows where to put it
       await hostBridge.addTimelineMarkers([{
         type: 'BROLL',
-        name: stockItem.title || 'Stock B-Roll',
-        comment: 'Cutaway B-Roll footage',
+        name: stockItem?.title || 'Stock B-Roll Cue',
+        comment: stockItem?.directSearchUrl ? `Search: ${stockItem.directSearchUrl}` : 'Cutaway B-Roll footage',
         startSeconds: targetBrollTime,
-        durationSeconds: stockItem.durationSeconds || 4.0,
+        durationSeconds: stockItem?.durationSeconds || 4.0,
         color: 'GREEN'
       }]);
-      setCreativeStatus(`B-Roll মার্কার ও V2 প্লেসহোল্ডার সফলভাবে টাইমলাইনে যুক্ত হয়েছে!`);
-      setExportStatus(language === 'bn' ? 'B-Roll মার্কার ও V2 প্লেসহোল্ডার টাইমলাইনে যুক্ত হয়েছে!' : 'B-Roll marker placed on timeline!');
+      setCreativeStatus(language === 'bn' ? 'B-Roll মার্কার ও V2 প্লেসহোল্ডার যুক্ত হয়েছে!' : 'B-Roll marker placed on timeline!');
+      setExportStatus(language === 'bn' ? 'B-Roll মার্কার ও V2 প্লেসহোল্ডার যুক্ত হয়েছে!' : 'B-Roll marker placed on timeline!');
       setShowBrollModal(false);
     } catch (e: any) {
       setCreativeStatus(String(e));
@@ -1023,22 +1209,100 @@ export const TranscriptView: React.FC = () => {
     }
   };
 
-  const handleStartEditLine = (paraIdx: number, paraTokens: any[]) => {
-    setEditingParaIdx(paraIdx);
-    setEditingParaText(paraTokens.map((t) => t.word).join(' '));
+  // --- Seamless Inline Word Editing Handlers ---
+  const handleStartEditWord = (globalIdx: number, currentWord: string) => {
+    setPopoverWord(null);
+    setFloatingSelection(null);
+    setEditingWordIdx(globalIdx);
+    setEditingWordText(currentWord);
+  };
+
+  const handleCancelWord = () => {
+    setEditingWordIdx(null);
+    setEditingWordText('');
+  };
+
+  const handleSaveWord = (globalIdx: number) => {
+    if (editingWordIdx === null) return;
+    const originalToken = transcriptWords[globalIdx];
+    const newTrimmed = editingWordText.trim();
+
+    // If empty or identical, cancel cleanly
+    if (!newTrimmed || !originalToken || newTrimmed === originalToken.word) {
+      handleCancelWord();
+      return;
+    }
+
+    const wordsSplit = newTrimmed.split(/\s+/);
+    let updatedWords = [...transcriptWords];
+
+    if (wordsSplit.length === 1) {
+      // Single word updated in place with zero timing disruption
+      updatedWords[globalIdx] = {
+        ...originalToken,
+        word: wordsSplit[0]
+      };
+    } else {
+      // User typed multiple words: split timestamps proportionally across the original duration
+      const startTime = originalToken.start ?? originalToken.start_seconds ?? 0;
+      const endTime = originalToken.end ?? originalToken.end_seconds ?? (startTime + 0.4);
+      const totalDur = Math.max(0.15, endTime - startTime);
+      const perWordDur = totalDur / wordsSplit.length;
+
+      const newTokens = wordsSplit.map((w, i) => ({
+        ...originalToken,
+        id: `w_inline_${Date.now()}_${i}`,
+        word: w,
+        start: Number((startTime + i * perWordDur).toFixed(3)),
+        end: Number((startTime + (i + 1) * perWordDur).toFixed(3)),
+        start_seconds: Number((startTime + i * perWordDur).toFixed(3)),
+        end_seconds: Number((startTime + (i + 1) * perWordDur).toFixed(3)),
+        isFiller: false
+      }));
+
+      updatedWords.splice(globalIdx, 1, ...newTokens);
+    }
+
+    setTranscriptWords(updatedWords);
+    handleCancelWord();
+    setExportStatus(language === 'bn' ? '✓ শব্দ সফলভাবে এডিট ও সেভ হয়েছে!' : '✓ Word updated & saved!');
+    setTimeout(() => setExportStatus(null), 2000);
   };
 
   const handleCancelEditLine = () => {
+    if (editTimeoutRef.current) {
+      clearTimeout(editTimeoutRef.current);
+      editTimeoutRef.current = null;
+    }
     setEditingParaIdx(null);
     setEditingParaText('');
   };
 
+  const handleStartEditLine = (paraIdx: number, paraTokens: any[]) => {
+    if (editTimeoutRef.current) {
+      clearTimeout(editTimeoutRef.current);
+      editTimeoutRef.current = null;
+    }
+
+    // Debounce slightly (200ms) so if a 3rd click arrives (triple-click for auto-play),
+    // it will cancel edit mode and trigger playback instead of opening the editor
+    editTimeoutRef.current = setTimeout(() => {
+      if (clickTrackerRef.current.count < 3) {
+        setEditingParaIdx(paraIdx);
+        setEditingParaText(paraTokens.map((t) => t.word).join(' '));
+      }
+      editTimeoutRef.current = null;
+    }, 200);
+  };
+
   const handleSaveEditLine = (paraIdx: number, paraTokens: any[]) => {
-    if (!editingParaText.trim()) {
+    const originalText = paraTokens.map((t) => t.word).join(' ').trim();
+    const newTrimmed = editingParaText.trim();
+    if (!newTrimmed || newTrimmed === originalText) {
       handleCancelEditLine();
       return;
     }
-    const newWordsText = editingParaText.trim().split(/\s+/);
+    const newWordsText = newTrimmed.split(/\s+/);
     const startGlobalIdx = paraTokens[0].globalIdx;
     const endGlobalIdx = paraTokens[paraTokens.length - 1].globalIdx;
 
@@ -1066,7 +1330,7 @@ export const TranscriptView: React.FC = () => {
     setTranscriptWords(updatedWords);
     setEditingParaIdx(null);
     setEditingParaText('');
-    setCreativeStatus(language === 'bn' ? 'লাইনটি সফলভাবে আপডেট হয়েছে!' : 'Line successfully updated!');
+    setCreativeStatus(language === 'bn' ? 'লাইনটি সফলভাবে অটো-সেভ হয়েছে!' : 'Line successfully auto-saved!');
     setTimeout(() => setCreativeStatus(null), 3000);
   };
 
@@ -1613,8 +1877,10 @@ export const TranscriptView: React.FC = () => {
   // Pre-Transcription State (Premiere Pro Text Panel First Screen)
   if (words.length === 0) {
     return (
-      <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <EditorTopRibbon />
+        <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Text Panel — Speech to Text</h2>
             <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
@@ -1695,17 +1961,14 @@ export const TranscriptView: React.FC = () => {
 
           <button
             className="btn-primary"
-            disabled={isRunning || !sequenceManifest}
+            disabled={isRunning}
             onClick={transcribeSequence}
             style={{ padding: '10px 14px', fontSize: '12.5px', fontWeight: 600 }}
           >
             <Mic size={15} />
-            <span>{isRunning ? 'Transcribing Sequence...' : 'Transcribe Sequence (Speech-to-Text)'}</span>
+            <span>{isRunning ? (language === 'bn' ? 'সিকোয়েন্স ট্রান্সক্রাইব হচ্ছে...' : 'Transcribing Sequence...') : (language === 'bn' ? '🎙️ সিকোয়েন্স ট্রান্সক্রাইব করুন (Speech-to-Text)' : 'Transcribe Sequence (Speech-to-Text)')}</span>
           </button>
         </div>
-
-        {/* Client Brief & Script Ingestion */}
-        <ClientScriptCopilot />
 
         {/* Step 2 / Other Options Preview */}
         <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1715,7 +1978,7 @@ export const TranscriptView: React.FC = () => {
           <div style={{ display: 'flex', gap: '8px' }}>
             <button
               className="btn-secondary"
-              disabled={isRunning || !sequenceManifest}
+              disabled={isRunning}
               style={{ flex: 1, fontSize: '11px' }}
               onClick={() => {
                 setExecutionMode('AUTO_EDIT');
@@ -1736,12 +1999,15 @@ export const TranscriptView: React.FC = () => {
           </div>
         </div>
       </div>
+      </div>
     );
   }
 
   // Post-Transcription State (Premiere Pro Text Panel Interface)
   return (
-    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden', position: 'relative' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', position: 'relative' }}>
+      <EditorTopRibbon />
+      <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0 }}>
       {/* Floating Status Notification Toast */}
       {exportStatus && (
         <div
@@ -1814,9 +2080,6 @@ export const TranscriptView: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Client Brief, Script Ingestion & AI Co-Pilot */}
-      <ClientScriptCopilot />
 
       {/* Top Toolbar (Compact Single-Row Unified Bar) */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px', flexWrap: 'wrap', flexShrink: 0 }}>
@@ -2749,86 +3012,275 @@ export const TranscriptView: React.FC = () => {
         </div>
       )}
 
-      {/* Search & Filter Row (Slim & Uniform Height) */}
-      <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
+      {/* Advanced Search & Multi-Filter Control Bar */}
+      <div style={{ display: 'flex', gap: '5px', alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
+        {/* Search Input Box with Result Counter & Arrow Navigation */}
         <div
           style={{
             flex: 1,
-            minWidth: '130px',
+            minWidth: '220px',
             display: 'flex',
             alignItems: 'center',
-            gap: '5px',
+            gap: '6px',
             backgroundColor: 'var(--bg-tertiary)',
-            padding: '2px 7px',
-            borderRadius: '4px',
-            border: '1px solid var(--border-subtle)',
-            height: '24px'
+            padding: '2px 8px',
+            borderRadius: '5px',
+            border: searchTerm.trim() ? '1px solid #3b82f6' : '1px solid var(--border-subtle)',
+            boxShadow: searchTerm.trim() ? '0 0 8px rgba(59, 130, 246, 0.25)' : 'none',
+            height: '26px',
+            transition: 'all 0.15s ease'
           }}
         >
-          <Search size={11} color="var(--text-muted)" />
+          <Search size={12} color={searchTerm.trim() ? '#3b82f6' : 'var(--text-muted)'} style={{ flexShrink: 0 }} />
           <input
             type="text"
-            placeholder="Search transcript..."
+            placeholder={language === 'bn' ? 'ট্রান্সক্রিপ্ট সার্চ করুন... (Enter: পরবর্তী, Shift+Enter: পূর্ববর্তী)' : 'Search transcript... (Enter: Next, Shift+Enter: Prev)'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                  handlePrevMatch();
+                } else {
+                  handleNextMatch();
+                }
+              } else if (e.key === 'Escape') {
+                e.preventDefault();
+                setSearchTerm('');
+              }
+            }}
             style={{
               background: 'transparent',
               border: 'none',
               color: 'var(--text-primary)',
-              fontSize: '10.5px',
+              fontSize: '11px',
               outline: 'none',
-              width: '100%'
+              flex: 1,
+              minWidth: '60px'
             }}
           />
+
+          {/* Search Result Counter (e.g. 3 / 14) */}
+          {searchTerm.trim() && (
+            <span
+              style={{
+                fontSize: '10px',
+                fontWeight: 600,
+                fontFamily: 'monospace',
+                color: matchingWordIndices.length > 0 ? '#38bdf8' : '#f87171',
+                backgroundColor: matchingWordIndices.length > 0 ? 'rgba(56, 189, 248, 0.16)' : 'rgba(239, 68, 68, 0.16)',
+                padding: '1px 5px',
+                borderRadius: '3px',
+                whiteSpace: 'nowrap',
+                userSelect: 'none',
+                flexShrink: 0
+              }}
+            >
+              {matchingWordIndices.length > 0
+                ? `${activeMatchIdx + 1} / ${matchingWordIndices.length}`
+                : (language === 'bn' ? 'কোনো মিল নেই' : '0 matches')}
+            </span>
+          )}
+
+          {/* Up & Down Arrow Buttons for Match Navigation */}
+          {matchingWordIndices.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1px', flexShrink: 0, borderLeft: '1px solid var(--border-subtle)', paddingLeft: '4px' }}>
+              <button
+                onClick={handlePrevMatch}
+                title={language === 'bn' ? 'পূর্ববর্তী রেজাল্ট (Shift + Enter)' : 'Previous match (Shift + Enter)'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '3px',
+                  lineHeight: 1
+                }}
+              >
+                <ChevronUp size={13} />
+              </button>
+              <button
+                onClick={handleNextMatch}
+                title={language === 'bn' ? 'পরবর্তী রেজাল্ট (Enter)' : 'Next match (Enter)'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  padding: '2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '3px',
+                  lineHeight: 1
+                }}
+              >
+                <ChevronDown size={13} />
+              </button>
+            </div>
+          )}
+
+          {/* Timeline Playhead Auto-Seek Toggle */}
+          <button
+            onClick={() => setAutoSeekOnMatch(!autoSeekOnMatch)}
+            title={
+              autoSeekOnMatch
+                ? (language === 'bn' ? 'টাইমলাইন অটো-সিঙ্ক সক্রিয়: সার্চ ম্যাচ করার সাথে সাথে প্লেহেড মুভ করবে' : 'Playhead auto-seek ON')
+                : (language === 'bn' ? 'টাইমলাইন অটো-সিঙ্ক নিষ্ক্রিয়' : 'Playhead auto-seek OFF')
+            }
+            style={{
+              background: 'none',
+              border: 'none',
+              color: autoSeekOnMatch ? '#10b981' : 'var(--text-muted)',
+              cursor: 'pointer',
+              padding: '2px',
+              display: 'flex',
+              alignItems: 'center',
+              flexShrink: 0
+            }}
+          >
+            <Play size={10} style={{ fill: autoSeekOnMatch ? '#10b981' : 'none' }} />
+          </button>
+
+          {/* Clear Search Input */}
+          {searchTerm && (
+            <button
+              onClick={() => setSearchTerm('')}
+              title={language === 'bn' ? 'সার্চ মুছুন (Esc)' : 'Clear search (Esc)'}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'var(--text-muted)',
+                cursor: 'pointer',
+                padding: '2px',
+                display: 'flex',
+                alignItems: 'center',
+                flexShrink: 0
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
 
-        <button
-          onClick={() => setFilterMode(filterMode === 'FILLERS' ? 'ALL' : 'FILLERS')}
-          style={{
-            height: '24px',
-            padding: '2px 7px',
-            fontSize: '9.5px',
-            borderRadius: '4px',
-            border: '1px solid var(--border-subtle)',
-            backgroundColor: filterMode === 'FILLERS' ? 'rgba(250, 204, 21, 0.2)' : 'var(--bg-tertiary)',
-            color: filterMode === 'FILLERS' ? '#facc15' : 'var(--text-secondary)',
-            cursor: 'pointer'
-          }}
-        >
-          {t.fillers} ({fillerCount})
-        </button>
+        {/* Enhanced Filter System (Pills with Counters) */}
+        <div style={{ display: 'flex', gap: '3px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setFilterMode('ALL')}
+            style={{
+              height: '25px',
+              padding: '2px 8px',
+              fontSize: '10px',
+              fontWeight: 600,
+              borderRadius: '4px',
+              border: filterMode === 'ALL' ? '1px solid #3b82f6' : '1px solid var(--border-subtle)',
+              backgroundColor: filterMode === 'ALL' ? 'rgba(59, 130, 246, 0.22)' : 'var(--bg-tertiary)',
+              color: filterMode === 'ALL' ? '#60a5fa' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px'
+            }}
+          >
+            <Filter size={10} />
+            <span>{language === 'bn' ? 'সব' : 'All'}</span>
+          </button>
 
-        <button
-          onClick={() => setFilterMode(filterMode === 'PAUSES' ? 'ALL' : 'PAUSES')}
-          style={{
-            height: '24px',
-            padding: '2px 7px',
-            fontSize: '9.5px',
-            borderRadius: '4px',
-            border: '1px solid var(--border-subtle)',
-            backgroundColor: filterMode === 'PAUSES' ? 'rgba(239, 68, 68, 0.2)' : 'var(--bg-tertiary)',
-            color: filterMode === 'PAUSES' ? '#f87171' : 'var(--text-secondary)',
-            cursor: 'pointer'
-          }}
-        >
-          {t.pauses} ({detectedSilences.length})
-        </button>
+          <button
+            onClick={() => setFilterMode(filterMode === 'FILLERS' ? 'ALL' : 'FILLERS')}
+            style={{
+              height: '25px',
+              padding: '2px 7px',
+              fontSize: '9.5px',
+              borderRadius: '4px',
+              border: filterMode === 'FILLERS' ? '1px solid #facc15' : '1px solid var(--border-subtle)',
+              backgroundColor: filterMode === 'FILLERS' ? 'rgba(250, 204, 21, 0.22)' : 'var(--bg-tertiary)',
+              color: filterMode === 'FILLERS' ? '#fde047' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: filterMode === 'FILLERS' ? 600 : 400
+            }}
+            title={language === 'bn' ? 'ফিলার শব্দ (যেমন: উম্ম, আাহ, মানে ইত্যাদি)' : 'Filler words'}
+          >
+            {t.fillers} ({fillerCount})
+          </button>
 
-        <button
-          onClick={() => setFilterMode(filterMode === 'TAKES' ? 'ALL' : 'TAKES')}
-          style={{
-            height: '24px',
-            padding: '2px 7px',
-            fontSize: '9.5px',
-            borderRadius: '4px',
-            border: '1px solid var(--border-subtle)',
-            backgroundColor: filterMode === 'TAKES' ? 'rgba(139, 92, 246, 0.25)' : 'var(--bg-tertiary)',
-            color: filterMode === 'TAKES' ? '#c4b5fd' : 'var(--text-secondary)',
-            cursor: 'pointer'
-          }}
-        >
-          {t.doubleLines} ({repeatedTakes.length})
-        </button>
+          <button
+            onClick={() => setFilterMode(filterMode === 'PAUSES' ? 'ALL' : 'PAUSES')}
+            style={{
+              height: '25px',
+              padding: '2px 7px',
+              fontSize: '9.5px',
+              borderRadius: '4px',
+              border: filterMode === 'PAUSES' ? '1px solid #ef4444' : '1px solid var(--border-subtle)',
+              backgroundColor: filterMode === 'PAUSES' ? 'rgba(239, 68, 68, 0.22)' : 'var(--bg-tertiary)',
+              color: filterMode === 'PAUSES' ? '#fca5a5' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: filterMode === 'PAUSES' ? 600 : 400
+            }}
+            title={language === 'bn' ? 'নীরবতা বা পজ (১ ক্লিকে কাটার সুবিধা)' : 'Audio pauses'}
+          >
+            {t.pauses} ({detectedSilences.length})
+          </button>
+
+          <button
+            onClick={() => setFilterMode(filterMode === 'TAKES' ? 'ALL' : 'TAKES')}
+            style={{
+              height: '25px',
+              padding: '2px 7px',
+              fontSize: '9.5px',
+              borderRadius: '4px',
+              border: filterMode === 'TAKES' ? '1px solid #a855f7' : '1px solid var(--border-subtle)',
+              backgroundColor: filterMode === 'TAKES' ? 'rgba(168, 85, 247, 0.22)' : 'var(--bg-tertiary)',
+              color: filterMode === 'TAKES' ? '#d8b4fe' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: filterMode === 'TAKES' ? 600 : 400
+            }}
+            title={language === 'bn' ? 'রিপিটেড টেক বা ডাবল বলা লাইন' : 'Repeated takes'}
+          >
+            {t.doubleLines} ({repeatedTakes.length})
+          </button>
+
+          <button
+            onClick={() => setFilterMode(filterMode === 'KEYWORDS' ? 'ALL' : 'KEYWORDS')}
+            style={{
+              height: '25px',
+              padding: '2px 7px',
+              fontSize: '9.5px',
+              borderRadius: '4px',
+              border: filterMode === 'KEYWORDS' ? '1px solid #f59e0b' : '1px solid var(--border-subtle)',
+              backgroundColor: filterMode === 'KEYWORDS' ? 'rgba(245, 158, 11, 0.25)' : 'var(--bg-tertiary)',
+              color: filterMode === 'KEYWORDS' ? '#fcd34d' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: filterMode === 'KEYWORDS' ? 600 : 400
+            }}
+            title={language === 'bn' ? 'ভিডিওর গুরুত্বপূর্ণ কি-ওয়ার্ড ও ফোকাস শব্দ' : 'Key dialogue words'}
+          >
+            ⭐ {language === 'bn' ? 'কি-ওয়ার্ড' : 'Keywords'}
+          </button>
+
+          <button
+            onClick={() => setFilterMode(filterMode === 'POLISHED' ? 'ALL' : 'POLISHED')}
+            style={{
+              height: '25px',
+              padding: '2px 7px',
+              fontSize: '9.5px',
+              borderRadius: '4px',
+              border: filterMode === 'POLISHED' ? '1px solid #10b981' : '1px solid var(--border-subtle)',
+              backgroundColor: filterMode === 'POLISHED' ? 'rgba(16, 185, 129, 0.25)' : 'var(--bg-tertiary)',
+              color: filterMode === 'POLISHED' ? '#6ee7b7' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: filterMode === 'POLISHED' ? 600 : 400
+            }}
+            title={language === 'bn' ? 'এআই দ্বারা নিখুঁত বানান পালিশ করা শব্দ' : 'AI Polished words'}
+          >
+            ✨ {language === 'bn' ? 'পালিশ' : 'Polished'}
+          </button>
+        </div>
 
         {/* Paragraph Grouping Mode: Sentence-Complete vs Pause-Based */}
         <button
@@ -3139,6 +3591,12 @@ export const TranscriptView: React.FC = () => {
               (d: any) => d.startSeconds <= paraEnd && d.endSeconds >= para.startTime
             );
 
+            const paraCoreKws: string[] = (
+              directive?.coreKeywords ||
+              directive?.keyWords ||
+              (directive?.primaryKeyword ? [directive.primaryKeyword] : [])
+            ).map((k: string) => String(k).toLowerCase().trim()).filter(Boolean);
+
             const isPlayingPara = playheadSec > 0 && playheadSec >= para.startTime && playheadSec <= paraEnd;
 
             let cardBg = matchingTake ? 'rgba(139, 92, 246, 0.08)' : 'transparent';
@@ -3339,62 +3797,91 @@ export const TranscriptView: React.FC = () => {
 
               {/* Main Body: Flowing Natural Paragraph Text or Clean Inline Editor */}
               {isEditingThis ? (
-                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <textarea
-                    value={editingParaText}
-                    onChange={(e) => setEditingParaText(e.target.value)}
-                    rows={2}
-                    style={{
-                      width: '100%',
-                      backgroundColor: '#18181b',
-                      color: '#fff',
-                      border: '1px solid #3b82f6',
-                      borderRadius: '4px',
-                      padding: '6px 8px',
-                      fontSize: '12px',
-                      fontFamily: 'inherit',
-                      resize: 'vertical',
-                      outline: 'none'
-                    }}
-                    autoFocus
-                  />
-                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                    <button
-                      onClick={() => handleSaveEditLine(para.startIdx, para.tokens)}
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '6px' }}>
+                    {directive && directive.visualType !== 'NONE' && (
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                          padding: '1px 6px',
+                          fontSize: '9.5px',
+                          fontWeight: 600,
+                          borderRadius: '3px',
+                          backgroundColor: directive.visualType === 'BROLL' ? 'rgba(6, 182, 212, 0.22)' :
+                                           directive.visualType === 'PNG' ? 'rgba(168, 85, 247, 0.22)' :
+                                           directive.visualType === 'TEXT_ANIMATION' ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)',
+                          color: directive.visualType === 'BROLL' ? '#67e8f9' :
+                                 directive.visualType === 'PNG' ? '#d8b4fe' :
+                                 directive.visualType === 'TEXT_ANIMATION' ? '#fbbf24' : '#fca5a5',
+                          border: `1px solid ${directive.accentColor || '#666'}`,
+                          flexShrink: 0,
+                          marginTop: '2px'
+                        }}
+                      >
+                        {directive.badgeLabel}
+                      </span>
+                    )}
+                    <textarea
+                      ref={(el) => {
+                        if (el) {
+                          el.style.height = 'auto';
+                          el.style.height = `${Math.max(el.scrollHeight, 26)}px`;
+                        }
+                      }}
+                      value={editingParaText}
+                      onChange={(e) => {
+                        setEditingParaText(e.target.value);
+                        e.target.style.height = 'auto';
+                        e.target.style.height = `${Math.max(e.target.scrollHeight, 26)}px`;
+                      }}
+                      onBlur={() => handleSaveEditLine(para.startIdx, para.tokens)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSaveEditLine(para.startIdx, para.tokens);
+                        } else if (e.key === 'Escape') {
+                          handleCancelEditLine();
+                        }
+                      }}
                       style={{
-                        backgroundColor: '#059669',
-                        color: '#fff',
+                        width: '100%',
+                        backgroundColor: 'transparent',
+                        color: '#ffffff',
                         border: 'none',
-                        borderRadius: '3px',
-                        padding: '3px 9px',
-                        fontSize: '11px',
-                        cursor: 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px'
+                        borderBottom: '2px solid #3b82f6',
+                        borderRadius: 0,
+                        padding: 0,
+                        fontSize: '12px',
+                        lineHeight: 1.85,
+                        fontFamily: 'inherit',
+                        resize: 'none',
+                        outline: 'none',
+                        boxShadow: 'none',
+                        overflow: 'hidden',
+                        display: 'block'
                       }}
-                    >
-                      <Save size={11} />
-                      <span>সেভ</span>
-                    </button>
-                    <button
-                      onClick={handleCancelEditLine}
-                      style={{
-                        backgroundColor: 'rgba(255,255,255,0.08)',
-                        color: 'var(--text-muted)',
-                        border: '1px solid rgba(255,255,255,0.15)',
-                        borderRadius: '3px',
-                        padding: '3px 8px',
-                        fontSize: '11px',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      বাতিল
-                    </button>
+                      autoFocus
+                    />
+                  </div>
+                  <div style={{ fontSize: '9px', color: '#64748b', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 1px' }}>
+                    <span>✓ এডিট শেষে বাইরে ক্লিক করুন বা Enter চাপুন (অটো-সেভ)</span>
+                    <span>Esc = বাতিল</span>
                   </div>
                 </div>
               ) : (
-                <div style={{ flex: 1, lineHeight: 1.85, userSelect: 'text' }}>
+                <div
+                  onClick={(e) => {
+                    if (e.detail >= 3) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      startAutoPlayFrom(para.startTime);
+                    }
+                  }}
+                  style={{ flex: 1, lineHeight: 1.85, userSelect: 'text', cursor: 'text' }}
+                  title={language === 'bn' ? '৩ বার ক্লিকে অটো-প্লে চালু | শব্দে ডাবল-ক্লিকে সরাসরি ইনলাইন এডিট' : 'Triple-click to Auto-Play | Double-click word to Edit in-place'}
+                >
                   {directive && directive.visualType !== 'NONE' && (
                     <span
                       onClick={() => setExpandedDirectiveIdx(expandedDirectiveIdx === para.startIdx ? null : para.startIdx)}
@@ -3421,31 +3908,48 @@ export const TranscriptView: React.FC = () => {
                       {directive.badgeLabel}
                     </span>
                   )}
+
                   {para.tokens.map((item) => {
                     if (filterMode === 'FILLERS' && !item.isFiller) return null;
-                    const matches = searchTerm && item.word.toLowerCase().includes(searchTerm.toLowerCase());
+                    const cleanSearchTerm = searchTerm.trim().toLowerCase();
+                    const matches = Boolean(cleanSearchTerm && item.word.toLowerCase().includes(cleanSearchTerm));
+                    const isActiveMatch = Boolean(matches && matchingWordIndices.length > 0 && matchingWordIndices[activeMatchIdx] === item.globalIdx);
                     const isSelected = hasSelection && item.globalIdx >= minSel && item.globalIdx <= maxSel;
-                    const isPlayingWord = playheadSec > 0 && playheadSec >= item.start && playheadSec <= item.end;
+                    const cleanWord = item.word.toLowerCase().replace(/[^a-zA-Z0-9\u0980-\u09FF]/g, '');
+                    const isCoreKeyword = cleanWord.length > 2 && paraCoreKws.some((k: string) => k === cleanWord || k.includes(cleanWord) || cleanWord.includes(k));
+                    const isPlayingWord = (item.globalIdx === activeWordGlobalIdx) || (playheadSec > 0 && playheadSec >= item.start - 0.03 && playheadSec <= item.end + 0.03);
                     const markerInfo = wordMarkersMap[item.globalIdx];
                     const isPng = markerInfo?.type === 'PNG';
                     const isBroll = markerInfo?.type === 'BROLL';
                     const isEmphasis = markerInfo?.type === 'EMPHASIS';
                     const isIcon = markerInfo?.type === 'ICON';
 
+                    // If KEYWORDS filter is active, dim non-keyword words
+                    const isDimmedByKeywordFilter = filterMode === 'KEYWORDS' && !isCoreKeyword;
+                    // If POLISHED filter is active, dim non-polished words
+                    const isDimmedByPolishedFilter = filterMode === 'POLISHED' && !item.isPolished;
+
                     let wordBg = 'transparent';
                     let wordColor = 'var(--text-primary)';
                     let wordBorder = '1px solid transparent';
                     let wordBorderBottom: string | undefined = undefined;
 
-                    if (isPlayingWord) {
+                    if (isActiveMatch) {
+                      wordBg = '#f97316'; // Vibrant vivid orange for current active match
+                      wordColor = '#ffffff';
+                      wordBorder = '1.5px solid #ffedd5';
+                      wordBorderBottom = '3px solid #ea580c';
+                    } else if (matches) {
+                      wordBg = 'rgba(234, 179, 8, 0.45)'; // Amber/golden yellow for other matches
+                      wordColor = '#fef08a';
+                      wordBorder = '1px solid #facc15';
+                    } else if (isPlayingWord) {
                       wordBg = 'rgba(16, 185, 129, 0.38)';
                       wordColor = '#fff';
                       wordBorder = '1px solid #34d399';
                     } else if (isSelected) {
                       wordBg = 'rgba(59, 130, 246, 0.45)';
                       wordBorder = '1px solid #60a5fa';
-                    } else if (matches) {
-                      wordBg = '#3b82f6';
                     } else if (item.isFiller) {
                       wordBg = 'rgba(250, 204, 21, 0.25)';
                       wordColor = '#facc15';
@@ -3466,6 +3970,11 @@ export const TranscriptView: React.FC = () => {
                       wordBg = 'rgba(239, 68, 68, 0.18)';
                       wordColor = '#fee2e2';
                       wordBorderBottom = '2.5px solid #ef4444';
+                    } else if (isCoreKeyword) {
+                      wordBg = 'rgba(245, 158, 11, 0.22)';
+                      wordColor = '#fef08a';
+                      wordBorderBottom = '2.5px solid #f59e0b';
+                      wordBorder = '1px solid rgba(245, 158, 11, 0.35)';
                     } else if (item.isPolished) {
                       wordBg = 'rgba(16, 185, 129, 0.18)';
                       wordColor = '#a7f3d0';
@@ -3474,27 +3983,128 @@ export const TranscriptView: React.FC = () => {
                       wordBorderBottom = `1px dotted ${directive.accentColor || '#666'}`;
                     }
 
+                    const isEditingThisWord = editingWordIdx === item.globalIdx;
+
                     return (
-                      <span key={item.id} style={{ display: 'inline-flex', alignItems: 'center', margin: '1px 2px' }}>
-                        <span
-                          onClick={(e) => handleWordClick(item.globalIdx, e)}
-                          title={`${item.isPolished ? `✨ Gemini Polished: "${item.originalWord}" ➔ "${item.word}" (ক্লিক করে পূর্বের বানানে ফেরত যেতে পারেন)\n` : ''}${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + (markerInfo.suggestion || markerInfo.label) + ']' : ''} (ক্লিক করুন AI অ্যাকশনের জন্য, Shift+Click সিলেক্ট)`}
-                          style={{
-                            display: 'inline-block',
-                            padding: '1px 4px',
-                            borderRadius: '3px',
-                            cursor: 'pointer',
-                            backgroundColor: wordBg,
-                            color: wordColor,
-                            border: wordBorder,
-                            borderBottom: wordBorderBottom,
-                            textDecoration: isPlayingWord ? 'underline' : 'none',
-                            fontSize: '12px',
-                            fontWeight: (isPng || isBroll || isEmphasis || isIcon || item.isPolished) ? 600 : 400
-                          }}
-                        >
-                          {item.word}
-                        </span>
+                      <span
+                        key={item.id}
+                        id={`word-token-${item.globalIdx}`}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          margin: '1px 2px',
+                          verticalAlign: 'baseline',
+                          opacity: (isDimmedByKeywordFilter || isDimmedByPolishedFilter) ? 0.25 : 1,
+                          transition: 'opacity 0.15s ease'
+                        }}
+                      >
+                        {isEditingThisWord ? (
+                          <span
+                            onClick={(e) => e.stopPropagation()}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '2px',
+                              verticalAlign: 'baseline',
+                              position: 'relative'
+                            }}
+                          >
+                            <input
+                              ref={editingWordInputRef}
+                              type="text"
+                              value={editingWordText}
+                              onChange={(e) => setEditingWordText(e.target.value)}
+                              onBlur={() => handleSaveWord(item.globalIdx)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleSaveWord(item.globalIdx);
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  handleCancelWord();
+                                }
+                              }}
+                              style={{
+                                display: 'inline-block',
+                                width: `${Math.max(editingWordText.length, 1) + 1.2}ch`,
+                                minWidth: '28px',
+                                fontSize: '12px',
+                                fontFamily: 'inherit',
+                                fontWeight: 600,
+                                lineHeight: '1.2',
+                                color: '#ffffff',
+                                backgroundColor: 'rgba(59, 130, 246, 0.3)',
+                                border: 'none',
+                                borderBottom: '2px solid #38bdf8',
+                                borderRadius: '3px',
+                                padding: '1px 4px',
+                                margin: 0,
+                                outline: 'none',
+                                boxShadow: '0 0 8px rgba(56, 189, 248, 0.4)',
+                                verticalAlign: 'baseline'
+                              }}
+                              autoFocus
+                            />
+                            <button
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                handleSaveWord(item.globalIdx);
+                              }}
+                              title={language === 'bn' ? 'সেভ করুন (Enter)' : 'Save (Enter)'}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: '15px',
+                                height: '15px',
+                                padding: 0,
+                                fontSize: '10px',
+                                fontWeight: 700,
+                                backgroundColor: '#10b981',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '3px',
+                                cursor: 'pointer',
+                                flexShrink: 0
+                              }}
+                            >
+                              ✓
+                            </button>
+                          </span>
+                        ) : (
+                          <span
+                            onClick={(e) => handleWordClick(item.globalIdx, e)}
+                            onDoubleClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleStartEditWord(item.globalIdx, item.word);
+                            }}
+                            title={`${isActiveMatch ? `🎯 সক্রিয় সার্চ ম্যাচ (${activeMatchIdx + 1} / ${matchingWordIndices.length})\n` : matches ? '🔍 সার্চ ফলাফল\n' : ''}${item.isPolished ? `✨ Gemini Polished: "${item.originalWord}" ➔ "${item.word}" (ক্লিক করে পূর্বের বানানে ফেরত যেতে পারেন)\n` : ''}${item.start.toFixed(2)}s - ${item.end.toFixed(2)}s${markerInfo ? ' [' + (markerInfo.suggestion || markerInfo.label) + ']' : ''} (ডাবল-ক্লিক: সরাসরি ইনলাইন এডিট)`}
+                            style={{
+                              display: 'inline-block',
+                              padding: '1px 4px',
+                              borderRadius: '3px',
+                              cursor: 'pointer',
+                              backgroundColor: wordBg,
+                              color: wordColor,
+                              border: wordBorder,
+                              borderBottom: wordBorderBottom,
+                              textDecoration: isPlayingWord ? 'underline' : 'none',
+                              fontSize: '12px',
+                              fontWeight: (isActiveMatch || isPng || isBroll || isEmphasis || isIcon || item.isPolished) ? 600 : 400,
+                              boxShadow: isActiveMatch ? '0 0 12px rgba(249, 115, 22, 0.85)' : 'none',
+                              transform: isActiveMatch ? 'scale(1.12)' : 'none',
+                              zIndex: isActiveMatch ? 5 : 1,
+                              position: isActiveMatch ? 'relative' : 'static',
+                              transition: 'all 0.12s ease'
+                            }}
+                          >
+                            {item.word}
+                          </span>
+                        )}
 
                         {item.isPolished && (
                           <span
@@ -3696,6 +4306,14 @@ export const TranscriptView: React.FC = () => {
                   || ((directive.meaningBn && !directive.meaningBn.includes('বক্তব্যে বিশেষ জোর') && !directive.meaningBn.includes('মূল বক্তব্য: "')) ? directive.meaningBn : '')
                   || 'অনুবাদ প্রস্তুত হচ্ছে...';
 
+                const activeCoreKeywords: string[] = (
+                  (directive.coreKeywords && directive.coreKeywords.length > 0)
+                    ? directive.coreKeywords
+                    : (directive.keyWords && directive.keyWords.length > 0)
+                      ? directive.keyWords
+                      : (directive.primaryKeyword ? [directive.primaryKeyword] : [])
+                ).filter(Boolean);
+
                 return (
                   <div
                     style={{
@@ -3748,6 +4366,8 @@ export const TranscriptView: React.FC = () => {
                                 ...directive,
                                 meaningBn: tuned.meaningBn,
                                 banglaExplanation: tuned.meaningBn,
+                                coreKeywords: tuned.coreKeywords || directive.coreKeywords || [],
+                                primaryKeyword: tuned.primaryKeyword || directive.primaryKeyword || '',
                                 actionBrollKeywords: tuned.actionBrollKeywords || [],
                                 moodBrollKeywords: tuned.moodBrollKeywords || [],
                                 brollKeywords: tuned.brollKeywords || [],
@@ -3804,7 +4424,110 @@ export const TranscriptView: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* 📖 CONTEXTUAL SCRIPT & BENGALI TRANSLATION STREAM */}
+                    {/* 🗂️ DIRECTIVE CATEGORY TABS (বাংলা অর্থ ডিফল্ট, বাকিগুলো পৃথক ট্যাবে) */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      borderBottom: '1px solid rgba(255,255,255,0.08)',
+                      paddingBottom: '8px',
+                      flexWrap: 'wrap'
+                    }}>
+                      <button
+                        onClick={() => setDirectiveTab('meaning')}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          padding: '4px 10px',
+                          borderRadius: '5px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          border: directiveTab === 'meaning' ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.08)',
+                          backgroundColor: directiveTab === 'meaning' ? 'rgba(56, 189, 248, 0.22)' : 'rgba(255,255,255,0.04)',
+                          color: directiveTab === 'meaning' ? '#38bdf8' : '#94a3b8',
+                          boxShadow: directiveTab === 'meaning' ? '0 0 10px rgba(56, 189, 248, 0.25)' : 'none',
+                          transition: 'all 0.15s ease',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <BookOpen size={13} />
+                        <span>🇧🇩 বাংলা অর্থ ও কনটেক্সট</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDirectiveTab('editing')}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          padding: '4px 10px',
+                          borderRadius: '5px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          border: directiveTab === 'editing' ? '1px solid #facc15' : '1px solid rgba(255,255,255,0.08)',
+                          backgroundColor: directiveTab === 'editing' ? 'rgba(250, 204, 21, 0.22)' : 'rgba(255,255,255,0.04)',
+                          color: directiveTab === 'editing' ? '#facc15' : '#94a3b8',
+                          boxShadow: directiveTab === 'editing' ? '0 0 10px rgba(250, 204, 21, 0.25)' : 'none',
+                          transition: 'all 0.15s ease',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <Sparkles size={13} />
+                        <span>🎬 এডিটিং ও মোশন গ্রাফিক্স</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDirectiveTab('broll')}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          padding: '4px 10px',
+                          borderRadius: '5px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          border: directiveTab === 'broll' ? '1px solid #22d3ee' : '1px solid rgba(255,255,255,0.08)',
+                          backgroundColor: directiveTab === 'broll' ? 'rgba(6, 182, 212, 0.22)' : 'rgba(255,255,255,0.04)',
+                          color: directiveTab === 'broll' ? '#22d3ee' : '#94a3b8',
+                          boxShadow: directiveTab === 'broll' ? '0 0 10px rgba(6, 182, 212, 0.25)' : 'none',
+                          transition: 'all 0.15s ease',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <Video size={13} />
+                        <span>🎥 বি-রোল সার্চ ({brollKws.length})</span>
+                      </button>
+
+                      <button
+                        onClick={() => setDirectiveTab('png')}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '5px',
+                          padding: '4px 10px',
+                          borderRadius: '5px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          border: directiveTab === 'png' ? '1px solid #c084fc' : '1px solid rgba(255,255,255,0.08)',
+                          backgroundColor: directiveTab === 'png' ? 'rgba(168, 85, 247, 0.22)' : 'rgba(255,255,255,0.04)',
+                          color: directiveTab === 'png' ? '#c084fc' : '#94a3b8',
+                          boxShadow: directiveTab === 'png' ? '0 0 10px rgba(168, 85, 247, 0.25)' : 'none',
+                          transition: 'all 0.15s ease',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        <Image size={13} />
+                        <span>🖼️ পিএনজি ও আইকন ({pngKws.length})</span>
+                      </button>
+                    </div>
+
+                    {/* TAB 1: 📖 CONTEXTUAL SCRIPT & BENGALI TRANSLATION STREAM */}
+                    {directiveTab === 'meaning' && (
                     <div style={{
                       backgroundColor: 'rgba(0,0,0,0.45)',
                       borderRadius: '8px',
@@ -3894,6 +4617,68 @@ export const TranscriptView: React.FC = () => {
                             <span style={{ color: '#67e8f9', fontWeight: 700 }}>🇧🇩 বাংলা অর্থ: </span>
                             {activeMeaningBn}
                           </div>
+
+                          {/* 🔑 Core Keywords / Phrases for On-Screen Typography (1-Click Copy) */}
+                          {activeCoreKeywords.length > 0 && (
+                            <div style={{
+                              marginTop: '8px',
+                              paddingTop: '8px',
+                              borderTop: '1px dashed rgba(56, 189, 248, 0.25)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '6px'
+                            }}>
+                              <div style={{
+                                fontSize: '11px',
+                                fontWeight: 700,
+                                color: '#facc15',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '5px'
+                              }}>
+                                <Sparkles size={12} />
+                                <span>🔑 মূল কী-ওয়ার্ড / ফ্রেজ (অন-স্ক্রিন টাইপোগ্রাফির জন্য):</span>
+                                <span style={{ fontSize: '9.5px', color: 'rgba(255,255,255,0.5)', fontWeight: 'normal' }}>
+                                  (ক্লিক করে কপি করুন)
+                                </span>
+                              </div>
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                {activeCoreKeywords.map((kw, i) => {
+                                  const isCopied = copiedKw === kw;
+                                  return (
+                                    <button
+                                      key={i}
+                                      onClick={async (e) => {
+                                        e.stopPropagation();
+                                        await copyToClipboard(kw);
+                                        setCopiedKw(kw);
+                                        setTimeout(() => setCopiedKw(null), 2500);
+                                      }}
+                                      title="ক্লিক করে কপি করুন"
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        padding: '3px 8px',
+                                        borderRadius: '5px',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        backgroundColor: isCopied ? 'rgba(16, 185, 129, 0.25)' : 'rgba(245, 158, 11, 0.15)',
+                                        border: isCopied ? '1px solid #10b981' : '1px solid rgba(245, 158, 11, 0.35)',
+                                        color: isCopied ? '#6ee7b7' : '#fef08a',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease'
+                                      }}
+                                    >
+                                      {isCopied ? <Check size={11} /> : <Copy size={11} />}
+                                      <span>"{kw}"</span>
+                                      {isCopied && <span style={{ fontSize: '9.5px', fontWeight: 700 }}>✓ কপি হয়েছে!</span>}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
 
                         {/* Succeeding Paragraphs (Muted Tone, Readable Bengali) */}
@@ -3925,8 +4710,10 @@ export const TranscriptView: React.FC = () => {
                         })}
                       </div>
                     </div>
+                    )}
 
-                    {/* 🎬 VIDEO EDITING, TYPOGRAPHY & ICON GUIDANCE */}
+                    {/* TAB 2: 🎬 VIDEO EDITING, TYPOGRAPHY & ICON GUIDANCE */}
+                    {directiveTab === 'editing' && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
                       {/* Editing & Typography Guide */}
                       <div style={{
@@ -3969,8 +4756,10 @@ export const TranscriptView: React.FC = () => {
                         </div>
                       </div>
                     </div>
+                    )}
 
-                    {/* 🎥 WHOLE PARAGRAPH B-ROLL SEARCH HUB (MULTI-SITE + YOUTUBE) */}
+                    {/* TAB 3: 🎥 WHOLE PARAGRAPH B-ROLL SEARCH HUB (MULTI-SITE + YOUTUBE) */}
+                    {directiveTab === 'broll' && (
                     <div style={{
                       backgroundColor: 'rgba(6, 182, 212, 0.07)',
                       border: '1px solid rgba(6, 182, 212, 0.25)',
@@ -4063,8 +4852,10 @@ export const TranscriptView: React.FC = () => {
                         })}
                       </div>
                     </div>
+                    )}
 
-                    {/* 🖼️ WHOLE PARAGRAPH PNG & ICON SEARCH HUB */}
+                    {/* TAB 4: 🖼️ WHOLE PARAGRAPH PNG & ICON SEARCH HUB */}
+                    {directiveTab === 'png' && (
                     <div style={{
                       backgroundColor: 'rgba(168, 85, 247, 0.07)',
                       border: '1px solid rgba(168, 85, 247, 0.25)',
@@ -4144,6 +4935,7 @@ export const TranscriptView: React.FC = () => {
                         })}
                       </div>
                     </div>
+                    )}
 
                     {/* Quick Action Footer Bar */}
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', paddingTop: '6px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -4203,6 +4995,7 @@ export const TranscriptView: React.FC = () => {
       {/* ===================== FLOATING WORD-LEVEL AI POPOVER (COMPACT & RESPONSIVE) ===================== */}
       {popoverWord && (
         <div
+          ref={popoverRef}
           onMouseDown={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -4407,6 +5200,7 @@ export const TranscriptView: React.FC = () => {
       {/* ===================== FLOATING TEXT DRAG SELECTION TOOLBAR (COMPACT & RESPONSIVE) ===================== */}
       {floatingSelection && (
         <div
+          ref={floatingToolbarRef}
           onMouseDown={(e) => {
             e.stopPropagation();
             e.preventDefault();
@@ -4428,6 +5222,71 @@ export const TranscriptView: React.FC = () => {
             flexWrap: 'nowrap'
           }}
         >
+          {/* 🤖 Ask Co-Pilot */}
+          <button
+            onClick={() => {
+              setIsGlobalCopilotOpen(true);
+              setExportStatus(language === 'bn' ? 'কো-পাইলট ওপেন করা হয়েছে!' : 'Sent to Co-Pilot!');
+              setTimeout(() => setExportStatus(null), 2000);
+              window.dispatchEvent(new CustomEvent('prismex-copilot-prompt', { 
+                detail: { prompt: `এই লাইনটি নিয়ে আলোচনা বা রি-রাইট সাজেশন দিন: "${floatingSelection.text}"` } 
+              }));
+              setFloatingSelection(null);
+            }}
+            title={language === 'bn' ? 'এই লাইনটি নিয়ে কো-পাইলটের সাথে চ্যাট করুন' : 'Chat with Co-Pilot about this line'}
+            style={{
+              padding: '4px 8px',
+              backgroundColor: '#4f46e5',
+              color: '#ffffff',
+              border: '1px solid #818cf8',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <Bot size={11} />
+            <span>{language === 'bn' ? 'কো-পাইলট' : 'Co-Pilot'}</span>
+          </button>
+
+          {/* 🖼️ AI Image Generation */}
+          <button
+            onClick={() => {
+              setIsGlobalCopilotOpen(true);
+              setExportStatus(language === 'bn' ? 'ইমেজ তৈরি হচ্ছে...' : 'Generating image in Co-Pilot...');
+              setTimeout(() => setExportStatus(null), 2000);
+              window.dispatchEvent(new CustomEvent('prismex-copilot-prompt', { 
+                detail: { 
+                  prompt: `/image ${floatingSelection.text}`,
+                  autoSend: true 
+                } 
+              }));
+              setFloatingSelection(null);
+            }}
+            title={language === 'bn' ? 'এই লাইনের ওপর ভিত্তি করে এআই ইমেজ তৈরি করুন' : 'Generate AI Image for this line'}
+            style={{
+              padding: '4px 8px',
+              backgroundColor: '#059669',
+              color: '#ffffff',
+              border: '1px solid #34d399',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <Sparkles size={11} />
+            <span>{language === 'bn' ? 'ইমেজ' : 'Image'}</span>
+          </button>
+
           {/* 📋 Copy */}
           <button
             onClick={async () => {
@@ -5096,6 +5955,109 @@ export const TranscriptView: React.FC = () => {
               </button>
             </div>
 
+            {/* Drag & Drop Zone for Local B-Roll / PNG */}
+            <input
+              type="file"
+              ref={brollFileInputRef}
+              accept="video/*,image/*"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  const fPath = (file as any).path || (file as any).webkitRelativePath;
+                  if (fPath) {
+                    handlePlaceBrollOnTrack2(null, fPath);
+                  } else {
+                    setCreativeStatus(language === 'bn' ? 'ফাইল পাথ শনাক্ত হয়নি। ফাইল ড্র্যাগ করুন।' : 'File path could not be resolved.');
+                  }
+                }
+              }}
+            />
+            <div
+              onClick={() => brollFileInputRef.current?.click()}
+              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const files = e.dataTransfer.files;
+                let foundPath = '';
+                if (files && files.length > 0) {
+                  foundPath = (files[0] as any).path || '';
+                }
+                if (!foundPath) {
+                  const uriList = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+                  if (uriList && uriList.startsWith('file://')) {
+                    try {
+                      foundPath = decodeURIComponent(uriList.replace(/^file:\/\//, ''));
+                    } catch {}
+                  }
+                }
+                if (foundPath) {
+                  handlePlaceBrollOnTrack2(null, foundPath);
+                } else {
+                  brollFileInputRef.current?.click();
+                }
+              }}
+              style={{
+                border: '1.5px dashed rgba(52, 211, 153, 0.45)',
+                borderRadius: '6px',
+                padding: '12px 14px',
+                textAlign: 'center',
+                backgroundColor: 'rgba(52, 211, 153, 0.06)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '4px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#34d399', fontSize: '11px', fontWeight: 600 }}>
+                <Film size={13} />
+                <span>{language === 'bn' ? 'ড্র্যাগ করুন অথবা ক্লিক করে B-Roll / PNG ফাইল বেছে নিন' : 'Drag & Drop or Click to Browse B-Roll / PNG'}</span>
+              </div>
+              <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                {language === 'bn'
+                  ? `ফাইল ছাড়ার সাথে সাথে তা প্রিমিয়ার প্রোর V2 ট্র্যাকে (${targetBrollTime.toFixed(1)}s এ) অটোমেটিক বসে যাবে`
+                  : `File will be placed directly onto Video Track 2 at ${targetBrollTime.toFixed(1)}s`}
+              </span>
+            </div>
+
+            {/* Quick External Browser Search Links */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '9.5px', color: 'var(--text-muted)' }}>
+                {language === 'bn' ? 'ব্রাউজারে খুঁজুন:' : 'Open in Browser:'}
+              </span>
+              <button
+                onClick={() => hostBridge.openExternalUrl(`https://www.pexels.com/search/videos/${encodeURIComponent(brollSearchQuery || 'cinematic')}/`)}
+                className="btn-secondary"
+                style={{ padding: '2px 6px', fontSize: '9px', color: '#67e8f9', borderColor: 'rgba(6, 182, 212, 0.3)' }}
+              >
+                Pexels ↗
+              </button>
+              <button
+                onClick={() => hostBridge.openExternalUrl(`https://pixabay.com/videos/search/${encodeURIComponent(brollSearchQuery || 'cinematic')}/`)}
+                className="btn-secondary"
+                style={{ padding: '2px 6px', fontSize: '9px', color: '#10b981', borderColor: 'rgba(16, 185, 129, 0.3)' }}
+              >
+                Pixabay ↗
+              </button>
+              <button
+                onClick={() => hostBridge.openExternalUrl(`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(brollSearchQuery || 'cinematic')}+transparent+png`)}
+                className="btn-secondary"
+                style={{ padding: '2px 6px', fontSize: '9px', color: '#d8b4fe', borderColor: 'rgba(168, 85, 247, 0.3)' }}
+              >
+                Google PNG ↗
+              </button>
+              <button
+                onClick={() => hostBridge.openExternalUrl(`https://www.flaticon.com/search?word=${encodeURIComponent(brollSearchQuery || 'icon')}`)}
+                className="btn-secondary"
+                style={{ padding: '2px 6px', fontSize: '9px', color: '#fbbf24', borderColor: 'rgba(245, 158, 11, 0.3)' }}
+              >
+                Flaticon ↗
+              </button>
+            </div>
+
             {/* Results Grid */}
             <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', minHeight: 0 }}>
               {brollResults.length === 0 ? (
@@ -5610,6 +6572,7 @@ export const TranscriptView: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };

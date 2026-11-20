@@ -36,6 +36,18 @@ export type ActiveTab =
   | 'settings' 
   | 'history';
 
+export interface ActionFeedback {
+  id: string;
+  type: 'success' | 'error' | 'warning';
+  title: string;
+  detail?: string;
+  reason?: string;
+  guideline?: string;
+  actionText?: string;
+  onAction?: () => void;
+  timestamp: number;
+}
+
 interface PrismexState {
   activeTab: ActiveTab;
   setActiveTab: (tab: ActiveTab) => void;
@@ -43,6 +55,10 @@ interface PrismexState {
   // Localization
   language: AppLanguage;
   setLanguage: (lang: AppLanguage) => void;
+
+  // Global UI Scale
+  uiScale: 'compact' | 'normal' | 'large' | 'xlarge';
+  setUiScale: (scale: 'compact' | 'normal' | 'large' | 'xlarge') => void;
 
   // Premiere Pro Host State
   sequenceManifest: SequenceManifest | null;
@@ -155,6 +171,9 @@ interface PrismexState {
   setClientBriefText: (text: string) => void;
   scriptAuditReport: any[];
   setScriptAuditReport: (report: any[]) => void;
+  clientDossier: any | null;
+  setClientDossier: (dossier: any | null) => void;
+  toggleDossierTodo: (id: string) => void;
 
   // Brand Kit & Visual Palette State
   brandKit: {
@@ -189,12 +208,16 @@ interface PrismexState {
     timecode: string;
     seconds: number;
     clientRequest: string;
+    actionItem?: string;
     category: string;
+    priority?: string;
     status: 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+    completed?: boolean;
     actionTaken?: string;
   }>;
   setClientRevisions: (revs: any[]) => void;
   updateRevisionStatus: (id: string, status: 'PENDING' | 'IN_PROGRESS' | 'RESOLVED', actionTaken?: string) => void;
+  toggleRevisionItem: (id: string) => void;
 
   // Global Universal Co-Pilot Floating Drawer
   isGlobalCopilotOpen: boolean;
@@ -204,9 +227,22 @@ interface PrismexState {
   globalBusyAction: string | null;
   setGlobalBusyAction: (action: string | null) => void;
 
-  // Global Toasts
+  // Global Toasts & Action Guideline Feedback
   globalToast: { message: string; type: 'success' | 'info' | 'error' } | null;
   showToast: (message: string, type?: 'success' | 'info' | 'error', durationMs?: number) => void;
+  actionFeedback: ActionFeedback | null;
+  showActionFeedback: (feedback: Omit<ActionFeedback, 'id' | 'timestamp'>) => void;
+  clearActionFeedback: () => void;
+
+  // 1-Click Sequence Aspect Ratio Converter & Auto-Fit
+  changeSequenceAspectRatio: (options: {
+    width: number;
+    height: number;
+    label: string;
+    ratioKey?: string;
+    fitMode?: 'fill' | 'fit';
+    clone?: boolean;
+  }) => Promise<void>;
 
   // Actions
   initApp: () => Promise<void>;
@@ -223,6 +259,7 @@ const hostBridge = PremiereHostBridge.getInstance();
 const timelineEngine = new TimelineEditingEngine();
 let sequenceWatcherTimer: any = null;
 let lastSequenceSignature: string = '';
+let consecutiveNullManifestTicks: number = 0;
 
 export function getCleanSequenceKey(seqName?: string): string {
   if (!seqName) return 'default_sequence';
@@ -252,26 +289,105 @@ export function rippleShiftWords(words: any[], cuts: { startSeconds: number; end
       });
     })
     .map((w) => {
-      let ws = w.start_seconds ?? w.start ?? 0;
-      let we = w.end_seconds ?? w.end ?? 0;
+      const origStart = w.start_seconds ?? w.start ?? 0;
+      const origEnd = w.end_seconds ?? w.end ?? 0;
+      const dur = Math.max(0.01, origEnd - origStart);
 
+      // CRITICAL FIX: Calculate cumulative cut time preceding origStart using unmutated cut intervals
+      let cutBefore = 0;
       for (const c of sortedCuts) {
-        const dur = c.durationSeconds ?? (c.endSeconds - c.startSeconds);
-        // Words strictly at or after the cut point are shifted left by the exact ripple duration
-        if (ws >= c.startSeconds) {
-          ws = Math.max(0, ws - dur);
-          we = Math.max(0, we - dur);
+        const cStart = c.startSeconds;
+        const cEnd = c.endSeconds;
+        if (cEnd <= origStart + 0.001) {
+          cutBefore += (cEnd - cStart);
+        } else if (cStart < origStart) {
+          cutBefore += (origStart - cStart);
         }
       }
 
+      const newStart = Math.max(0, origStart - cutBefore);
+      const newEnd = Math.max(newStart + 0.01, newStart + dur);
+
       return {
         ...w,
-        start_seconds: Number(ws.toFixed(4)),
-        end_seconds: Number(we.toFixed(4)),
-        start: Number(ws.toFixed(4)),
-        end: Number(we.toFixed(4))
+        start_seconds: Number(newStart.toFixed(4)),
+        end_seconds: Number(newEnd.toFixed(4)),
+        start: Number(newStart.toFixed(4)),
+        end: Number(newEnd.toFixed(4))
       };
     });
+}
+
+/**
+ * Re-aligns transcript words with Premiere Pro timeline clips after cuts, ripple deletes, or clip movements.
+ * Matches each word's persistent sourceMedia + sourceTime offset against active timeline clips.
+ */
+export function realignWordsWithTimelineClips(words: any[], sourceClips: any[]): any[] {
+  if (!words || words.length === 0 || !sourceClips || sourceClips.length === 0) return words;
+
+  // Filter out invalid/empty clips
+  const validClips = sourceClips.filter((c: any) => (c.outSeconds - c.inSeconds) > 0.02 || (c.sourceOutSeconds - c.sourceInSeconds) > 0.02);
+  if (validClips.length === 0) return words;
+
+  const realignedWords: any[] = [];
+
+  for (const w of words) {
+    const wordSourceTime = w.sourceTime !== undefined ? Number(w.sourceTime) : Number(w.start_seconds ?? w.start ?? 0);
+    const wordDur = w.duration !== undefined ? Number(w.duration) : Math.max(0.04, Number(w.end_seconds ?? w.end ?? 0) - Number(w.start_seconds ?? w.start ?? 0));
+    const wordMedia = (w.mediaPath || '').trim().toLowerCase();
+
+    let matchedClip: any = null;
+
+    // 1. Try matching with mediaPath & source time range
+    for (const clip of validClips) {
+      const clipMedia = (clip.mediaPath || '').trim().toLowerCase();
+      const mediaMatches = !wordMedia || !clipMedia || wordMedia === clipMedia || validClips.length === 1;
+
+      if (mediaMatches) {
+        const srcIn = Number(clip.sourceInSeconds ?? 0);
+        const srcOut = Number(clip.sourceOutSeconds ?? clip.outSeconds ?? 0);
+        if (wordSourceTime >= srcIn - 0.04 && wordSourceTime < srcOut + 0.04) {
+          matchedClip = clip;
+          break;
+        }
+      }
+    }
+
+    // 2. Fallback: match by source time range across any clip if mediaPath was missing
+    if (!matchedClip) {
+      for (const clip of validClips) {
+        const srcIn = Number(clip.sourceInSeconds ?? 0);
+        const srcOut = Number(clip.sourceOutSeconds ?? clip.outSeconds ?? 0);
+        if (wordSourceTime >= srcIn - 0.04 && wordSourceTime < srcOut + 0.04) {
+          matchedClip = clip;
+          break;
+        }
+      }
+    }
+
+    if (matchedClip) {
+      const clipIn = Number(matchedClip.inSeconds ?? 0);
+      const clipSrcIn = Number(matchedClip.sourceInSeconds ?? 0);
+      const offsetInClip = Math.max(0, wordSourceTime - clipSrcIn);
+      const newTimelineStart = Math.max(0, clipIn + offsetInClip);
+      const newTimelineEnd = Math.max(newTimelineStart + 0.01, newTimelineStart + wordDur);
+
+      realignedWords.push({
+        ...w,
+        sourceTime: wordSourceTime,
+        duration: wordDur,
+        mediaPath: matchedClip.mediaPath || w.mediaPath,
+        start_seconds: Number(newTimelineStart.toFixed(3)),
+        end_seconds: Number(newTimelineEnd.toFixed(3)),
+        start: Number(newTimelineStart.toFixed(3)),
+        end: Number(newTimelineEnd.toFixed(3))
+      });
+    }
+  }
+
+  // Sort strictly ascending by timeline start time
+  realignedWords.sort((a, b) => a.start_seconds - b.start_seconds);
+  return realignedWords;
 }
 
 export interface PrismexProjectSavePayload {
@@ -294,6 +410,115 @@ export interface PrismexProjectSavePayload {
   brandKit?: any;
   editingRoadmap?: any[];
   clientRevisions?: any[];
+  clientDossier?: any;
+}
+
+export const CLIENT_MASTER_CACHE_KEY = '_project_client_master';
+
+export interface PrismexClientMasterPayload {
+  clientDossier?: any;
+  brandKit?: any;
+  clientBriefText?: string;
+  clientScriptText?: string;
+  editingRoadmap?: any[];
+  scriptAuditReport?: any[];
+  updatedAt?: string;
+}
+
+/**
+ * Tier 1 (Project-Level Ground Truth):
+ * Persists client dossier, brand kit, brief, fonts, and links globally for the entire Premiere project.
+ * Shared across ALL sequences (e.g. 18 promo videos) in the same project.
+ */
+export async function persistClientMasterData(manifest: any, data: PrismexClientMasterPayload): Promise<void> {
+  const jsonStr = JSON.stringify({
+    ...data,
+    updatedAt: new Date().toISOString()
+  });
+  const projId = manifest?.premiereProjectId || 'current_project';
+
+  // 1. ExtendScript Project Folder Cache (.prismex_cache/_project_client_master.json)
+  try {
+    await hostBridge.saveProjectCache(CLIENT_MASTER_CACHE_KEY, jsonStr);
+  } catch {}
+
+  // 2. Local Daemon Persistent Storage (~/.prismex/project_cache)
+  try {
+    await client.saveProjectCache(projId, CLIENT_MASTER_CACHE_KEY, data);
+  } catch {}
+
+  // 3. Browser / CEP LocalStorage fallback
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`prismex_client_master_${projId}`, jsonStr);
+      localStorage.setItem('prismex_client_master_global', jsonStr);
+    } catch {}
+  }
+}
+
+/**
+ * Loads project-wide client master data into store (retains across all sequences).
+ */
+export async function loadClientMasterData(manifest?: any): Promise<boolean> {
+  const projId = manifest?.premiereProjectId || 'current_project';
+
+  // 1. ExtendScript Project Folder Cache
+  try {
+    const extRes = await hostBridge.loadProjectCache(CLIENT_MASTER_CACHE_KEY);
+    if (extRes.found && extRes.content) {
+      const parsed: PrismexClientMasterPayload = JSON.parse(extRes.content);
+      if (parsed) {
+        usePrismexStore.setState((prev) => ({
+          clientDossier: parsed.clientDossier || prev.clientDossier,
+          brandKit: parsed.brandKit ? { ...prev.brandKit, ...parsed.brandKit } : prev.brandKit,
+          clientBriefText: parsed.clientBriefText !== undefined ? parsed.clientBriefText : prev.clientBriefText,
+          clientScriptText: parsed.clientScriptText !== undefined ? parsed.clientScriptText : prev.clientScriptText,
+          editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : prev.editingRoadmap
+        }));
+        return true;
+      }
+    }
+  } catch (e) {
+    console.warn('ExtendScript client master load error:', e);
+  }
+
+  // 2. Local Daemon Persistent Cache
+  try {
+    const daemonData = await client.getProjectCache(projId, CLIENT_MASTER_CACHE_KEY);
+    if (daemonData) {
+      usePrismexStore.setState((prev) => ({
+        clientDossier: daemonData.clientDossier || prev.clientDossier,
+        brandKit: daemonData.brandKit ? { ...prev.brandKit, ...daemonData.brandKit } : prev.brandKit,
+        clientBriefText: daemonData.clientBriefText !== undefined ? daemonData.clientBriefText : prev.clientBriefText,
+        clientScriptText: daemonData.clientScriptText !== undefined ? daemonData.clientScriptText : prev.clientScriptText,
+        editingRoadmap: (daemonData.editingRoadmap && daemonData.editingRoadmap.length > 0) ? daemonData.editingRoadmap : prev.editingRoadmap
+      }));
+      return true;
+    }
+  } catch (e) {
+    console.warn('Daemon client master load error:', e);
+  }
+
+  // 3. LocalStorage
+  if (typeof window !== 'undefined') {
+    try {
+      const localStr = localStorage.getItem(`prismex_client_master_${projId}`) || localStorage.getItem('prismex_client_master_global');
+      if (localStr) {
+        const parsed: PrismexClientMasterPayload = JSON.parse(localStr);
+        if (parsed) {
+          usePrismexStore.setState((prev) => ({
+            clientDossier: parsed.clientDossier || prev.clientDossier,
+            brandKit: parsed.brandKit ? { ...prev.brandKit, ...parsed.brandKit } : prev.brandKit,
+            clientBriefText: parsed.clientBriefText !== undefined ? parsed.clientBriefText : prev.clientBriefText,
+            clientScriptText: parsed.clientScriptText !== undefined ? parsed.clientScriptText : prev.clientScriptText,
+            editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : prev.editingRoadmap
+          }));
+          return true;
+        }
+      }
+    } catch {}
+  }
+  return false;
 }
 
 export async function persistProjectData(
@@ -348,12 +573,13 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
           detectedSfxCues: parsed.detectedSfxCues || [],
           soundDesignTips: parsed.soundDesignTips || [],
           recommendedBgmData: parsed.recommendedBgmData || null,
-          clientScriptText: parsed.clientScriptText || '',
-          clientBriefText: parsed.clientBriefText || '',
-          scriptAuditReport: parsed.scriptAuditReport || [],
+          clientScriptText: parsed.clientScriptText || usePrismexStore.getState().clientScriptText || '',
+          clientBriefText: parsed.clientBriefText || usePrismexStore.getState().clientBriefText || '',
+          scriptAuditReport: parsed.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
           brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
-          editingRoadmap: parsed.editingRoadmap || [],
+          editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
           clientRevisions: parsed.clientRevisions || [],
+          clientDossier: parsed.clientDossier || usePrismexStore.getState().clientDossier || null,
           jobStatus: 'COMPLETE',
           jobProgress: 100,
           jobMessage: 'Loaded from project cache'
@@ -383,12 +609,13 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
         detectedSfxCues: daemonData.detectedSfxCues || [],
         soundDesignTips: daemonData.soundDesignTips || [],
         recommendedBgmData: daemonData.recommendedBgmData || null,
-        clientScriptText: daemonData.clientScriptText || '',
-        clientBriefText: daemonData.clientBriefText || '',
-        scriptAuditReport: daemonData.scriptAuditReport || [],
+        clientScriptText: daemonData.clientScriptText || usePrismexStore.getState().clientScriptText || '',
+        clientBriefText: daemonData.clientBriefText || usePrismexStore.getState().clientBriefText || '',
+        scriptAuditReport: daemonData.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
         brandKit: daemonData.brandKit || usePrismexStore.getState().brandKit,
-        editingRoadmap: daemonData.editingRoadmap || [],
+        editingRoadmap: (daemonData.editingRoadmap && daemonData.editingRoadmap.length > 0) ? daemonData.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
         clientRevisions: daemonData.clientRevisions || [],
+        clientDossier: daemonData.clientDossier || usePrismexStore.getState().clientDossier || null,
         jobStatus: 'COMPLETE',
         jobProgress: 100,
         jobMessage: 'Loaded from daemon project cache'
@@ -420,12 +647,13 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
             detectedSfxCues: parsed.detectedSfxCues || [],
             soundDesignTips: parsed.soundDesignTips || [],
             recommendedBgmData: parsed.recommendedBgmData || null,
-            clientScriptText: parsed.clientScriptText || '',
-            clientBriefText: parsed.clientBriefText || '',
-            scriptAuditReport: parsed.scriptAuditReport || [],
+            clientScriptText: parsed.clientScriptText || usePrismexStore.getState().clientScriptText || '',
+            clientBriefText: parsed.clientBriefText || usePrismexStore.getState().clientBriefText || '',
+            scriptAuditReport: parsed.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
             brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
-            editingRoadmap: parsed.editingRoadmap || [],
+            editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
             clientRevisions: parsed.clientRevisions || [],
+            clientDossier: parsed.clientDossier || usePrismexStore.getState().clientDossier || null,
             jobStatus: 'COMPLETE',
             jobProgress: 100
           });
@@ -478,12 +706,32 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     set({ language: lang });
   },
 
+  uiScale: (() => {
+    const s = typeof window !== 'undefined' ? (localStorage.getItem('prismex_ui_scale') as any) : null;
+    const initial = (s === 'compact' || s === 'large' || s === 'xlarge') ? s : 'normal';
+    if (typeof document !== 'undefined') {
+      const map: Record<string, string> = { compact: '0.88', normal: '1', large: '1.14', xlarge: '1.28' };
+      document.documentElement.style.setProperty('--prismex-ui-scale', map[initial]);
+    }
+    return initial;
+  })(),
+  setUiScale: (scale) => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('prismex_ui_scale', scale);
+    }
+    if (typeof document !== 'undefined') {
+      const map: Record<string, string> = { compact: '0.88', normal: '1', large: '1.14', xlarge: '1.28' };
+      document.documentElement.style.setProperty('--prismex-ui-scale', map[scale] || '1');
+    }
+    set({ uiScale: scale });
+  },
+
   sequenceManifest: null,
   autoTranscribeNewSequences: (() => {
     try {
-      return localStorage.getItem('prismex_auto_transcribe_new') !== 'false';
+      return localStorage.getItem('prismex_auto_transcribe_new') === 'true';
     } catch {
-      return true;
+      return false;
     }
   })(),
   setAutoTranscribeNewSequences: (val: boolean) => {
@@ -495,9 +743,9 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   sequenceChangedNotice: null,
   setSequenceChangedNotice: (notice: string | null) => set({ sequenceChangedNotice: notice }),
 
-  isAppInitializing: true,
-  initStepMessage: 'Connecting to Prismex Engine...',
-  initStepProgress: 15,
+  isAppInitializing: false,
+  initStepMessage: 'Ready',
+  initStepProgress: 100,
 
   isSwitchingSequence: false,
   sequenceSwitchMessage: '',
@@ -539,6 +787,26 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     set({ scriptAuditReport: report });
     get().saveCurrentProjectState();
   },
+  clientDossier: null,
+  setClientDossier: (dossier) => {
+    set({ clientDossier: dossier });
+    get().saveCurrentProjectState();
+  },
+  toggleDossierTodo: (id) => {
+    set((state) => {
+      if (!state.clientDossier || !state.clientDossier.todoChecklist) return state;
+      const updatedTodos = state.clientDossier.todoChecklist.map((item: any) =>
+        item.id === id ? { ...item, completed: !item.completed } : item
+      );
+      return {
+        clientDossier: {
+          ...state.clientDossier,
+          todoChecklist: updatedTodos
+        }
+      };
+    });
+    get().saveCurrentProjectState();
+  },
 
   brandKit: {
     brandName: '',
@@ -577,8 +845,29 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   updateRevisionStatus: (id, status, actionTaken) => {
     set((state) => ({
       clientRevisions: state.clientRevisions.map((rev) =>
-        rev.id === id ? { ...rev, status, ...(actionTaken !== undefined ? { actionTaken } : {}) } : rev
+        rev.id === id
+          ? {
+              ...rev,
+              status,
+              completed: status === 'RESOLVED',
+              ...(actionTaken !== undefined ? { actionTaken } : {})
+            }
+          : rev
       )
+    }));
+    get().saveCurrentProjectState();
+  },
+  toggleRevisionItem: (id) => {
+    set((state) => ({
+      clientRevisions: state.clientRevisions.map((rev) => {
+        if (rev.id !== id) return rev;
+        const newCompleted = !rev.completed;
+        return {
+          ...rev,
+          completed: newCompleted,
+          status: newCompleted ? 'RESOLVED' : 'PENDING'
+        };
+      })
     }));
     get().saveCurrentProjectState();
   },
@@ -599,6 +888,70 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     }, durationMs);
   },
 
+  actionFeedback: null,
+  showActionFeedback: (feedback) => {
+    const item: ActionFeedback = {
+      ...feedback,
+      id: `act_${Date.now()}`,
+      timestamp: Date.now()
+    };
+    set({ actionFeedback: item });
+
+    // Auto-dismiss successes after 6.5s
+    if (feedback.type === 'success') {
+      setTimeout(() => {
+        if (get().actionFeedback?.id === item.id) {
+          set({ actionFeedback: null });
+        }
+      }, 6500);
+    }
+  },
+  clearActionFeedback: () => set({ actionFeedback: null }),
+
+  changeSequenceAspectRatio: async (options) => {
+    const isBn = get().language === 'bn';
+    set({
+      globalBusyAction: isBn ? `সিকোয়েন্স ${options.label}-এ পরিবর্তন ও অটো-ফিট হচ্ছে...` : `Converting sequence to ${options.label}...`
+    });
+
+    try {
+      const res = await hostBridge.changeSequenceAspectRatio(options);
+      if (res.success) {
+        await get().refreshSequence();
+        get().showToast(
+          isBn ? `✓ সিকোয়েন্স ${options.label} (${options.width}x${options.height}) ফরম্যাটে পরিবর্তিত ও অটো-ফিট সম্পন্ন!` : `✓ Sequence converted to ${options.label} & auto-fitted!`,
+          'success',
+          4000
+        );
+        get().showActionFeedback({
+          type: 'success',
+          title: isBn ? `✓ সিকোয়েন্স রেশিও পরিবর্তন সফল (${options.label})` : `✓ Sequence Aspect Ratio Changed (${options.label})`,
+          detail: isBn 
+            ? `সিকোয়েন্সের ফ্রেম রেজোলিউশন ${options.width}x${options.height} করা হয়েছে এবং ${res.clipsModified || 'সকল'} ক্লিপে অটো-স্কেলিং ও ফিট প্রয়োগ করা হয়েছে।` 
+            : `Resolution set to ${options.width}x${options.height}. ${res.clipsModified || 'All'} clips auto-fitted.`
+        });
+      } else {
+        get().showActionFeedback({
+          type: 'error',
+          title: isBn ? '⚠️ সিকোয়েন্স রেশিও পরিবর্তন করা যায়নি' : '⚠️ Could Not Change Aspect Ratio',
+          reason: res.reason || res.error || (isBn ? 'টাইমলাইনে কোনো সক্রিয় সিকোয়েন্স পাওয়া যায়নি।' : 'No active sequence found.'),
+          guideline: res.guideline || (isBn ? '১. প্রিমিয়ার প্রোতে টাইমলাইন উইন্ডোতে একটি সিকোয়েন্স ওপেন করুন।\n২. ক্লিপগুলো লক বা রিড-অনলি মোডে নেই তা নিশ্চিত করুন।' : '1. Open an active sequence in Premiere Pro timeline.\n2. Ensure clips are not locked.'),
+          actionText: isBn ? '🔄 পুনরায় চেষ্টা করুন' : 'Retry',
+          onAction: () => get().changeSequenceAspectRatio(options)
+        });
+      }
+    } catch (err: any) {
+      get().showActionFeedback({
+        type: 'error',
+        title: isBn ? '⚠️ এরর: সিকোয়েন্স পরিবর্তন ব্যর্থ' : '⚠️ Error Changing Aspect Ratio',
+        reason: String(err),
+        guideline: isBn ? 'প্রিমিয়ার প্রোতে কোনো অপারেশন রানিং থাকলে শেষ হতে দিন এবং প্যানেল রিফ্রেশ করুন।' : 'Wait for any active operations in Premiere Pro to complete and retry.'
+      });
+    } finally {
+      set({ globalBusyAction: null });
+    }
+  },
+
   checkSequenceChange: async () => {
     // Never interrupt an active transcription
     if (get().jobStatus === 'TRANSCRIBING' || (get().jobProgress > 0 && get().jobProgress < 100)) {
@@ -613,7 +966,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     const currentSeq = get().sequenceManifest;
 
     if (!newManifest) {
-      if (currentSeq) set({ sequenceManifest: null });
+      // Retain last known sequence manifest on temporary hiccups
       return;
     }
 
@@ -667,6 +1020,9 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
       // Check if cache exists for this sequence
       const loaded = await loadPersistedProjectData(newManifest);
+      // Guarantee Project Master Client Data (Dossier, Brand Kit, Brief) is active across all sequences
+      await loadClientMasterData(newManifest);
+
       if (loaded) {
         set({
           sequenceSwitchProgress: 88,
@@ -682,7 +1038,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       }
 
       // No cache found -> Brand new sequence!
-      // Clear previous sequence transcript cleanly
+      // Clear previous sequence transcript cleanly while keeping Client Master Dossier & Brand Kit 100% intact
       set({
         transcriptWords: [],
         transcriptSentences: [],
@@ -693,6 +1049,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         viralTopics: [],
         viralShorts: [],
         srtCues: [],
+        clientRevisions: [],
         jobStatus: 'INITIALIZING',
         jobProgress: 0,
         jobMessage: isBn ? 'নতুন সিকোয়েন্স সনাক্ত হয়েছে' : 'New sequence detected',
@@ -740,21 +1097,52 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         return;
       }
 
-      // CASE 3: Timeline clips changed (clips added or deleted)
+      // CASE 3: Timeline clips or cuts changed (clips split, deleted, ripple-edited, trimmed or moved)
       const oldClipsCount = (currentSeq?.sourceClips || []).length;
       const newClipsCount = (newManifest.sourceClips || []).length;
       const oldDur = currentSeq?.durationSeconds || 0;
       const newDur = newManifest.durationSeconds || 0;
 
       if (get().transcriptWords.length > 0) {
-        if (newClipsCount !== oldClipsCount || Math.abs(newDur - oldDur) > 1.5) {
-          set({ sequenceChangedNotice: `${Math.round(newDur)}s` });
+        if (newClipsCount !== oldClipsCount || Math.abs(newDur - oldDur) > 0.05) {
+          // Instantly re-align all words against new timeline clips without expensive re-transcribe!
+          const realigned = realignWordsWithTimelineClips(get().transcriptWords, newManifest.sourceClips || []);
+          if (realigned.length > 0) {
+            set({
+              transcriptWords: realigned,
+              sequenceChangedNotice: null
+            });
+            await persistProjectData(newManifest, {
+              words: realigned,
+              sentences: get().transcriptSentences,
+              silences: get().detectedSilences,
+              reviewItems: get().reviewItems
+            });
+          } else {
+            set({ sequenceChangedNotice: `${Math.round(newDur)}s` });
+          }
         }
       }
     }
   },
 
   refreshSequence: async () => {
+    try {
+      await hostBridge.ensureCEPScriptLoaded(true);
+      const newManifest = await hostBridge.getActiveSequenceManifest();
+      if (newManifest) {
+        set({ sequenceManifest: newManifest, sequenceChangedNotice: null });
+        get().showToast(
+          get().language === 'bn' ? `✓ সিকোয়েন্স সনাক্ত হয়েছে: ${newManifest.sequenceName}` : `✓ Sequence detected: ${newManifest.sequenceName}`,
+          'success'
+        );
+      } else {
+        get().showToast(
+          get().language === 'bn' ? '⚠️ কোনো সিকোয়েন্স পাওয়া যায়নি। টাইমলাইনে ক্লিক করুন।' : '⚠️ No sequence found. Click timeline to focus.',
+          'info'
+        );
+      }
+    } catch {}
     await get().checkSequenceChange();
   },
 
@@ -889,28 +1277,42 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
   saveCurrentProjectState: async () => {
     const s = get();
-    if (!s.sequenceManifest) return;
-    await persistProjectData(s.sequenceManifest, {
-      words: s.transcriptWords,
-      sentences: s.transcriptSentences,
-      silences: s.detectedSilences,
-      reviewItems: s.reviewItems,
-      scriptDirectives: s.scriptDirectives,
-      customMarkers: s.customMarkers,
-      viralTopics: s.viralTopics,
-      viralShorts: s.viralShorts,
-      srtCues: s.srtCues,
-      audioSettings: s.audioSettings,
-      detectedSfxCues: s.detectedSfxCues,
-      soundDesignTips: s.soundDesignTips,
-      recommendedBgmData: s.recommendedBgmData,
-      clientScriptText: s.clientScriptText,
-      clientBriefText: s.clientBriefText,
-      scriptAuditReport: s.scriptAuditReport,
+
+    // 1. Tier 1: Persist Project-Wide Client Master Data (Shared across all sequences)
+    await persistClientMasterData(s.sequenceManifest, {
+      clientDossier: s.clientDossier,
       brandKit: s.brandKit,
+      clientBriefText: s.clientBriefText,
+      clientScriptText: s.clientScriptText,
       editingRoadmap: s.editingRoadmap,
-      clientRevisions: s.clientRevisions
+      scriptAuditReport: s.scriptAuditReport
     });
+
+    // 2. Tier 2: Persist Sequence-Specific Timeline Data
+    if (s.sequenceManifest) {
+      await persistProjectData(s.sequenceManifest, {
+        words: s.transcriptWords,
+        sentences: s.transcriptSentences,
+        silences: s.detectedSilences,
+        reviewItems: s.reviewItems,
+        scriptDirectives: s.scriptDirectives,
+        customMarkers: s.customMarkers,
+        viralTopics: s.viralTopics,
+        viralShorts: s.viralShorts,
+        srtCues: s.srtCues,
+        audioSettings: s.audioSettings,
+        detectedSfxCues: s.detectedSfxCues,
+        soundDesignTips: s.soundDesignTips,
+        recommendedBgmData: s.recommendedBgmData,
+        clientScriptText: s.clientScriptText,
+        clientBriefText: s.clientBriefText,
+        scriptAuditReport: s.scriptAuditReport,
+        brandKit: s.brandKit,
+        editingRoadmap: s.editingRoadmap,
+        clientRevisions: s.clientRevisions,
+        clientDossier: s.clientDossier
+      });
+    }
   },
 
   silenceSettings: {
@@ -930,67 +1332,101 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   aiSummary: null,
 
   initApp: async () => {
-    set({ 
-      isAppInitializing: true, 
-      initStepMessage: get().language === 'bn' ? 'প্রিজমেক্স এআই ইঞ্জিনের সাথে সংযোগ স্থাপন হচ্ছে...' : 'Connecting to Prismex Engine...', 
-      initStepProgress: 20 
-    });
-
-    // 1. Check health
-    const health = await client.checkHealth();
-    set({ 
-      daemonOnline: health !== null,
-      initStepMessage: get().language === 'bn' ? 'প্রিমিয়ার প্রো টাইমলাইন ও সিকোয়েন্স স্ক্যান করা হচ্ছে...' : 'Scanning Premiere Pro timeline & active sequence...',
-      initStepProgress: 45
-    });
-
-    // 2. Initial sequence check & auto-restoration
-    await get().checkSequenceChange();
-    set({ 
-      initStepMessage: get().language === 'bn' ? 'সংরক্ষিত ট্রান্সক্রিপ্ট ও ক্যাশ মেমোরি লোড করা হচ্ছে...' : 'Restoring sequence transcripts & project cache...',
-      initStepProgress: 75
-    });
-
-    // 2.1. Start real-time background sequence & timeline signature poller (every 800ms)
-    if (sequenceWatcherTimer) {
-      clearInterval(sequenceWatcherTimer);
-    }
     try {
-      lastSequenceSignature = await hostBridge.getActiveSequenceSignature();
-    } catch {}
+      // 0. Ensure latest ExtendScript host engine is evaluated in Premiere Pro
+      try {
+        await hostBridge.ensureCEPScriptLoaded(true);
+      } catch (e) {
+        console.warn('[PrismexStore] Failed to ensure hostscript loaded:', e);
+      }
 
-    sequenceWatcherTimer = setInterval(async () => {
-      // Never poll while transcribing or in the middle of a job
-      const status = get().jobStatus;
-      const progress = get().jobProgress;
-      if (status === 'TRANSCRIBING' || (progress > 0 && progress < 100)) {
-        return;
+      // 1. Check health with fast timeout (non-blocking)
+      client.checkHealth().then((health) => {
+        set({ daemonOnline: health !== null });
+      }).catch(() => {
+        set({ daemonOnline: false });
+      });
+
+      set({ 
+        initStepMessage: get().language === 'bn' ? 'টাইমলাইন ও প্রজেক্ট ডেটা লোড হচ্ছে...' : 'Loading timeline & project data...',
+        initStepProgress: 55 
+      });
+
+      // 1.1 Preload Tier 1: Project-Wide Client Master Data (Dossier, Brand Kit, Brief)
+      try {
+        await loadClientMasterData();
+      } catch {}
+
+      // 2. Initial sequence check (non-blocking with 1200ms timeout)
+      try {
+        await Promise.race([
+          get().checkSequenceChange(),
+          new Promise<void>((r) => setTimeout(r, 1200))
+        ]);
+      } catch {}
+
+      set({ 
+        initStepMessage: get().language === 'bn' ? 'প্রিজমেক্স স্টুডিও প্রস্তুত!' : 'Prismex Studio Editor Ready!',
+        initStepProgress: 100 
+      });
+
+      // 2.1 Poller for sequence changes
+      if (sequenceWatcherTimer) {
+        clearInterval(sequenceWatcherTimer);
       }
       try {
-        const sig = await hostBridge.getActiveSequenceSignature();
-        if (sig && sig !== lastSequenceSignature) {
-          lastSequenceSignature = sig;
-          await get().checkSequenceChange();
-        }
+        lastSequenceSignature = await hostBridge.getActiveSequenceSignature();
       } catch {}
-    }, 800);
 
-    // 3. Load profiles & providers
-    const [profiles, providers] = await Promise.all([
-      client.getProfiles(),
-      client.getProviders()
-    ]);
-    set({ 
-      profiles, 
-      providers,
-      initStepMessage: get().language === 'bn' ? 'প্রিজমেক্স স্টুডিও প্রস্তুত!' : 'Prismex Studio Editor Ready!',
-      initStepProgress: 100
-    });
+      let isWatcherChecking = false;
+      sequenceWatcherTimer = setInterval(async () => {
+        // Fast health heartbeat keep-alive
+        client.checkHealth().then((h) => {
+          const isOnline = h !== null;
+          if (get().daemonOnline !== isOnline) {
+            set({ daemonOnline: isOnline });
+          }
+        }).catch(() => {
+          if (get().daemonOnline) set({ daemonOnline: false });
+        });
 
-    // Smooth exit from splash screen
-    setTimeout(() => {
+        const status = get().jobStatus;
+        const progress = get().jobProgress;
+        const isBusy = Boolean(get().globalBusyAction || get().isSwitchingSequence);
+        if (status === 'TRANSCRIBING' || (progress > 0 && progress < 100) || isBusy) {
+          return;
+        }
+
+        if (isWatcherChecking) return;
+        isWatcherChecking = true;
+
+        try {
+          const sig = await hostBridge.getActiveSequenceSignature();
+          const hasManifest = get().sequenceManifest !== null;
+          if (sig && sig !== 'none' && (sig !== lastSequenceSignature || !hasManifest)) {
+            lastSequenceSignature = sig;
+            await get().checkSequenceChange();
+          }
+        } catch {} finally {
+          isWatcherChecking = false;
+        }
+      }, 3500);
+
+      // 3. Load profiles & providers in background (never block UI)
+      Promise.all([
+        client.getProfiles().catch(() => []),
+        client.getProviders().catch(() => [])
+      ]).then(([profiles, providers]) => {
+        set({ profiles: profiles || [], providers: providers || [] });
+      }).catch(() => {});
+
+      setTimeout(() => {
+        set({ isAppInitializing: false });
+      }, 700);
+    } catch (err) {
+      console.error('initApp caught error:', err);
       set({ isAppInitializing: false });
-    }, 450);
+    }
 
     // 4. Connect WebSocket
     client.connectWebSocket(async (event) => {
@@ -1080,13 +1516,55 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
   transcribeSequence: async (options?: any) => {
     const opts = (options && typeof options === 'object' && !('nativeEvent' in options)) ? options : undefined;
-    const seq = await hostBridge.getActiveSequenceManifest();
+    const isBn = get().language === 'bn';
+
+    // 1. Instant feedback: Show progress bar & toast immediately on click
+    get().showToast(isBn ? '🎙️ সিকোয়েন্স ট্রান্সক্রিপশন শুরু হচ্ছে...' : '🎙️ Starting transcription...', 'info');
+    set({
+      jobProgress: 5,
+      jobMessage: isBn ? 'টাইমলাইন যাচাই ও অডিও প্রস্তুত করা হচ্ছে...' : 'Connecting to timeline & preparing audio...',
+      jobStatus: 'TRANSCRIBING',
+      sequenceChangedNotice: null
+    });
+
+    // 2. Resolve Sequence Manifest (Prefer in-memory state first for 0ms delay)
+    let seq = get().sequenceManifest;
+    if (!seq || !seq.sourceClips || seq.sourceClips.length === 0) {
+      try {
+        seq = await hostBridge.getActiveSequenceManifest();
+      } catch {}
+    }
     if (!seq) {
-      alert('Please open an active sequence in Adobe Premiere Pro first.');
+      await new Promise((r) => setTimeout(r, 200));
+      try {
+        seq = await hostBridge.getActiveSequenceManifest();
+      } catch {}
+    }
+    if (!seq) {
+      seq = get().sequenceManifest;
+    }
+    if (!seq) {
+      set({
+        jobProgress: 0,
+        jobStatus: 'INITIALIZING',
+        jobMessage: ''
+      });
+      get().showActionFeedback({
+        type: 'error',
+        title: isBn ? '⚠️ সক্রিয় সিকোয়েন্স পাওয়া যায়নি' : '⚠️ No Active Sequence Found',
+        reason: isBn ? 'প্রিমিয়ার প্রোতে কোনো টাইমলাইন সিকোয়েন্স বর্তমানে ওপেন নেই।' : 'No timeline sequence is currently open in Premiere Pro.',
+        guideline: isBn ? '১. প্রিমিয়ার প্রোর Project প্যানেল থেকে আপনার কাঙ্ক্ষিত সিকোয়েন্সে ডাবল ক্লিক করে টাইমলাইনে ওপেন করুন।\n২. তারপর আবার বাটনে ক্লিক করুন।' : '1. Open a sequence in Premiere Pro timeline.\n2. Click the button again.'
+      });
       return;
     }
 
-    const hasClips = Boolean(seq.sourceClips && seq.sourceClips.length > 0 && seq.durationSeconds > 0.1);
+    const clipMaxOut = (seq.sourceClips && seq.sourceClips.length > 0)
+      ? Math.max(0, ...seq.sourceClips.map((c: any) => Number(c.outSeconds) || 0))
+      : 0;
+    const durSec = Math.max(Number(seq.durationSeconds) || 0, clipMaxOut);
+    seq.durationSeconds = durSec;
+
+    const hasClips = Boolean(seq.sourceClips && seq.sourceClips.length > 0 && durSec > 0.05);
     if (!hasClips) {
       await clearPersistedProjectData(seq);
       set({
@@ -1098,11 +1576,35 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         sequenceChangedNotice: null,
         jobProgress: 0,
         jobStatus: 'INITIALIZING',
-        jobMessage: get().language === 'bn' ? 'টাইমলাইন খালি। কোনো ক্লিপ নেই।' : 'Timeline is empty. No clips found to transcribe.'
+        jobMessage: isBn ? 'টাইমলাইন খালি। কোনো ক্লিপ নেই।' : 'Timeline is empty. No clips found to transcribe.'
       });
-      alert(get().language === 'bn' ? 'টাইমলাইনে কোনো অডিও বা ভিডিও ক্লিপ পাওয়া যায়নি! অনুগ্রহ করে প্রথমে টাইমলাইনে ক্লিপ যুক্ত করুন।' : 'Timeline has no audio or video clips. Please add media clips first.');
+      get().showActionFeedback({
+        type: 'warning',
+        title: isBn ? '⚠️ টাইমলাইন খালি (ক্লিপ নেই)' : '⚠️ Empty Timeline',
+        reason: isBn ? 'সক্রিয় সিকোয়েন্সটিতে কোনো অডিও বা ভিডিও মিডিয়া ক্লিপ পাওয়া যায়নি।' : 'The active sequence has no audio or video clips.',
+        guideline: isBn ? 'টাইমলাইনের ট্র্যাকগুলোতে ভিডিও বা অডিও ক্লিপ ড্র্যাগ করে বসিয়ে পুনরায় বাটনে ক্লিক করুন।' : 'Drag video or audio footage onto the timeline tracks.'
+      });
       return;
     }
+
+    // 3. Health check fallback
+    const health = await client.checkHealth().catch(() => null);
+    if (!health) {
+      set({
+        jobProgress: 0,
+        jobStatus: 'INITIALIZING',
+        jobMessage: isBn ? 'এআই ব্যাকএন্ড ইঞ্জিনের সাথে যোগাযোগ করা যায়নি। সার্ভার চালু আছে কিনা নিশ্চিত করুন।' : 'Failed to reach AI engine. Ensure daemon is running.',
+        daemonOnline: false
+      });
+      get().showActionFeedback({
+        type: 'error',
+        title: isBn ? '⚠️ এআই ব্যাকএন্ড ইঞ্জিন অফলাইন' : '⚠️ AI Backend Daemon Offline',
+        reason: isBn ? 'পোর্ট ৪৮১৫২-এ লোকাল এআই সার্ভারের সাথে সংযোগ বিচ্ছিন্ন।' : 'Could not reach local daemon on port 48152.',
+        guideline: isBn ? 'Settings ট্যাব থেকে "Restart AI Engine" চাপুন অথবা টার্মিনালে ইঞ্জিন চালু করুন।' : 'Click "Restart AI Engine" from Settings.'
+      });
+      return;
+    }
+    set({ daemonOnline: true });
 
     if (opts?.forceReTranscribe) {
       await clearPersistedProjectData(seq);
@@ -1118,8 +1620,8 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     set({
       sequenceManifest: seq,
       sequenceChangedNotice: null,
-      jobProgress: 5,
-      jobMessage: get().language === 'bn' ? 'অডিও এক্সট্র্যাক্ট ও ট্রান্সক্রাইব করা হচ্ছে...' : 'Extracting audio & transcribing speech...',
+      jobProgress: 10,
+      jobMessage: isBn ? 'অডিও এক্সট্র্যাক্ট ও ট্রান্সক্রাইব করা হচ্ছে...' : 'Extracting audio & transcribing speech...',
       jobStatus: 'TRANSCRIBING'
     });
 
@@ -1155,9 +1657,35 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           } else if (status === 'COMPLETE') {
             clearInterval(pollInterval);
             const rData = job.result;
-            const words = rData?.words || [];
+            const rawWords = rData?.words || [];
             const sentences = rData?.sentences || [];
             const silences = rData?.silences || [];
+
+            // Tag each word with persistent sourceTime, duration, and mediaPath for instant timeline sync
+            const currentSeq = get().sequenceManifest;
+            const clips = currentSeq?.sourceClips || [];
+
+            const words = rawWords.map((w: any) => {
+              const ws = Number(w.start_seconds ?? w.start ?? 0);
+              const we = Number(w.end_seconds ?? w.end ?? 0);
+              const dur = Math.max(0.04, we - ws);
+              let matchedClip: any = null;
+              for (const c of clips) {
+                if (ws >= c.inSeconds - 0.05 && ws <= c.outSeconds + 0.05) {
+                  matchedClip = c;
+                  break;
+                }
+              }
+              const sourceTime = matchedClip
+                ? Math.max(0, Number(matchedClip.sourceInSeconds ?? 0) + (ws - Number(matchedClip.inSeconds ?? 0)))
+                : (w.sourceTime !== undefined ? Number(w.sourceTime) : ws);
+              return {
+                ...w,
+                sourceTime: Number(sourceTime.toFixed(3)),
+                duration: Number(dur.toFixed(3)),
+                mediaPath: matchedClip?.mediaPath || w.mediaPath || ''
+              };
+            });
 
             set({
               jobProgress: 100,
@@ -1167,8 +1695,15 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
               transcriptSentences: sentences,
               detectedSilences: silences
             });
+            get().showToast(get().language === 'bn' ? '✓ স্পিচ ট্রান্সক্রিপশন সম্পন্ন হয়েছে!' : '✓ Speech transcription completed!', 'success');
+            get().showActionFeedback({
+              type: 'success',
+              title: isBn ? '✓ স্পিচ ট্রান্সক্রিপশন সফলভাবে সম্পন্ন হয়েছে!' : '✓ Speech Transcription Completed!',
+              detail: isBn 
+                ? `মোট ${words.length} টি শব্দ ও ${silences.length} টি সাইলেন্স পজ সনাক্ত করা হয়েছে। আপনি এখন টেক্সট কেটে বা ১-ক্লিক রাফ-কাট দিয়ে এডিট করতে পারেন।`
+                : `Detected ${words.length} words and ${silences.length} silences. Ready for text-based editing.`
+            });
 
-            const currentSeq = get().sequenceManifest;
             if (currentSeq) {
               persistProjectData(currentSeq, {
                 words,
@@ -1179,29 +1714,89 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
             }
           } else if (status === 'FAILED') {
             clearInterval(pollInterval);
+            const errStr = job.error_message || (get().language === 'bn' ? 'অডিও সিগন্যালে কোনো কথা শনাক্ত হয়নি' : 'No speech detected');
             set({
               jobProgress: 0,
-              jobMessage: `Transcription failed: ${job.error_message || 'Unknown error'}`,
+              jobMessage: `Transcription failed: ${errStr}`,
               jobStatus: 'INITIALIZING'
+            });
+            get().showToast(get().language === 'bn' ? `ট্রান্সক্রিপশন ব্যর্থ: ${errStr}` : `Transcription failed: ${errStr}`, 'error');
+            get().showActionFeedback({
+              type: 'error',
+              title: isBn ? '⚠️ ট্রান্সক্রিপশন সম্পন্ন করা যায়নি' : '⚠️ Transcription Failed',
+              reason: errStr,
+              guideline: isBn 
+                ? '১. অডিও ক্লিপে কথা স্পষ্ট শোনা যাচ্ছে কিনা যাচাই করুন।\n২. সেটিংস থেকে হুইস্পার মডেল (Base / Small) পরিবর্তন করে চেষ্টা করুন।' 
+                : '1. Check audio track clarity.\n2. Try a different Whisper model in Settings.',
+              actionText: isBn ? '🔄 পুনরায় চেষ্টা করুন' : 'Retry',
+              onAction: () => get().transcribeSequence(options)
             });
           }
         }
 
         if (pollAttempts > 180) { // 3 minutes timeout
           clearInterval(pollInterval);
+          set({
+            jobProgress: 0,
+            jobStatus: 'INITIALIZING',
+            jobMessage: get().language === 'bn' ? 'ট্রান্সক্রিপশনে অতিরিক্ত সময় লাগছে। অনুগ্রহ করে পুনরায় চেষ্টা করুন।' : 'Transcription timed out. Please try again.'
+          });
         }
       }, 1200);
+    } else {
+      set({
+        jobProgress: 0,
+        jobStatus: 'INITIALIZING',
+        jobMessage: get().language === 'bn' ? 'এআই ব্যাকএন্ড ইঞ্জিনের সাথে যোগাযোগ করা যায়নি। সার্ভার চালু আছে কিনা নিশ্চিত করুন।' : 'Failed to reach AI engine. Ensure daemon is running.'
+      });
+      get().showToast(get().language === 'bn' ? 'ট্রান্সক্রিপশন শুরু করা যায়নি' : 'Could not initiate transcription', 'error');
     }
   },
 
   cutAllSilencesNow: async () => {
-    const seq = await hostBridge.getActiveSequenceManifest();
+    let seq = await hostBridge.getActiveSequenceManifest();
     if (!seq) {
-      alert('Please open an active sequence in Adobe Premiere Pro first.');
+      await new Promise((r) => setTimeout(r, 300));
+      seq = await hostBridge.getActiveSequenceManifest();
+    }
+    if (!seq) {
+      seq = get().sequenceManifest;
+    }
+    if (!seq) {
+      get().showActionFeedback({
+        type: 'error',
+        title: get().language === 'bn' ? '⚠️ সক্রিয় সিকোয়েন্স পাওয়া যায়নি' : '⚠️ No Active Sequence Found',
+        reason: get().language === 'bn' ? 'প্রিমিয়ার প্রোতে কোনো টাইমলাইন সিকোয়েন্স সক্রিয় নেই।' : 'No active sequence found.',
+        guideline: get().language === 'bn' ? 'প্রিমিয়ার প্রোর টাইমলাইনে ক্লিক করে একটি সিকোয়েন্স সক্রিয় করুন।' : 'Click your timeline to focus an active sequence.'
+      });
       return;
     }
 
     let silences = get().detectedSilences;
+    if (!silences || silences.length === 0) {
+      const words = get().transcriptWords;
+      if (words && words.length > 1) {
+        // Compute inter-word silence gaps on the fly from transcript word timestamps!
+        const derived: any[] = [];
+        for (let i = 0; i < words.length - 1; i++) {
+          const wEnd = Number(words[i].end_seconds ?? words[i].end ?? 0);
+          const nextStart = Number(words[i + 1].start_seconds ?? words[i + 1].start ?? 0);
+          const gap = nextStart - wEnd;
+          if (gap >= 0.45) {
+            derived.push({
+              start_seconds: Number((wEnd + 0.08).toFixed(3)),
+              end_seconds: Number((nextStart - 0.08).toFixed(3)),
+              duration_seconds: Number((gap - 0.16).toFixed(3))
+            });
+          }
+        }
+        if (derived.length > 0) {
+          silences = derived;
+          set({ detectedSilences: derived });
+        }
+      }
+    }
+
     if (!silences || silences.length === 0) {
       await get().transcribeSequence();
       return;
@@ -1434,9 +2029,21 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
   },
 
   startMagicRoughCut: async () => {
-    const seq = await hostBridge.getActiveSequenceManifest();
+    let seq = await hostBridge.getActiveSequenceManifest();
     if (!seq) {
-      alert('Please open an active sequence in Adobe Premiere Pro first.');
+      await new Promise((r) => setTimeout(r, 300));
+      seq = await hostBridge.getActiveSequenceManifest();
+    }
+    if (!seq) {
+      seq = get().sequenceManifest;
+    }
+    if (!seq) {
+      get().showActionFeedback({
+        type: 'error',
+        title: get().language === 'bn' ? '⚠️ সক্রিয় সিকোয়েন্স পাওয়া যায়নি' : '⚠️ No Active Sequence Found',
+        reason: get().language === 'bn' ? 'প্রিমিয়ার প্রোতে কোনো টাইমলাইন সিকোয়েন্স সক্রিয় নেই।' : 'No active sequence found.',
+        guideline: get().language === 'bn' ? 'প্রিমিয়ার প্রোর টাইমলাইনে ক্লিক করে একটি সিকোয়েন্স সক্রিয় করুন।' : 'Click your timeline to focus an active sequence.'
+      });
       return;
     }
     set({ sequenceManifest: seq });

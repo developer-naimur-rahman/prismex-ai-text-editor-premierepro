@@ -22,8 +22,14 @@ import {
   ChevronUp,
   FileCode,
   Sliders,
-  Type
+  Type,
+  Copy,
+  Loader2,
+  Film,
+  Scissors,
+  Bookmark
 } from 'lucide-react';
+import { copyToClipboard } from '../utils/clipboard';
 
 interface AuditItem {
   id: string;
@@ -53,6 +59,7 @@ export const ClientScriptCopilot: React.FC = () => {
     brandKit,
     clientRevisions,
     setRecommendedBgmData,
+    setViralShorts,
     setActiveTab,
     showToast
   } = usePrismexStore();
@@ -76,6 +83,18 @@ export const ClientScriptCopilot: React.FC = () => {
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [isAligningScript, setIsAligningScript] = useState<boolean>(false);
 
+  // 1-Click Script Rough Cut States
+  const [isCreatingRoughCut, setIsCreatingRoughCut] = useState<boolean>(false);
+  const [roughCutProgressStep, setRoughCutProgressStep] = useState<string>('');
+  const [roughCutResult, setRoughCutResult] = useState<{
+    sequenceName?: string;
+    cutsExecuted?: number;
+    punchesApplied?: number;
+    markersPlaced?: number;
+    totalCutDuration?: number;
+    summary?: string;
+  } | null>(null);
+
   // Undo snapshot state
   const [undoSnapshot, setUndoSnapshot] = useState<{ words: any[]; cues: any[] } | null>(null);
 
@@ -91,78 +110,42 @@ export const ClientScriptCopilot: React.FC = () => {
     setBriefDraft(clientBriefText || '');
   }, [clientBriefText]);
 
-  // Setup Web Speech API for voice assistant
-  useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = true;
-        recognition.lang = isBn ? 'bn-BD' : 'en-US';
+  const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
 
-        recognition.onstart = () => {
-          setIsListening(true);
-        };
-
-        recognition.onresult = (event: any) => {
-          let currentTranscript = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            currentTranscript += event.results[i][0].transcript;
-          }
-          if (currentTranscript.trim()) {
-            setCommandInput(currentTranscript);
-          }
-        };
-
-        recognition.onerror = (event: any) => {
-          console.warn('Speech recognition error:', event.error);
-          setIsListening(false);
-        };
-
-        recognition.onend = () => {
-          setIsListening(false);
-        };
-
-        recognitionRef.current = recognition;
-      } catch (e) {
-        console.warn('Speech recognition init error:', e);
-      }
-    }
-
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch {}
-      }
-    };
-  }, [isBn]);
-
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      showToast?.(
-        isBn
-          ? 'এই ব্রাউজার বা সিইপি প্যানেলে ভয়েস রিকগনিশন সক্রিয় নেই। টেক্সট লিখে কমান্ড দিন।'
-          : 'Microphone recognition not available in this environment. Please type your command.',
-        'info'
-      );
-      return;
-    }
-
+  // Native Microphone Recording & Whisper Transcription
+  const toggleListening = async () => {
     if (isListening) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
       setIsListening(false);
+      setIsTranscribingVoice(true);
+      showToast?.(isBn ? '🎙️ কথা প্রসেস হচ্ছে...' : '🎙️ Transcribing voice...', 'info');
+      try {
+        const lang = isBn ? 'bn' : 'auto';
+        const res = await client.stopVoiceRecording(lang);
+        setIsTranscribingVoice(false);
+        if (res.success && res.text && res.text.trim()) {
+          const text = res.text.trim();
+          setCommandInput(text);
+          showToast?.(isBn ? `🎙️ ভয়েস গৃহীত: "${text}"` : `🎙️ Voice: "${text}"`, 'success');
+        } else if (res.warning) {
+          showToast?.(res.warning, 'info');
+        } else {
+          showToast?.(isBn ? 'কোনো স্পষ্ট ভয়েস শোনা যায়নি। আরেকবার বলুন।' : 'No speech detected. Please speak closer.', 'info');
+        }
+      } catch (e: any) {
+        setIsTranscribingVoice(false);
+        showToast?.(`ভয়েস ত্রুটি: ${e.message}`, 'error');
+      }
     } else {
       try {
-        recognitionRef.current.lang = isBn ? 'bn-BD' : 'en-US';
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch (err) {
-        console.warn('Speech recognition start failed:', err);
-        setIsListening(false);
+        const res = await client.startVoiceRecording();
+        if (res.success) {
+          setIsListening(true);
+          showToast?.(isBn ? '🎙️ শুনছি... মাইকে কথা বলুন (শেষ হলে মাইকে আবার চাপুন)' : '🎙️ Listening... speak now (tap mic to stop)', 'info');
+        } else {
+          showToast?.(res.error || 'মাইক্রোফোন চালু করা যায়নি', 'error');
+        }
+      } catch (e: any) {
+        showToast?.(`মাইক্রোফোন ত্রুটি: ${e.message}`, 'error');
       }
     }
   };
@@ -292,6 +275,84 @@ export const ClientScriptCopilot: React.FC = () => {
     }
   };
 
+  // 1-Click Non-Destructive Script-to-Rough Cut Sequence Handler
+  const handleCreateScriptRoughCut = async (explicitScript?: string) => {
+    const scriptToUse = (explicitScript || scriptDraft || clientScriptText || '').trim();
+    if (!scriptToUse) {
+      showToast?.(
+        isBn
+          ? 'দয়া করে প্রথমে ক্লায়েন্টের স্ক্রিপ্ট টেক্সট পেস্ট বা ফাইল আপলোড করুন।'
+          : 'Please paste client script or upload file first.',
+        'error'
+      );
+      setActiveSubTab('script');
+      return;
+    }
+
+    if (!transcriptWords || transcriptWords.length === 0) {
+      showToast?.(
+        isBn ? 'প্রথমে টাইমলাইনের অডিও ট্রান্সক্রাইব করুন।' : 'Transcribe timeline audio first.',
+        'error'
+      );
+      return;
+    }
+
+    setIsCreatingRoughCut(true);
+    setRoughCutResult(null);
+    setRoughCutProgressStep(isBn ? '১/৪: স্ক্রিপ্ট বিশ্লেষণ ও সেরা টেক বাছাই চলছে...' : '1/4: Analyzing script & matching takes...');
+
+    try {
+      const dur = sequenceManifest?.durationSeconds || 600.0;
+      const fps = sequenceManifest?.fps || 23.976;
+
+      const res = await client.generateScriptRoughCut(scriptToUse, transcriptWords, dur, fps);
+
+      if (!res || !res.success) {
+        showToast?.(res?.error || (isBn ? 'স্ক্রিপ্ট রাফ-কাট গণনা ব্যর্থ হয়েছে।' : 'Rough-cut calculation failed.'), 'error');
+        setIsCreatingRoughCut(false);
+        return;
+      }
+
+      setRoughCutProgressStep(isBn ? '২/৪: নতুন সিকোয়েন্স ক্লোন ও অটো রিপল কাট চলছে...' : '2/4: Cloning sequence & applying ripple cuts...');
+
+      const premiereRes = await bridge.createScriptRoughCutSequence({
+        cuts: res.cuts || [],
+        punchIns: res.punchIns || [],
+        colorLabels: res.colorLabels || [],
+        markers: res.markers || []
+      });
+
+      if (!premiereRes || !premiereRes.success) {
+        showToast?.(premiereRes?.error || (isBn ? 'প্রিমিয়ার প্রোতে সিকোয়েন্স তৈরি ব্যর্থ হয়েছে।' : 'Sequence creation failed in Premiere.'), 'error');
+        setIsCreatingRoughCut(false);
+        return;
+      }
+
+      setRoughCutProgressStep(isBn ? '৩/৪: A/B Cam পাঞ্চ-ইন ও কালার কোডিং সম্পন্ন...' : '3/4: A/B Cam punch-in & act color-coding applied...');
+
+      setRoughCutResult({
+        sequenceName: premiereRes.sequenceName,
+        cutsExecuted: premiereRes.executedCuts,
+        punchesApplied: premiereRes.punchesApplied,
+        markersPlaced: premiereRes.markersPlaced,
+        totalCutDuration: res.totalCutDuration,
+        summary: res.summary
+      });
+
+      showToast?.(
+        isBn
+          ? `🎉 নতুন সিকোয়েন্স '${premiereRes.sequenceName}' তৈরি হয়েছে!`
+          : `🎉 New sequence '${premiereRes.sequenceName}' created!`,
+        'success'
+      );
+    } catch (err) {
+      console.error('Rough cut error:', err);
+      showToast?.(isBn ? 'রাফ-কাট সিকোয়েন্স তৈরিতে ত্রুটি ঘটেছে।' : 'Failed to create rough-cut sequence.', 'error');
+    } finally {
+      setIsCreatingRoughCut(false);
+    }
+  };
+
   // Execute Natural Language / Voice Co-Pilot Command
   const handleExecuteCommand = async (cmdToRun?: string) => {
     const finalCmd = (cmdToRun || commandInput).trim();
@@ -364,6 +425,38 @@ export const ClientScriptCopilot: React.FC = () => {
       else if (res.action === 'music_recommendation' && res.musicData) {
         setRecommendedBgmData(res.musicData);
         showToast?.(res.message, 'success');
+      }
+
+      // Handle ACTION: Audio Master & Harmonize
+      else if (res.action === 'audio_master') {
+        showToast?.(isBn ? '⏳ টাইমলাইনের সমস্ত অডিও ক্লিপ ব্যালেন্স হচ্ছে...' : '⏳ Harmonizing timeline audio...', 'info');
+        const seqName = sequenceManifest?.sequenceName || 'Sequence';
+        const enhanceRes = await client.enhanceAudio({
+          sequenceName: seqName,
+          sourceClips: sequenceManifest?.sourceClips || [],
+          durationSeconds: sequenceManifest?.durationSeconds || 60,
+          profileId: 'auto-harmonize',
+          settings: (res as any).audioSettings || { truePeak: -6.0, targetLufs: -14.0, vocalRider: true, denoise: 60 }
+        });
+        if (enhanceRes.success && enhanceRes.outputPath) {
+          await bridge.applyEnhancedAudioTrack(enhanceRes.outputPath, 1, true);
+          showToast?.(
+            isBn ? '✓ সমস্ত অডিও ক্লিপ ব্যালেন্সড ও -৬dB পীকে টাইমলাইনে অ্যাপ্লাই করা হয়েছে!' : '✓ Audio clips harmonized to -6dB peak!',
+            'success'
+          );
+        } else {
+          showToast?.(enhanceRes.error || 'অডিও প্রসেসিং ব্যর্থ', 'error');
+        }
+      } else if (res.action === 'script_rough_cut') {
+        showToast?.(res.message, 'info');
+        await handleCreateScriptRoughCut((res as any).scriptText);
+      } else if (res.action === 'batch_shorts' && (res as any).shorts) {
+        setViralShorts((res as any).shorts);
+        showToast?.(res.message, 'success');
+        // Automatically switch to viral shorts view after a short delay so user sees the generated shorts immediately
+        setTimeout(() => {
+          setActiveTab('viral-shorts');
+        }, 1200);
       } else {
         showToast?.(res.message, 'info');
       }
@@ -527,14 +620,27 @@ export const ClientScriptCopilot: React.FC = () => {
               <div className="relative flex items-center bg-[#15161e] border border-[#2d2f40] focus-within:border-indigo-500/70 rounded-xl p-1.5 shadow-inner transition-colors">
                 <button
                   onClick={toggleListening}
+                  disabled={isTranscribingVoice}
                   className={`p-2.5 rounded-lg transition-all ${
                     isListening
                       ? 'bg-rose-500 text-white animate-pulse shadow-lg shadow-rose-500/40'
+                      : isTranscribingVoice
+                      ? 'bg-indigo-600/30 text-indigo-400'
                       : 'text-gray-400 hover:text-indigo-400 hover:bg-white/5'
                   }`}
-                  title={isListening ? (isBn ? 'ভয়েস রেকর্ডিং বন্ধ করুন' : 'Stop listening') : (isBn ? 'মাইক্রোফোনে কথা বলুন' : 'Speak command')}
+                  title={
+                    isListening
+                      ? (isBn ? '🎙️ কথা বলা শেষ হলে ক্লিক করুন' : 'Click to finish speaking')
+                      : (isBn ? '🎙️ মাইক্রোফোনে কথা বলুন' : 'Speak command')
+                  }
                 >
-                  {isListening ? <Mic className="w-4 h-4 animate-bounce" /> : <Mic className="w-4 h-4" />}
+                  {isTranscribingVoice ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                  ) : isListening ? (
+                    <Mic className="w-4 h-4 animate-bounce" />
+                  ) : (
+                    <Mic className="w-4 h-4" />
+                  )}
                 </button>
 
                 <input
@@ -546,12 +652,14 @@ export const ClientScriptCopilot: React.FC = () => {
                   }}
                   placeholder={
                     isListening
-                      ? (isBn ? 'বলুন... আপনার কথা শোনা হচ্ছে...' : 'Listening... Speak now...')
+                      ? (isBn ? '🎙️ শুনছি... মাইকে কথা বলুন... শেষ হলে মাইকে চাপুন' : '🎙️ Listening... Speak now... tap mic when done')
+                      : isTranscribingVoice
+                      ? (isBn ? '⏳ কথা প্রসেস হচ্ছে...' : '⏳ Transcribing voice...')
                       : (isBn
                           ? "কী করতে চান বলুন বা লিখুন (যেমন: 'সব দাড়ি কমা বাদ দাও', 'Teal & Orange কালার দাও')..."
                           : "Type or speak command (e.g. 'remove all punctuation', 'apply teal & orange look')...")
                   }
-                  className="flex-1 bg-transparent px-3 text-xs text-gray-200 placeholder-gray-500 outline-none"
+                  className="flex-1 bg-transparent px-3 text-xs text-gray-200 placeholder-gray-500 outline-none select-text cursor-text"
                 />
 
                 <button
@@ -601,6 +709,13 @@ export const ClientScriptCopilot: React.FC = () => {
                   className="px-2.5 py-1 bg-[#232432] hover:bg-[#2c2d3e] border border-[#353648] hover:border-indigo-500/40 rounded-lg text-[11px] text-gray-300 hover:text-white transition-colors"
                 >
                   🎵 {isBn ? 'ফ্রি BGM সাজেশন' : 'Pixabay Free BGM'}
+                </button>
+
+                <button
+                  onClick={() => handleExecuteCommand('সব অডিও ক্লিপের ভলিউম ব্যালেন্স করো এবং পিক -৬ ডিবি তে রাখো')}
+                  className="px-2.5 py-1 bg-[#232432] hover:bg-[#2c2d3e] border border-[#353648] hover:border-purple-500/40 rounded-lg text-[11px] text-purple-300 hover:text-white transition-colors"
+                >
+                  🎛️ {isBn ? 'ভয়েস ব্যালেন্স (-6dB)' : 'Harmonize Audio (-6dB)'}
                 </button>
 
                 <button
@@ -701,6 +816,124 @@ export const ClientScriptCopilot: React.FC = () => {
                     : '💡 Timeline spoken audio is ground truth. Spoken words are never dropped; only spelling and terminology are aligned.'}
                 </span>
                 <span className="font-mono text-gray-400">{wordCount} words</span>
+              </div>
+
+              {/* 1-Click Script-to-Rough Cut Sequence Action Panel */}
+              <div className="mt-3 p-3.5 bg-gradient-to-r from-indigo-950/40 via-[#181926] to-purple-950/30 border border-indigo-500/30 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-indigo-500/20 text-indigo-400 rounded-lg border border-indigo-500/30">
+                      <Film className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-semibold text-white">
+                        {isBn ? '১-ক্লিকে স্ক্রিপ্ট-টু-রাফ কাট সিকোয়েন্স' : '1-Click Script-to-Rough Cut Sequence'}
+                      </h4>
+                      <p className="text-[10px] text-gray-400">
+                        {isBn
+                          ? 'ব্র্যাকেট ও টেক ফিল্টার করে মূল সিকোয়েন্স ক্লোন করে সরাসরি প্রিমিয়ারে কাট করবে'
+                          : 'Filters stage brackets, eliminates bad takes, clones sequence & executes cuts in Premiere'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={() => handleCreateScriptRoughCut()}
+                    disabled={isCreatingRoughCut || !scriptDraft.trim()}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition-all shadow-lg ${
+                      isCreatingRoughCut || !scriptDraft.trim()
+                        ? 'bg-gray-800 text-gray-500 cursor-not-allowed border border-gray-700'
+                        : 'bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white shadow-indigo-600/30 hover:scale-[1.02] active:scale-[0.98]'
+                    }`}
+                  >
+                    {isCreatingRoughCut ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        <span>{isBn ? 'প্রসেসিং হচ্ছে...' : 'Processing...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Film className="w-3.5 h-3.5" />
+                        <span>{isBn ? '🎬 Create Script Rough-Cut' : '🎬 Create Script Rough-Cut'}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Feature Badges */}
+                <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/5 text-[10px]">
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                    <CheckCircle2 className="w-3 h-3" />
+                    {isBn ? '১০০% নন-ডেস্ট্রাক্টিভ (নতুন সিকোয়েন্স)' : '100% Non-Destructive (Clones Seq)'}
+                  </span>
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                    <Sparkles className="w-3 h-3" />
+                    {isBn ? 'A/B Cam পাঞ্চ-ইন (১১২%)' : 'A/B Cam Punch-In (112%)'}
+                  </span>
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-500/10 text-teal-400 border border-teal-500/20 font-medium">
+                    <Palette className="w-3 h-3" />
+                    {isBn ? 'অ্যাক্ট কালার কোডিং' : 'Act Color Coding'}
+                  </span>
+                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20 font-medium">
+                    <Bookmark className="w-3 h-3" />
+                    {isBn ? 'চ্যাপ্টার ও বি-রোল মার্কার' : 'Chapter & B-Roll Markers'}
+                  </span>
+                </div>
+
+                {/* In-progress status banner */}
+                {isCreatingRoughCut && roughCutProgressStep && (
+                  <div className="p-2.5 bg-indigo-950/60 border border-indigo-500/30 rounded-lg text-xs text-indigo-300 flex items-center gap-2 animate-pulse">
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400 shrink-0" />
+                    <span>{roughCutProgressStep}</span>
+                  </div>
+                )}
+
+                {/* Result banner */}
+                {roughCutResult && (
+                  <div className="p-3 bg-emerald-950/40 border border-emerald-500/40 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-emerald-300 font-semibold text-xs">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                        <span>
+                          {isBn ? 'নতুন সিকোয়েন্স তৈরি সম্পন্ন:' : 'Sequence Created Successfully:'}{' '}
+                          <code className="text-white bg-black/40 px-1.5 py-0.5 rounded font-mono text-[11px]">
+                            {roughCutResult.sequenceName}
+                          </code>
+                        </span>
+                      </div>
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-full font-bold">
+                        {roughCutResult.totalCutDuration}s {isBn ? 'সময় সাশ্রয়' : 'saved'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-gray-300 pt-1">
+                      <div className="p-1.5 bg-black/30 rounded-lg border border-white/5">
+                        <span className="block font-bold text-emerald-400 text-xs">
+                          {roughCutResult.cutsExecuted || 0}
+                        </span>
+                        <span>{isBn ? 'অপ্রয়োজনীয় টেক কাট' : 'Bad Takes Cut'}</span>
+                      </div>
+                      <div className="p-1.5 bg-black/30 rounded-lg border border-white/5">
+                        <span className="block font-bold text-amber-400 text-xs">
+                          {roughCutResult.punchesApplied || 0}
+                        </span>
+                        <span>{isBn ? 'পাঞ্চ-ইন (১১২%)' : 'Punch-Ins (112%)'}</span>
+                      </div>
+                      <div className="p-1.5 bg-black/30 rounded-lg border border-white/5">
+                        <span className="block font-bold text-purple-400 text-xs">
+                          {roughCutResult.markersPlaced || 0}
+                        </span>
+                        <span>{isBn ? 'মার্কার স্থাপিত' : 'Markers Placed'}</span>
+                      </div>
+                    </div>
+
+                    {roughCutResult.summary && (
+                      <p className="text-[10px] text-emerald-300/80 leading-relaxed pt-1">
+                        {roughCutResult.summary}
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

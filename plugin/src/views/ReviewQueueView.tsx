@@ -13,6 +13,7 @@ import {
   XCircle, 
   Zap 
 } from 'lucide-react';
+import { EditorTopRibbon } from '../components/EditorTopRibbon';
 
 export const ReviewQueueView: React.FC = () => {
   const { 
@@ -46,27 +47,29 @@ export const ReviewQueueView: React.FC = () => {
   const acceptedCount = reviewItems.filter(i => i.status === 'ACCEPTED').length;
 
   return (
-    <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px', height: '100%', overflow: 'hidden' }}>
-      {/* Top Header & Bulk Controls */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <div>
-          <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Review Queue</h2>
-          <span style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
-            {reviewItems.length} suggestions ({acceptedCount} approved for cut)
-          </span>
-        </div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <EditorTopRibbon />
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, overflow: 'hidden' }}>
+        {/* Top Header & Bulk Controls */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <h2 style={{ fontSize: '13px', fontWeight: 600, margin: 0 }}>Review Queue</h2>
+            <span style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>
+              {reviewItems.length} suggestions ({acceptedCount} approved for cut)
+            </span>
+          </div>
 
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button className="btn-secondary" style={{ fontSize: '10px' }} onClick={acceptAllReviewItems}>
-            <CheckCheck size={12} />
-            <span>Approve All</span>
-          </button>
-          <button className="btn-secondary" style={{ fontSize: '10px' }} onClick={rejectAllReviewItems}>
-            <XCircle size={12} />
-            <span>Reject All</span>
-          </button>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button className="btn-secondary" style={{ fontSize: '10px' }} onClick={acceptAllReviewItems}>
+              <CheckCheck size={12} />
+              <span>Approve All</span>
+            </button>
+            <button className="btn-secondary" style={{ fontSize: '10px' }} onClick={rejectAllReviewItems}>
+              <XCircle size={12} />
+              <span>Reject All</span>
+            </button>
+          </div>
         </div>
-      </div>
 
       {/* Filter Category Pills */}
       <div style={{ display: 'flex', gap: '4px' }}>
@@ -219,6 +222,7 @@ export const ReviewQueueView: React.FC = () => {
               : t.applyApproved.replace('{n}', String(acceptedCount))}
           </span>
         </button>
+      </div>
       </div>
     </div>
   );

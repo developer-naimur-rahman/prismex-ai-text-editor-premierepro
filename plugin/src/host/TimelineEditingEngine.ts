@@ -62,15 +62,10 @@ export class TimelineEditingEngine {
           durationSeconds: Number((c.endSeconds - c.startSeconds).toFixed(4))
         }));
         const jsonSafe = JSON.stringify(sanitizedCuts).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-        const res = await this.hostBridge.evalScript(
-          `$._prismex.executeNativeRippleCuts('${jsonSafe}')`
+        const data = await this.hostBridge.safeEvalJson(
+          `$._prismex.executeNativeRippleCuts('${jsonSafe}')`,
+          'Timeline ripple cut execution failed'
         );
-        let data: any = {};
-        try {
-          data = JSON.parse(res);
-        } catch {
-          data = { success: typeof res === 'string' && res.indexOf('"success":true') !== -1 };
-        }
         return {
           success: !!data.success,
           cutsExecuted: data.cutsExecuted || sortedCuts.length,

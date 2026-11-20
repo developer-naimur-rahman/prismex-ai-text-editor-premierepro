@@ -11,6 +11,7 @@ import json
 import uuid
 import time
 import re
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
@@ -24,12 +25,15 @@ from .router.ai_router import AIRouter
 from .router.provider_registry import REGISTERED_PROVIDERS, TaskCapability
 from .audio.extractor import AudioExtractor
 from .audio.dsp import AudioDSP
+from .audio.voice_recorder import VoiceInputManager
 from .stt.transcription_service import TranscriptionService
 from .intelligence.take_detector import TakeDetector
 from .intelligence.filler_detector import FillerDetector
 from .intelligence.smart_srt import SmartSRTSegmenter
 from .intelligence.creative_ai import CreativeAI
 from .timeline.cut_harmonizer import CutHarmonizer
+from .timeline.script_rough_cut import ScriptRoughCutEngine
+from .updater.update_manager import UpdateManager
 
 app = FastAPI(title="Prismex Core Companion Daemon", version="1.0.0")
 
@@ -69,12 +73,12 @@ ws_manager = WebSocketManager()
 
 # Request Models
 class SourceClipModel(BaseModel):
-    mediaPath: str
-    trackIndex: int = 1
-    inSeconds: float = 0.0
-    outSeconds: float = 0.0
-    sourceInSeconds: float = 0.0
-    sourceOutSeconds: float = 0.0
+    mediaPath: Optional[str] = ""
+    trackIndex: Optional[int] = 1
+    inSeconds: Optional[float] = 0.0
+    outSeconds: Optional[float] = 0.0
+    sourceInSeconds: Optional[float] = 0.0
+    sourceOutSeconds: Optional[float] = 0.0
 
 class MagicRoughCutRequest(BaseModel):
     premiereProjectId: str = "default_proj"
@@ -179,6 +183,13 @@ class ClientScriptMatchRequest(BaseModel):
     sentences: List[Dict[str, Any]] = []
     fps: float = 24.0
 
+class BatchScriptToShortsRequest(BaseModel):
+    scripts: str
+    words: List[Dict[str, Any]] = []
+    sentences: List[Dict[str, Any]] = []
+    fps: float = 24.0
+    targetCount: Optional[int] = None
+
 class MarkerAnalysisRequest(BaseModel):
     words: List[Dict[str, Any]] = []
 
@@ -233,15 +244,33 @@ def list_providers():
     for p in REGISTERED_PROVIDERS:
         pid = p["provider_id"]
         key = KeychainVault.get_api_key(pid)
+        diag = CreativeAI.get_provider_status(pid)
+
+        # Check configuration
+        is_configured = key is not None or p["is_local"]
+        if not is_configured:
+            status_text = "কী সেট করা নেই (Not Configured)"
+            quota_exhausted = False
+            needs_change = True
+            health = "NOT_CONFIGURED"
+        else:
+            status_text = diag.get("message", "✓ প্রস্তুত")
+            quota_exhausted = diag.get("quota_exhausted", False)
+            needs_change = diag.get("needs_change", False)
+            health = diag.get("status", "HEALTHY")
+
         result.append({
             "providerId": pid,
             "name": p["name"],
             "modelId": p["model_id"],
             "isLocal": p["is_local"],
             "isFreeTier": p["is_free_tier"],
-            "isConfigured": key is not None or p["is_local"],
+            "isConfigured": is_configured,
             "maskedKey": KeychainVault.mask_key(key) if key else None,
-            "health": "HEALTHY",
+            "health": health,
+            "quotaExhausted": quota_exhausted,
+            "needsKeyChange": needs_change,
+            "statusMessage": status_text,
             "maxRpm": p["max_rpm"],
             "priority": p["priority"]
         })
@@ -820,6 +849,78 @@ def ai_match_client_script(req: ClientScriptMatchRequest):
     """Matches a client-provided script to video dialogue timestamps for 1-click sequence creation."""
     return CreativeAI.match_client_script_to_sequence(req.clientScript, req.words, req.sentences, req.fps)
 
+@app.post("/api/v1/transcript/batch-script-to-shorts")
+def batch_script_to_shorts(req: BatchScriptToShortsRequest):
+    """Parses multiple client scripts (5, 8, 10+) and generates dialogue-matched 9:16 Shorts sequences."""
+    return CreativeAI.batch_script_to_shorts(
+        scripts_text=req.scripts,
+        words=req.words,
+        sentences=req.sentences,
+        fps=req.fps,
+        target_count=req.targetCount
+    )
+
+class ScriptRoughCutRequest(BaseModel):
+    scriptText: str
+    words: List[Dict[str, Any]] = []
+    durationSeconds: float = 0.0
+    fps: float = 23.976
+
+@app.post("/api/v1/timeline/script-rough-cut")
+def generate_script_rough_cut(req: ScriptRoughCutRequest):
+    """
+    Parses client script, extracts spoken dialogue, filters non-spoken brackets/chapters,
+    aligns with timeline transcript, selects optimal takes, calculates cuts,
+    A/B multi-cam punch-ins (100% vs 112%), act color labels, and chapter markers.
+    """
+    return ScriptRoughCutEngine.generate_script_rough_cut(
+        script_text=req.scriptText,
+        transcript_words=req.words,
+        total_duration_seconds=req.durationSeconds,
+        fps=req.fps
+    )
+
+class FeedbackMarkersRequest(BaseModel):
+    feedbackText: str
+    fps: float = 24.0
+
+class AssetDownloadRequest(BaseModel):
+    url: str
+    assetType: str = "video"
+
+@app.post("/api/v1/client/parse-feedback-markers")
+def parse_feedback_markers_api(req: FeedbackMarkersRequest):
+    """Parses client revision notes/WhatsApp feedback into timeline markers."""
+    markers = CreativeAI.parse_client_feedback_to_markers(req.feedbackText, req.fps)
+    return {"success": True, "count": len(markers), "markers": markers}
+
+@app.post("/api/v1/stock/download-asset")
+def download_asset_api(req: AssetDownloadRequest):
+    """Downloads an online media asset to local cache for 1-click import into Premiere Pro."""
+    return CreativeAI.download_and_cache_asset(req.url, req.assetType)
+
+# ===================== IN-APP AUTO-UPDATER & RESTART APIS =====================
+class RestartAppRequest(BaseModel):
+    appName: Optional[str] = "Adobe Premiere Pro"
+
+class InstallUpdateRequest(BaseModel):
+    downloadUrl: Optional[str] = None
+
+@app.get("/api/v1/update/check")
+def check_for_updates():
+    """Checks remote channel for available extension updates and release notes."""
+    return UpdateManager.check_updates()
+
+@app.post("/api/v1/update/download-and-install")
+def download_and_install_update(req: InstallUpdateRequest):
+    """Downloads and extracts update bundle directly into CEP extension directory."""
+    return UpdateManager.download_and_install_update(req.downloadUrl)
+
+@app.post("/api/v1/update/restart-app")
+def restart_app_endpoint(req: RestartAppRequest):
+    """Saves project and restarts host app (Premiere Pro or After Effects)."""
+    return UpdateManager.restart_host_app(req.appName or "Adobe Premiere Pro")
+
 @app.post("/api/v1/transcript/ai-markers")
 def ai_markers(req: MarkerAnalysisRequest):
     """Classifies emphasis keywords (RED), B-Roll visual cues (GREEN), and icons/graphics (BLUE)."""
@@ -1076,8 +1177,9 @@ async def extract_frame_ffmpeg(req: ExtractFrameRequest):
     import base64
     from ..config import HOME_DIR
 
-    if not os.path.exists(req.mediaPath):
-        raise HTTPException(status_code=404, detail="Media file not found")
+    media_path = AudioExtractor.normalize_media_path(req.mediaPath)
+    if not media_path or not os.path.exists(media_path):
+        raise HTTPException(status_code=404, detail=f"Media file not found: {req.mediaPath}")
 
     tmp_out = HOME_DIR / ".prismex" / "luts" / "current_frame.jpg"
     tmp_out.parent.mkdir(parents=True, exist_ok=True)
@@ -1085,7 +1187,7 @@ async def extract_frame_ffmpeg(req: ExtractFrameRequest):
     cmd = [
         "ffmpeg", "-y",
         "-ss", str(max(0.0, req.seconds)),
-        "-i", req.mediaPath,
+        "-i", media_path,
         "-vframes", "1",
         "-q:v", "2",
         str(tmp_out)
@@ -1101,6 +1203,24 @@ async def extract_frame_ffmpeg(req: ExtractFrameRequest):
         raise HTTPException(status_code=500, detail="Frame not generated")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"FFmpeg error: {e}")
+
+class ReadImageRequest(BaseModel):
+    filePath: str
+
+@app.post("/api/v1/color/read-image-base64")
+def read_image_base64_endpoint(req: ReadImageRequest):
+    """Reads a local image file and returns base64 data URI for CEP display."""
+    import base64
+    p = Path(req.filePath)
+    if not p.exists():
+        return {"success": False, "error": "File does not exist"}
+    try:
+        data = p.read_bytes()
+        mime = "image/png" if p.suffix.lower() == ".png" else "image/jpeg"
+        b64 = f"data:{mime};base64," + base64.b64encode(data).decode("utf-8")
+        return {"success": True, "base64": b64}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 @app.post("/api/v1/audio/enhance")
 async def enhance_audio_endpoint(req: AudioEnhanceRequest):
@@ -1152,6 +1272,28 @@ async def bgm_recommendations_endpoint(req: BgmRecommendRequest):
     )
     return res
 
+class MasterBgmRequest(BaseModel):
+    bgmPath: str
+    targetVolumeDb: Optional[float] = -26.0
+
+@app.post("/api/v1/audio/master-bgm")
+async def master_bgm_endpoint(req: MasterBgmRequest):
+    input_wav = Path(req.bgmPath)
+    if not input_wav.exists():
+        raise HTTPException(status_code=400, detail="BGM audio file not found")
+    out_dir = Path.home() / ".prismex" / "mastered_bgm"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"BGM_Master_{int(time.time())}.wav"
+    res = await asyncio.to_thread(
+        AudioDSP.master_bgm_track,
+        input_wav,
+        out_path,
+        req.targetVolumeDb or -26.0
+    )
+    if not res.get("success"):
+        raise HTTPException(status_code=500, detail=res.get("error", "BGM master failed"))
+    return res
+
 # ----------------- WebSocket Endpoint -----------------
 
 @app.websocket("/ws/events")
@@ -1165,6 +1307,202 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_manager.disconnect(websocket)
     except Exception:
         ws_manager.disconnect(websocket)
+
+# ----------------- PDF Export & System Reveal -----------------
+
+class ExportPdfReportRequest(BaseModel):
+    folderPath: Optional[str] = None
+    filename: str
+    reportHtml: str
+    openAfterSave: bool = True
+    revealInFinder: bool = False
+
+@app.post("/api/v1/files/export-pdf-report")
+def export_pdf_report_api(req: ExportPdfReportRequest):
+    """
+    Saves a professional printable report in HTML and natively compiles it to a vector PDF
+    using macOS headless Chrome/Chromium, saves directly to the Premiere project directory,
+    and reveals or opens it in default viewer.
+    """
+    try:
+        folder = None
+        if req.folderPath and req.folderPath.strip() and req.folderPath != "/tmp":
+            folder = Path(req.folderPath.strip())
+        else:
+            folder = Path.home() / "Documents" / "PrismexExports"
+
+        folder.mkdir(parents=True, exist_ok=True)
+        safe_base = re.sub(r'[^a-zA-Z0-9_\u0980-\u09FF-]', '_', req.filename.replace('.pdf', '').replace('.html', '') or 'Client_Audit_Report')
+
+        html_path = folder / f"{safe_base}.html"
+        html_path.write_text(req.reportHtml, encoding="utf-8")
+
+        pdf_path = folder / f"{safe_base}.pdf"
+        pdf_generated = False
+
+        chrome_bins = [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+        ]
+        chrome_exe = next((b for b in chrome_bins if Path(b).exists()), None)
+        if chrome_exe:
+            try:
+                cmd = [
+                    chrome_exe,
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--no-pdf-header-footer",
+                    f"--print-to-pdf={str(pdf_path)}",
+                    str(html_path)
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+                if pdf_path.exists() and pdf_path.stat().st_size > 100:
+                    pdf_generated = True
+            except Exception as pe:
+                print(f"[PDF Export] Chrome print error: {pe}")
+
+        final_path = str(pdf_path) if pdf_generated else str(html_path)
+
+        if req.openAfterSave:
+            try:
+                subprocess.Popen(["open", final_path])
+            except Exception:
+                pass
+        elif req.revealInFinder:
+            try:
+                subprocess.Popen(["open", "-R", final_path])
+            except Exception:
+                pass
+
+        return {
+            "success": True,
+            "pdfGenerated": pdf_generated,
+            "filePath": final_path,
+            "fileName": Path(final_path).name,
+            "folder": str(folder),
+            "htmlPath": str(html_path)
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+class RevealFileRequest(BaseModel):
+    path: str
+
+@app.post("/api/v1/system/reveal-file")
+def reveal_file_api(req: RevealFileRequest):
+    """Reveals a file or folder directly in Finder (macOS) or File Explorer."""
+    try:
+        p = Path(req.path)
+        if p.exists():
+            subprocess.Popen(["open", "-R", str(p)])
+            return {"success": True}
+        return {"success": False, "error": "Path does not exist"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/v1/system/restart-premiere")
+def restart_premiere_api():
+    """Gracefully saves and restarts Adobe Premiere Pro on macOS."""
+    import sys
+    if sys.platform != "darwin":
+        return {"success": False, "error": "Restart is only supported on macOS currently."}
+    
+    script = '''
+    tell application "System Events"
+        set pList to (name of processes whose name contains "Adobe Premiere Pro")
+    end tell
+    if (count of pList) > 0 then
+        set appName to item 1 of pList
+        tell application appName
+            quit
+        end tell
+        delay 2
+        tell application appName to activate
+    else
+        tell application "Adobe Premiere Pro 2025" to activate
+    end if
+    '''
+    try:
+        subprocess.Popen(["osascript", "-e", script])
+        return {"success": True, "message": "Premiere Pro restarting..."}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+# ----------------- Voice Input & Commands -----------------
+
+class VoiceStopRequest(BaseModel):
+    language: Optional[str] = "auto"
+
+@app.post("/api/v1/voice/start")
+def voice_start_api():
+    """Starts local microphone capture via CoreAudio for AI Co-Pilot voice commands."""
+    mgr = VoiceInputManager.get_instance()
+    return mgr.start_recording()
+
+@app.post("/api/v1/voice/stop")
+def voice_stop_api(req: Optional[VoiceStopRequest] = None):
+    """Stops microphone capture, transcribes using Apple Silicon MLX-Whisper, and returns text."""
+    mgr = VoiceInputManager.get_instance()
+    lang = req.language if req and req.language else "auto"
+    return mgr.stop_and_transcribe(language=lang)
+
+# ----------------- AI Image Studio & Generation -----------------
+
+class ImageGenerateRequest(BaseModel):
+    prompt: str
+    width: Optional[int] = 1920
+    height: Optional[int] = 1080
+    style: Optional[str] = "cinematic"
+
+@app.post("/api/v1/ai/generate-image")
+async def generate_image_api(req: ImageGenerateRequest):
+    """
+    Generates a high-quality visual asset using AI (Flux / Imagen)
+    and saves it to ~/.prismex/generated_images/ ready for 1-click timeline V2 insert.
+    """
+    import urllib.parse
+    import urllib.request
+    from .config import HOME_DIR
+    import time
+    import base64
+
+    img_dir = HOME_DIR / ".prismex" / "generated_images"
+    img_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"prismex_art_{int(time.time())}.png"
+    out_path = img_dir / filename
+
+    clean_prompt = req.prompt.strip()
+    if req.style == "cinematic" and "cinematic" not in clean_prompt.lower():
+        enhanced_prompt = f"cinematic film still, 8k resolution, photorealistic, professional color grade, {clean_prompt}"
+    else:
+        enhanced_prompt = clean_prompt
+
+    encoded_prompt = urllib.parse.quote(enhanced_prompt)
+    pollinations_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={req.width or 1920}&height={req.height or 1080}&nologo=true&model=flux"
+
+    try:
+        req_obj = urllib.request.Request(
+            pollinations_url,
+            headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+        )
+        def _download():
+            with urllib.request.urlopen(req_obj, timeout=35) as resp:
+                data = resp.read()
+                out_path.write_bytes(data)
+                b64 = "data:image/png;base64," + base64.b64encode(data).decode("utf-8")
+                return b64
+
+        b64_data = await asyncio.to_thread(_download)
+        return {
+            "success": True,
+            "filePath": str(out_path),
+            "base64": b64_data,
+            "prompt": req.prompt
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 if __name__ == "__main__":
     import uvicorn

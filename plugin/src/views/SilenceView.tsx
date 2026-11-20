@@ -2,6 +2,7 @@ import React from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { Scissors, VolumeX, Sparkles, Play } from 'lucide-react';
+import { EditorTopRibbon } from '../components/EditorTopRibbon';
 
 export const SilenceView: React.FC = () => {
   const {
@@ -20,9 +21,11 @@ export const SilenceView: React.FC = () => {
   const hostBridge = PremiereHostBridge.getInstance();
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', overflowY: 'auto' }}>
-      <div>
-        <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Silence &amp; Pause Detection</h2>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <EditorTopRibbon />
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto' }}>
+        <div>
+          <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Silence &amp; Pause Detection</h2>
         <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
           Rule-based RMS energy parameters for dead air excision ({detectedSilences.length} pause(s) detected).
         </p>
@@ -164,7 +167,7 @@ export const SilenceView: React.FC = () => {
       <div style={{ marginTop: 'auto', display: 'flex', gap: '8px' }}>
         <button
           className="btn-secondary"
-          disabled={isRunning || !sequenceManifest}
+          disabled={isRunning}
           onClick={transcribeSequence}
           style={{ flex: 1, padding: '9px 10px', fontSize: '11.5px' }}
         >
@@ -174,7 +177,7 @@ export const SilenceView: React.FC = () => {
 
         <button
           className="btn-primary"
-          disabled={isRunning || !sequenceManifest}
+          disabled={isRunning}
           onClick={cutAllSilencesNow}
           style={{ flex: 1, padding: '9px 10px', fontSize: '11.5px', fontWeight: 600 }}
         >
@@ -185,6 +188,7 @@ export const SilenceView: React.FC = () => {
               : 'Scan & Cut Silences'}
           </span>
         </button>
+      </div>
       </div>
     </div>
   );

@@ -157,6 +157,9 @@ class AudioDSP:
         warmth = float(settings.get("warmth", 50)) / 100.0
         deesser = float(settings.get("deesser", 50)) / 100.0
         target_lufs = float(settings.get("targetLufs", -14.0))
+        true_peak = float(settings.get("truePeak", -6.0)) # Hard ceiling at -6.0 dB True Peak
+        vocal_rider = bool(settings.get("vocalRider", True)) # Sliding-window upward leveler
+        loudness_range = float(settings.get("loudnessRange", 7.0)) # Tight dynamic loudness range
 
         ffmpeg_bin = AudioExtractor.get_ffmpeg_path()
         if not ffmpeg_bin or not os.path.exists(str(input_path)):
@@ -174,7 +177,17 @@ class AudioDSP:
             filters.append("afftdn=nf=-25")
 
         # 3. Profile-Specific Surgical Equalization
-        if profile_id == "crispy-podcast":
+        if profile_id == "auto-harmonize":
+            # Auto-Harmonize Studio Master:
+            # - Restores deep chest resonance & proximity body (150Hz) for thin/mobile mics
+            # - Cuts muddy, boxy mid frequencies (300Hz)
+            # - Boosts speech clarity & presence (3.8kHz)
+            # - Adds subtle broadcast air sheen (11kHz)
+            filters.append("equalizer=f=150:t=q:w=1.2:g=3.5")
+            filters.append("equalizer=f=300:t=q:w=1.5:g=-2.0")
+            filters.append("equalizer=f=3800:t=q:w=1.0:g=3.8")
+            filters.append("equalizer=f=11000:t=h:w=2500:g=2.2")
+        elif profile_id == "crispy-podcast":
             # Cut muddy 250Hz boxiness, boost presence (3.5kHz), boost ultra-crispy air (10-12kHz)
             air_gain = round(2.0 + (crisp_air * 5.0), 1)
             warmth_gain = round(1.0 + (warmth * 2.5), 1)
@@ -222,8 +235,13 @@ class AudioDSP:
         if deesser > 0.2:
             filters.append("deesser=i=0.6:m=0.5:f=0.5:s=o")
 
-        # 5. Broadcast Master Limiting & LUFS Loudness
-        filters.append(f"loudnorm=I={target_lufs}:TP=-1.0:LRA=11")
+        # 5. Sliding-Window Vocal Rider (Speech Normalizer)
+        # Rides gain upward continuously across decaying speech, locking start & end volumes
+        if vocal_rider:
+            filters.append("speechnorm=e=5.0:r=0.0001:l=1")
+
+        # 6. Broadcast Master Limiting & Strict -6dB True Peak Lock
+        filters.append(f"loudnorm=I={target_lufs}:TP={true_peak}:LRA={loudness_range}")
 
         filter_chain = ",".join(filters)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,3 +276,60 @@ class AudioDSP:
                 "success": False,
                 "error": str(e)
             }
+
+    @classmethod
+    def master_bgm_track(
+        cls,
+        input_path: Path,
+        output_path: Path,
+        target_volume_db: float = -26.0,
+        voice_ducking: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Masters background music track strictly to -25dB to -30dB (default -26dB)
+        and carves an acoustic vocal frequency pocket (1kHz-3.5kHz dip)
+        so dialogue always cuts through with 100% clarity.
+        """
+        import subprocess
+        import os
+        from .extractor import AudioExtractor
+
+        ffmpeg_bin = AudioExtractor.get_ffmpeg_path()
+        if not ffmpeg_bin or not os.path.exists(str(input_path)):
+            return {"success": False, "error": "FFmpeg or input file not found"}
+
+        filters = []
+        # 1. Clean ultra-low sub-bass rumble below 40Hz
+        filters.append("highpass=f=40")
+
+        # 2. Vocal Pocket EQ dip (-3dB @ 2.2kHz) so background music never fights human voice
+        filters.append("equalizer=f=2200:t=q:w=1.5:g=-3.0")
+
+        # 3. Target volume normalization (-25 to -30 dB, default -26dB) with max -6dB True Peak
+        filters.append(f"loudnorm=I={target_volume_db}:TP=-6.0:LRA=12")
+
+        filter_chain = ",".join(filters)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            ffmpeg_bin,
+            "-y",
+            "-i", str(input_path),
+            "-af", filter_chain,
+            "-ar", "48000",
+            "-ac", "2",
+            "-c:a", "pcm_s24le",
+            str(output_path)
+        ]
+
+        try:
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+            if res.returncode == 0 and output_path.exists():
+                return {
+                    "success": True,
+                    "outputPath": str(output_path),
+                    "targetVolumeDb": target_volume_db
+                }
+            return {"success": False, "error": res.stderr.decode('utf-8', errors='ignore')[-300:]}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

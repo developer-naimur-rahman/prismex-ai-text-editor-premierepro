@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
+import { StudiosRibbon } from '../components/StudiosRibbon';
 import { 
   Volume2, 
   Sparkles, 
@@ -25,7 +26,8 @@ import {
   Disc,
   ExternalLink,
   Headphones,
-  BookmarkPlus
+  BookmarkPlus,
+  RefreshCw
 } from 'lucide-react';
 
 interface AudioProfile {
@@ -44,10 +46,24 @@ interface AudioProfile {
     warmth: number;
     deesser: number;
     targetLufs: number;
+    truePeak?: number;
+    vocalRider?: boolean;
+    loudnessRange?: number;
   };
 }
 
 const AUDIO_PROFILES: AudioProfile[] = [
+  {
+    id: 'auto-harmonize',
+    name: '1-Click Auto-Harmonize & Vocal Rider',
+    nameBn: '🪄 ১-ক্লিক অটো-হারমোনাইজ ও ভোকাল রাইডার',
+    description: 'Sliding-window upward speech leveler (evens start & end volume), strict -6dB True Peak limit, -14 LUFS broadcast master & AC/fan denoise.',
+    descriptionBn: 'ভয়েস ফ্যাটিগ ও ড্রপ ফিক্স (সব পিক সমান), পিক সর্বোচ্চ -৬ dB তে লক, ব্যাকগ্রাউন্ড নয়েজ ক্লিন ও মোবাইলের পাতলা সাউন্ডে রেডিও ডেপথ।',
+    badge: 'Peak -6dB • -14 LUFS',
+    gradient: 'linear-gradient(135deg, #6366f1, #a855f7)',
+    icon: <Sparkles size={16} />,
+    defaultSettings: { denoise: 60, dereverb: 45, crispAir: 70, warmth: 65, deesser: 65, targetLufs: -14.0, truePeak: -6.0, vocalRider: true, loudnessRange: 7.0 }
+  },
   {
     id: 'crispy-podcast',
     name: 'Crispy Podcast & Talking Head',
@@ -337,16 +353,18 @@ export const AudioStudioView: React.FC = () => {
   };
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100%',
-      backgroundColor: '#09090b',
-      color: '#f4f4f5',
-      overflowY: 'auto',
-      padding: '16px 20px',
-      gap: '20px'
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <StudiosRibbon />
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        backgroundColor: '#09090b',
+        color: '#f4f4f5',
+        overflowY: 'auto',
+        padding: '14px 16px',
+        gap: '16px'
+      }}>
       {/* Studio Header */}
       <div style={{
         display: 'flex',
@@ -409,6 +427,102 @@ export const AudioStudioView: React.FC = () => {
             <span style={{ color: '#71717a' }}>({Math.round(sequenceManifest.durationSeconds || 0)}s)</span>
           </div>
         )}
+      </div>
+
+      {/* HERO BANNER: 1-Click Auto-Harmonize & Balance Timeline */}
+      <div style={{
+        background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(168, 85, 247, 0.15) 100%)',
+        border: '1px solid rgba(129, 140, 248, 0.35)',
+        borderRadius: '12px',
+        padding: '16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
+        boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '10px',
+              background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffffff',
+              boxShadow: '0 2px 10px rgba(99, 102, 241, 0.4)'
+            }}>
+              <Sparkles size={20} />
+            </div>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 800, color: '#ffffff', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span>{isBn ? '১-ক্লিক অটো-হারমোনাইজ ও টাইমলাইন ব্যালেন্স' : '1-Click Auto-Harmonize & Balance Timeline'}</span>
+                <span style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', background: '#4f46e5', color: '#fff', fontWeight: 600 }}>PRO</span>
+              </div>
+              <div style={{ fontSize: '11px', color: '#cbd5e1', marginTop: '2px' }}>
+                {isBn 
+                  ? 'ভয়েসের ওঠানামা ফিক্স (Vocal Rider), পিক সর্বোচ্চ -৬ dB তে লক, নয়েজ ক্লিন ও -১৪ LUFS এ পুরো টাইমলাইন ব্যালেন্স।'
+                  : 'Automatic sliding-window speech leveler, strict -6dB True Peak limit, denoise & -14 LUFS broadcast master.'}
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              const harmonizeProf = AUDIO_PROFILES[0];
+              setActiveAudioProfileId('auto-harmonize');
+              setAudioSettings(harmonizeProf.defaultSettings);
+              handleApplyAudioMaster();
+            }}
+            disabled={isProcessingAudio}
+            style={{
+              padding: '8px 16px',
+              borderRadius: '8px',
+              background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+              border: 'none',
+              color: '#ffffff',
+              fontSize: '12px',
+              fontWeight: 700,
+              cursor: isProcessingAudio ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              boxShadow: '0 4px 12px rgba(99, 102, 241, 0.35)',
+              transition: 'all 0.15s ease'
+            }}
+          >
+            {isProcessingAudio ? (
+              <>
+                <RefreshCw size={14} className="animate-spin" />
+                <span>{isBn ? 'টাইমলাইন প্রসেস হচ্ছে...' : 'Processing Timeline...'}</span>
+              </>
+            ) : (
+              <>
+                <Wand2 size={14} />
+                <span>{isBn ? 'সব ক্লিপ ব্যালেন্স করুন (-6dB Peak)' : 'Auto-Harmonize All Clips (-6dB)'}</span>
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Feature Pills */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', fontSize: '10.5px' }}>
+          <span style={{ padding: '2px 8px', borderRadius: '5px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#a5b4fc' }}>
+            ✓ {isBn ? 'ভোকাল রাইডার (শুরু-শেষের গেইন সমান)' : 'Vocal Rider (Uniform Gain)'}
+          </span>
+          <span style={{ padding: '2px 8px', borderRadius: '5px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#34d399' }}>
+            ✓ {isBn ? 'পিক সিলিং: -৬.০ dB (জিরো ক্লিপিং)' : 'True Peak Ceiling: -6.0 dB'}
+          </span>
+          <span style={{ padding: '2px 8px', borderRadius: '5px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#fbbf24' }}>
+            ✓ {isBn ? 'ফ্যান/এসি নয়েজ ক্লিন' : 'AC / Fan Denoise'}
+          </span>
+          <span style={{ padding: '2px 8px', borderRadius: '5px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#f472b6' }}>
+            ✓ {isBn ? 'মোবাইল মাইক ডেপথ বুস্ট' : 'Vocal Depth & Warmth'}
+          </span>
+          <span style={{ padding: '2px 8px', borderRadius: '5px', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#38bdf8' }}>
+            ✓ {isBn ? 'BGM ব্যালেন্স: -২৬ dB' : 'BGM: -26 dB Bed'}
+          </span>
+        </div>
       </div>
 
       {/* SECTION 1: Studio Voice Profiles */}
@@ -1144,6 +1258,7 @@ export const AudioStudioView: React.FC = () => {
             </div>
           )
         )}
+      </div>
       </div>
     </div>
   );

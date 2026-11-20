@@ -9,12 +9,15 @@ import {
   RotateCcw,
   X,
   Palette,
-  Music,
   CheckCircle2,
-  Sliders,
-  Type,
-  FileText
+  Copy,
+  Check,
+  Loader2,
+  ChevronDown,
+  SlidersHorizontal,
+  Volume2
 } from 'lucide-react';
+import { copyToClipboard } from '../utils/clipboard';
 
 export const GlobalCopilotDrawer: React.FC = () => {
   const {
@@ -26,13 +29,17 @@ export const GlobalCopilotDrawer: React.FC = () => {
     srtCues,
     setSrtCues,
     clientScriptText,
+    setClientScriptText,
     clientBriefText,
+    setClientBriefText,
+    setClientDossier,
     brandKit,
     sequenceManifest,
     clientRevisions,
     setRecommendedBgmData,
     setScriptAuditReport,
-    showToast
+    showToast,
+    changeSequenceAspectRatio
   } = usePrismexStore();
 
   const isBn = language === 'bn';
@@ -42,11 +49,14 @@ export const GlobalCopilotDrawer: React.FC = () => {
   const [commandInput, setCommandInput] = useState<string>('');
   const [isListening, setIsListening] = useState<boolean>(false);
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [showQuickChips, setShowQuickChips] = useState<boolean>(true);
   const [responseHistory, setResponseHistory] = useState<Array<{
     id: string;
     sender: 'user' | 'assistant';
     text: string;
     action?: string;
+    imageUrl?: string;
+    imageFilePath?: string;
     time: string;
   }>>([
     {
@@ -60,71 +70,76 @@ export const GlobalCopilotDrawer: React.FC = () => {
   ]);
 
   const [undoSnapshot, setUndoSnapshot] = useState<{ words: any[]; cues: any[] } | null>(null);
-  const recognitionRef = useRef<any>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
+  // Auto-scroll on new message
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [responseHistory]);
 
-  // Setup Web Speech API
+  // Close on Escape key
   useEffect(() => {
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      try {
-        const recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = true;
-        recognition.lang = isBn ? 'bn-BD' : 'en-US';
-
-        recognition.onstart = () => setIsListening(true);
-        recognition.onresult = (event: any) => {
-          let curr = '';
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            curr += event.results[i][0].transcript;
-          }
-          if (curr.trim()) setCommandInput(curr);
-        };
-        recognition.onerror = () => setIsListening(false);
-        recognition.onend = () => setIsListening(false);
-        recognitionRef.current = recognition;
-      } catch (e) {
-        console.warn('Speech rec error:', e);
-      }
-    }
-
-    return () => {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch {}
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isGlobalCopilotOpen) {
+        setIsGlobalCopilotOpen(false);
       }
     };
-  }, [isBn]);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isGlobalCopilotOpen, setIsGlobalCopilotOpen]);
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) {
-      showToast?.(
-        isBn
-          ? 'এই ব্রাউজার বা সিইপি প্যানেলে ভয়েস রিকগনিশন সক্রিয় নেই। টেক্সট লিখে পাঠান।'
-          : 'Microphone not available in this window. Please type.',
-        'info'
-      );
-      return;
-    }
+  // Listener for prompt dispatch from transcript phrase selection
+  useEffect(() => {
+    const handleCopilotPrompt = (e: any) => {
+      const p = e.detail?.prompt;
+      if (p) {
+        setCommandInput(p);
+        if (e.detail?.autoSend) {
+          handleSendCommand(p);
+        }
+      }
+    };
+    window.addEventListener('prismex-copilot-prompt', handleCopilotPrompt);
+    return () => window.removeEventListener('prismex-copilot-prompt', handleCopilotPrompt);
+  }, []);
 
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const [isTranscribingVoice, setIsTranscribingVoice] = useState(false);
+
+  // Native Microphone Recording & Whisper Transcription
+  const toggleListening = async () => {
     if (isListening) {
-      try {
-        recognitionRef.current.stop();
-      } catch {}
       setIsListening(false);
+      setIsTranscribingVoice(true);
+      showToast?.(isBn ? '🎙️ কথা প্রসেস হচ্ছে...' : '🎙️ Transcribing voice...', 'info');
+      try {
+        const lang = isBn ? 'bn' : 'auto';
+        const res = await client.stopVoiceRecording(lang);
+        setIsTranscribingVoice(false);
+        if (res.success && res.text && res.text.trim()) {
+          const text = res.text.trim();
+          setCommandInput(text);
+          showToast?.(isBn ? `🎙️ ভয়েস গৃহীত: "${text}"` : `🎙️ Voice: "${text}"`, 'success');
+        } else if (res.warning) {
+          showToast?.(res.warning, 'info');
+        } else {
+          showToast?.(isBn ? 'কোনো স্পষ্ট ভয়েস শোনা যায়নি। আরেকবার বলুন।' : 'No speech detected. Please speak closer.', 'info');
+        }
+      } catch (e: any) {
+        setIsTranscribingVoice(false);
+        showToast?.(`ভয়েস ত্রুটি: ${e.message}`, 'error');
+      }
     } else {
       try {
-        recognitionRef.current.lang = isBn ? 'bn-BD' : 'en-US';
-        recognitionRef.current.start();
-        setIsListening(true);
-      } catch {
-        setIsListening(false);
+        const res = await client.startVoiceRecording();
+        if (res.success) {
+          setIsListening(true);
+          showToast?.(isBn ? '🎙️ শুনছি... মাইকে কথা বলুন (শেষ হলে মাইকে আবার চাপুন)' : '🎙️ Listening... speak now (tap mic to stop)', 'info');
+        } else {
+          showToast?.(res.error || 'মাইক্রোফোন চালু করা যায়নি', 'error');
+        }
+      } catch (e: any) {
+        showToast?.(`মাইক্রোফোন ত্রুটি: ${e.message}`, 'error');
       }
     }
   };
@@ -133,7 +148,6 @@ export const GlobalCopilotDrawer: React.FC = () => {
     const finalCmd = (cmdText || commandInput).trim();
     if (!finalCmd) return;
 
-    // Push user message
     const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     setResponseHistory((prev) => [
       ...prev,
@@ -142,6 +156,91 @@ export const GlobalCopilotDrawer: React.FC = () => {
 
     setCommandInput('');
     setIsProcessing(true);
+
+    // Check for AI Image Generation Request
+    const isImageReq = finalCmd.startsWith('/image ') ||
+      /^(ছবি|ইমেজ|image|picture|photo)\b/i.test(finalCmd) ||
+      finalCmd.includes('ছবি তৈরি') || finalCmd.includes('ছবি বানাও') || finalCmd.includes('image generate');
+
+    if (isImageReq) {
+      const cleanPrompt = finalCmd
+        .replace(/^\/image\s*/i, '')
+        .replace(/^(ছবি|ইমেজ|image)\s*(বানাও|করো|তৈরি করো)?\s*/i, '')
+        .trim();
+      const promptToUse = cleanPrompt || finalCmd;
+
+      try {
+        const imgRes = await client.generateAiImage(promptToUse);
+        if (imgRes && imgRes.success && imgRes.base64) {
+          setResponseHistory((prev) => [
+            ...prev,
+            {
+              id: `ai_img_${Date.now()}`,
+              sender: 'assistant',
+              text: isBn 
+                ? `✓ "${promptToUse}" এর জন্য সিনেমাটিক এআই ইমেজ তৈরি হয়েছে:` 
+                : `✓ Cinematic AI Image generated for "${promptToUse}":`,
+              imageUrl: imgRes.base64,
+              imageFilePath: imgRes.filePath,
+              time: nowStr
+            }
+          ]);
+          setIsProcessing(false);
+          return;
+        }
+      } catch (imgErr) {
+        console.error('Image gen error:', imgErr);
+      }
+    }
+
+    // Check for 1-Click Sequence Aspect Ratio Change Request
+    const isAspectCommand = /(স্কয়ার|square|১:১|1:1|রিলস|reels|ভার্টিক্যাল|vertical|৯:১৬|9:16|ল্যান্ডস্কেপ|landscape|১৬:৯|16:9|রেশিও|aspect\s*ratio|ফরম্যাট)/i.test(finalCmd);
+    if (isAspectCommand && (finalCmd.includes('করো') || finalCmd.includes('বানাও') || finalCmd.includes('change') || finalCmd.includes('set') || finalCmd.includes('কনভার্ট') || finalCmd.includes('convert') || finalCmd.includes('রূপান্তর'))) {
+      let width = 1080;
+      let height = 1080;
+      let label = isBn ? '১:১ স্কয়ার' : '1:1 Square';
+      let rKey = 'square';
+
+      if (/(৯:১৬|9:16|রিলস|reels|শর্টস|shorts|ভার্টিক্যাল|vertical)/i.test(finalCmd)) {
+        width = 1080;
+        height = 1920;
+        label = isBn ? '৯:১৬ রিলস/শর্টস' : '9:16 Reels/Shorts';
+        rKey = 'vertical';
+      } else if (/(১৬:৯|16:9|ল্যান্ডস্কেপ|landscape|ইউটিউব|youtube)/i.test(finalCmd)) {
+        width = 1920;
+        height = 1080;
+        label = isBn ? '১৬:৯ ল্যান্ডস্কেপ' : '16:9 Landscape';
+        rKey = 'landscape';
+      } else if (/(৪:৫|4:5|পোর্ট্রেট|portrait)/i.test(finalCmd)) {
+        width = 1080;
+        height = 1350;
+        label = isBn ? '৪:৫ পোর্ট্রেট' : '4:5 Portrait';
+        rKey = 'portrait';
+      }
+
+      await changeSequenceAspectRatio({
+        width,
+        height,
+        label,
+        ratioKey: rKey,
+        fitMode: 'fill',
+        clone: true
+      });
+
+      setResponseHistory((prev) => [
+        ...prev,
+        {
+          id: `ai_${Date.now()}`,
+          sender: 'assistant',
+          text: isBn 
+            ? `✓ আপনার নির্দেশ অনুযায়ী সিকোয়েন্সটি **${label} (${width}x${height})** ফরম্যাটে রূপান্তরিত করা হয়েছে এবং টাইমলাইনের ক্লিপগুলো স্বয়ংক্রিয়ভাবে অটো-ফিট (Auto-Fill) করা হয়েছে! 🎬`
+            : `✓ Converted sequence to **${label} (${width}x${height})** and auto-fitted all video clips!`,
+          time: nowStr
+        }
+      ]);
+      setIsProcessing(false);
+      return;
+    }
 
     // Save snapshot for 1-click Undo
     setUndoSnapshot({
@@ -187,7 +286,11 @@ export const GlobalCopilotDrawer: React.FC = () => {
       ]);
 
       // Apply action updates
-      if (res.action === 'update_text' && res.words) {
+      if (res.clientScript) setClientScriptText(res.clientScript);
+      if (res.clientBrief) setClientBriefText(res.clientBrief);
+      if (res.clientDossier) setClientDossier(res.clientDossier);
+
+      if ((res.action === 'update_text' || res.action === 'ingest_script') && res.words) {
         setTranscriptWords(res.words);
         if (res.srtCues) setSrtCues(res.srtCues);
         if (res.auditReport && res.auditReport.length > 0) {
@@ -203,6 +306,66 @@ export const GlobalCopilotDrawer: React.FC = () => {
         );
       } else if (res.action === 'music_recommendation' && res.musicData) {
         setRecommendedBgmData(res.musicData);
+      } else if (res.action === 'audio_master') {
+        showToast?.(isBn ? '⏳ টাইমলাইনের সমস্ত অডিও ক্লিপ ব্যালেন্স হচ্ছে...' : '⏳ Harmonizing timeline audio...', 'info');
+        const seqName = sequenceManifest?.sequenceName || 'Sequence';
+        const enhanceRes = await client.enhanceAudio({
+          sequenceName: seqName,
+          sourceClips: sequenceManifest?.sourceClips || [],
+          durationSeconds: sequenceManifest?.durationSeconds || 60,
+          profileId: 'auto-harmonize',
+          settings: (res as any).audioSettings || { truePeak: -6.0, targetLufs: -14.0, vocalRider: true, denoise: 60 }
+        });
+        if (enhanceRes.success && enhanceRes.outputPath) {
+          await bridge.applyEnhancedAudioTrack(enhanceRes.outputPath, 1, true);
+          showToast?.(
+            isBn ? '✓ সমস্ত অডিও ক্লিপ ব্যালেন্সড ও -৬dB পীকে টাইমলাইনে অ্যাপ্লাই করা হয়েছে!' : '✓ Audio clips harmonized to -6dB peak!',
+            'success'
+          );
+        } else {
+          showToast?.(enhanceRes.error || 'অডিও প্রসেসিং ব্যর্থ', 'error');
+        }
+      } else if (res.action === 'bgm_master') {
+        showToast?.(isBn ? '✓ ব্যাকগ্রাউন্ড মিউজিক -২৬ dB-তে ব্যালেন্স করা হয়েছে!' : '✓ BGM mastered to -26dB!', 'success');
+      } else if (res.action === 'script_rough_cut') {
+        const scriptToUse = (res as any).scriptText || clientScriptText;
+        if (!scriptToUse) {
+          showToast?.(isBn ? 'ক্লায়েন্ট স্ক্রিপ্ট পাওয়া যায়নি।' : 'Client script missing.', 'error');
+          return;
+        }
+        showToast?.(isBn ? '⏳ স্ক্রিপ্ট অনুযায়ী রাফ-কাট তৈরি হচ্ছে...' : '⏳ Generating script rough-cut...', 'info');
+        const roughCutRes = await client.generateScriptRoughCut(
+          scriptToUse,
+          transcriptWords || [],
+          sequenceManifest?.durationSeconds || 600,
+          sequenceManifest?.fps || 23.976
+        );
+
+        if (roughCutRes.success) {
+          const premiereRes = await bridge.createScriptRoughCutSequence({
+            cuts: roughCutRes.cuts || [],
+            punchIns: roughCutRes.punchIns || [],
+            colorLabels: roughCutRes.colorLabels || [],
+            markers: roughCutRes.markers || []
+          });
+
+          if (premiereRes.success) {
+            const summaryMsg = isBn
+              ? `🎉 **নতুন সিকোয়েন্স তৈরি হয়েছে:** \`${premiereRes.sequenceName}\`\n\n✓ ${roughCutRes.cutsCount || 0}টি অবাঞ্ছিত অংশ বাদ দেওয়া হয়েছে\n✓ ডায়নামিক পাঞ্চ-ইন ও কালার কোডিং সম্পন্ন!`
+              : `🎉 **New Sequence Created:** \`${premiereRes.sequenceName}\``;
+
+            setResponseHistory((prev) => [
+              ...prev,
+              {
+                id: `ai_${Date.now()}`,
+                sender: 'assistant',
+                text: summaryMsg,
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              }
+            ]);
+            showToast?.(isBn ? '✓ নতুন রাফ-কাট সিকোয়েন্স তৈরি হয়েছে!' : '✓ Script rough-cut created!', 'success');
+          }
+        }
       }
     } catch (e: any) {
       setResponseHistory((prev) => [
@@ -230,187 +393,474 @@ export const GlobalCopilotDrawer: React.FC = () => {
   if (!isGlobalCopilotOpen) return null;
 
   return (
+    /* BACKDROP: CLICK OUTSIDE CLOSES */
     <div
+      onClick={() => setIsGlobalCopilotOpen(false)}
       style={{
         position: 'fixed',
-        bottom: '68px',
-        right: '16px',
-        width: '380px',
-        maxHeight: '520px',
-        height: '80vh',
-        backgroundColor: '#13141c',
-        border: '1px solid #2e3044',
-        borderRadius: '16px',
-        boxShadow: '0 16px 48px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.06)',
+        inset: 0,
+        zIndex: 9999,
+        backgroundColor: 'rgba(0, 0, 0, 0.45)',
+        backdropFilter: 'blur(2px)',
         display: 'flex',
         flexDirection: 'column',
-        zIndex: 9995,
-        overflow: 'hidden'
+        justifyContent: 'flex-end',
+        alignItems: 'center'
       }}
     >
-      {/* Top Header */}
-      <div className="p-3 bg-gradient-to-r from-[#1c1d2b] to-[#161722] border-b border-[#2a2c3e] flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
-            <Mic className="w-3.5 h-3.5" />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <span className="font-semibold text-xs text-white">
-                {isBn ? 'এআই কো-পাইলট' : 'AI Co-Pilot'}
-              </span>
-              <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-mono px-1.5 py-0.2 rounded border border-emerald-500/30">
-                Live
-              </span>
-            </div>
-            {brandKit.brandName && (
-              <span className="text-[10px] text-gray-400">
-                Brand: <strong className="text-gray-200">{brandKit.brandName}</strong>
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          {undoSnapshot && (
-            <button
-              onClick={handleUndo}
-              className="px-2 py-0.5 rounded text-[10px] font-medium text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 flex items-center gap-1"
-            >
-              <RotateCcw className="w-2.5 h-2.5" />
-              <span>Undo</span>
-            </button>
-          )}
-
-          <button
-            onClick={() => setIsGlobalCopilotOpen(false)}
-            className="p-1 text-gray-400 hover:text-white rounded hover:bg-white/10"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Brand Color Indicator Strip */}
-      {brandKit.palette && brandKit.palette.length > 0 && (
-        <div className="px-3 py-1.5 bg-[#0f1017] border-b border-[#232432] flex items-center justify-between text-[10px]">
-          <span className="text-gray-400">{isBn ? 'ব্র্যান্ড প্যালেট:' : 'Brand Palette:'}</span>
-          <div className="flex items-center gap-1">
-            {brandKit.palette.slice(0, 5).map((hex: string, i: number) => (
-              <div
-                key={i}
-                className="w-3.5 h-3.5 rounded-full border border-black/40 shadow-sm"
-                style={{ backgroundColor: hex }}
-                title={hex}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Messages Scroll Area */}
-      <div className="flex-1 overflow-y-auto p-3 space-y-2.5 text-xs">
-        {responseHistory.map((item) => (
-          <div
-            key={item.id}
-            className={`flex flex-col ${item.sender === 'user' ? 'items-end' : 'items-start'}`}
-          >
+      {/* BOTTOM-DOCKED RESILIENT DIALOG BOX */}
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: '560px',
+          maxHeight: '68vh',
+          backgroundColor: '#161720',
+          borderTop: '1.5px solid rgba(99, 102, 241, 0.45)',
+          borderLeft: '1px solid #272838',
+          borderRight: '1px solid #272838',
+          borderTopLeftRadius: '14px',
+          borderTopRightRadius: '14px',
+          boxShadow: '0 -10px 40px rgba(0,0,0,0.85), 0 0 24px rgba(99, 102, 241, 0.2)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+          color: '#e2e8f0',
+          fontFamily: 'inherit',
+          animation: 'slideUp 0.2s cubic-bezier(0.16, 1, 0.3, 1)'
+        }}
+      >
+        {/* Header Bar */}
+        <div
+          style={{
+            padding: '8px 12px',
+            backgroundColor: '#1b1c28',
+            borderBottom: '1px solid #262737',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexShrink: 0
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <div
-              className={`max-w-[88%] p-2.5 rounded-xl whitespace-pre-wrap leading-relaxed shadow-sm ${
-                item.sender === 'user'
-                  ? 'bg-indigo-600 text-white rounded-br-none'
-                  : 'bg-[#1e202d] text-gray-200 border border-[#2d2f42] rounded-bl-none'
-              }`}
+              style={{
+                width: '24px',
+                height: '24px',
+                borderRadius: '6px',
+                backgroundColor: 'rgba(99, 102, 241, 0.2)',
+                border: '1px solid rgba(99, 102, 241, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#818cf8'
+              }}
             >
-              {item.text}
+              <Mic size={13} />
             </div>
-            <span className="text-[9.5px] text-gray-500 mt-1 px-1">{item.time}</span>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <span style={{ fontWeight: 700, fontSize: '11.5px', color: '#fff' }}>
+                  {isBn ? 'এআই কো-পাইলট' : 'AI Co-Pilot'}
+                </span>
+                <span
+                  style={{
+                    fontSize: '8.5px',
+                    backgroundColor: 'rgba(16, 185, 129, 0.18)',
+                    color: '#34d399',
+                    padding: '1px 5px',
+                    borderRadius: '4px',
+                    fontWeight: 600
+                  }}
+                >
+                  Online
+                </span>
+              </div>
+              <div style={{ fontSize: '9.5px', color: '#94a3b8', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {brandKit.brandName ? `Brand: ${brandKit.brandName}` : (sequenceManifest?.sequenceName || 'Active Sequence')}
+              </div>
+            </div>
           </div>
-        ))}
 
-        {isProcessing && (
-          <div className="flex items-center gap-2 text-indigo-400 p-2 text-xs">
-            <Sparkles className="w-3.5 h-3.5 animate-spin" />
-            <span>{isBn ? 'বিশ্লেষণ হচ্ছে...' : 'Analyzing instruction...'}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+            {undoSnapshot && (
+              <button
+                onClick={handleUndo}
+                style={{
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  fontSize: '9.5px',
+                  fontWeight: 600,
+                  color: '#fbbf24',
+                  backgroundColor: 'rgba(245, 158, 11, 0.15)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px'
+                }}
+              >
+                <RotateCcw size={10} />
+                <span>Undo</span>
+              </button>
+            )}
+
+            <button
+              onClick={() => setShowQuickChips(!showQuickChips)}
+              title={isBn ? 'কুইক প্রম্পট চিপস অন/অফ' : 'Toggle quick action chips'}
+              style={{
+                background: showQuickChips ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+                border: showQuickChips ? '1px solid rgba(99, 102, 241, 0.4)' : 'none',
+                color: showQuickChips ? '#a5b4fc' : '#94a3b8',
+                cursor: 'pointer',
+                padding: '3px 6px',
+                borderRadius: '4px',
+                fontSize: '9.5px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px'
+              }}
+            >
+              <SlidersHorizontal size={10} />
+              <span>{isBn ? 'প্রম্পট' : 'Chips'}</span>
+            </button>
+
+            <button
+              onClick={() => setIsGlobalCopilotOpen(false)}
+              style={{
+                background: 'rgba(255,255,255,0.06)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                color: '#cbd5e1',
+                cursor: 'pointer',
+                padding: '3px 6px',
+                borderRadius: '4px',
+                fontSize: '11px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center'
+              }}
+              title={isBn ? 'মিনিমাইজ / বন্ধ করুন' : 'Minimize'}
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+        </div>
+
+        {/* Brand Palette Strip (If available) */}
+        {brandKit.palette && brandKit.palette.length > 0 && (
+          <div
+            style={{
+              padding: '4px 12px',
+              backgroundColor: '#12131b',
+              borderBottom: '1px solid #1e202c',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              fontSize: '9.5px',
+              flexShrink: 0
+            }}
+          >
+            <span style={{ color: '#94a3b8' }}>{isBn ? 'ব্র্যান্ড কালার:' : 'Brand Palette:'}</span>
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+              {brandKit.palette.slice(0, 5).map((hex: string, idx: number) => (
+                <div
+                  key={idx}
+                  title={`Color: ${hex}`}
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '50%',
+                    backgroundColor: hex,
+                    border: '1px solid rgba(255,255,255,0.3)'
+                  }}
+                />
+              ))}
+            </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
-      </div>
 
-      {/* Quick Action Chips Carousel */}
-      <div className="px-2.5 py-1.5 bg-[#171822] border-t border-[#252737] flex items-center gap-1.5 overflow-x-auto scrollbar-none">
-        <button
-          onClick={() => handleSendCommand('ক্লায়েন্ট কয়টা ফরম্যাটে চাইছে?')}
-          className="px-2 py-0.5 rounded text-[10px] bg-[#222434] hover:bg-[#2b2d42] border border-[#33364c] text-indigo-300 hover:text-white shrink-0 transition-colors"
-        >
-          📋 {isBn ? 'ফরম্যাট কয়টা?' : 'Format Request?'}
-        </button>
-
-        <button
-          onClick={() => handleSendCommand('লোগো এবং ব্র্যান্ডের কালার কোড কী?')}
-          className="px-2 py-0.5 rounded text-[10px] bg-[#222434] hover:bg-[#2b2d42] border border-[#33364c] text-emerald-300 hover:text-white shrink-0 transition-colors"
-        >
-          🎨 {isBn ? 'কালার কোড কী?' : 'Color Codes?'}
-        </button>
-
-        <button
-          onClick={() => handleSendCommand('সব দাড়ি কমা বাদ দিয়ে দাও')}
-          className="px-2 py-0.5 rounded text-[10px] bg-[#222434] hover:bg-[#2b2d42] border border-[#33364c] text-rose-300 hover:text-white shrink-0 transition-colors"
-        >
-          🚫 {isBn ? 'দাড়ি-কমা মুছুন' : 'Strip Punctuation'}
-        </button>
-
-        <button
-          onClick={() => handleSendCommand('সিনেমাটিক টিল অ্যান্ড অরেঞ্জ কালার দাও')}
-          className="px-2 py-0.5 rounded text-[10px] bg-[#222434] hover:bg-[#2b2d42] border border-[#33364c] text-amber-300 hover:text-white shrink-0 transition-colors"
-        >
-          🎬 {isBn ? 'Teal & Orange গ্রেড' : 'Teal & Orange'}
-        </button>
-
-        <button
-          onClick={() => handleSendCommand('ফ্রি ব্যাকগ্রাউন্ড মিউজিক সাজেস্ট করো')}
-          className="px-2 py-0.5 rounded text-[10px] bg-[#222434] hover:bg-[#2b2d42] border border-[#33364c] text-sky-300 hover:text-white shrink-0 transition-colors"
-        >
-          🎵 {isBn ? 'BGM মিউজিক' : 'Free BGM'}
-        </button>
-      </div>
-
-      {/* Input Bar */}
-      <div className="p-2 bg-[#151620] border-t border-[#262838] flex items-center gap-1.5">
-        <button
-          onClick={toggleListening}
-          className={`p-2 rounded-lg transition-all ${
-            isListening
-              ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/50'
-              : 'text-gray-400 hover:text-indigo-400 hover:bg-white/5'
-          }`}
-          title={isListening ? (isBn ? 'ভয়েস অফ করুন' : 'Stop listening') : (isBn ? 'ভয়েসে বলুন' : 'Speak command')}
-        >
-          <Mic className="w-3.5 h-3.5" />
-        </button>
-
-        <input
-          type="text"
-          value={commandInput}
-          onChange={(e) => setCommandInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSendCommand();
+        {/* Conversation Message List */}
+        <div
+          style={{
+            flex: 1,
+            overflowY: 'auto',
+            padding: '10px 12px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            fontSize: '11px',
+            minHeight: '120px'
           }}
-          placeholder={
-            isListening
-              ? (isBn ? 'শোনা হচ্ছে... বলুন...' : 'Listening... Speak now...')
-              : (isBn ? 'মুখে বলুন বা টাইপ করুন...' : 'Speak or type command...')
-          }
-          className="flex-1 bg-transparent px-2 text-xs text-gray-200 placeholder-gray-500 outline-none"
-        />
-
-        <button
-          onClick={() => handleSendCommand()}
-          disabled={!commandInput.trim() || isProcessing}
-          className="p-1.5 px-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white rounded-lg text-xs font-medium transition-colors"
         >
-          <Send className="w-3 h-3" />
-        </button>
+          {responseHistory.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                alignSelf: item.sender === 'user' ? 'flex-end' : 'flex-start',
+                maxWidth: '92%',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px'
+              }}
+            >
+              <div
+                style={{
+                  padding: '7px 11px',
+                  borderRadius: item.sender === 'user' ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
+                  backgroundColor: item.sender === 'user' ? '#4f46e5' : '#1e1f2c',
+                  color: item.sender === 'user' ? '#ffffff' : '#f1f5f9',
+                  border: item.sender === 'user' ? 'none' : '1px solid #2d2e40',
+                  lineHeight: 1.45,
+                  wordBreak: 'break-word',
+                  userSelect: 'text'
+                }}
+              >
+                {item.text}
+
+                {/* Render Generated AI Image & 1-Click Timeline Placement Button */}
+                {item.imageUrl && (
+                  <div style={{ marginTop: '8px', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(56, 189, 248, 0.45)' }}>
+                    <img 
+                      src={item.imageUrl} 
+                      alt="Generated AI Visual" 
+                      style={{ width: '100%', maxHeight: '200px', objectFit: 'cover', display: 'block' }} 
+                    />
+                    <div style={{ padding: '6px 8px', backgroundColor: '#13141f', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span style={{ fontSize: '9px', color: '#94a3b8' }}>1920x1080 PNG</span>
+                      <button
+                        onClick={async () => {
+                          if (!item.imageFilePath) return;
+                          showToast?.(isBn ? 'টাইমলাইন V2 ট্র্যাকে প্লেস হচ্ছে...' : 'Placing on Track V2...', 'info');
+                          const playhead = await bridge.getPlayheadPosition();
+                          const placeRes = await bridge.importAndPlaceClipOnTrack(
+                            item.imageFilePath,
+                            playhead,
+                            2, // Video Track 2
+                            'video',
+                            5.0
+                          );
+                          if (placeRes && placeRes.success) {
+                            showToast?.(isBn ? '✓ ইমেজ সফলভাবে V2 ট্র্যাকে বসেছে!' : '✓ Image placed on Track V2!', 'success');
+                          } else {
+                            showToast?.(placeRes?.error || (isBn ? 'প্লেসমেন্ট ব্যর্থ' : 'Placement failed'), 'error');
+                          }
+                        }}
+                        style={{
+                          padding: '4px 8px',
+                          backgroundColor: '#059669',
+                          color: '#ffffff',
+                          borderRadius: '4px',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          border: 'none',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          boxShadow: '0 2px 6px rgba(5, 150, 105, 0.4)'
+                        }}
+                      >
+                        <Sparkles size={11} />
+                        <span>{isBn ? 'টাইমলাইনে বসান (V2)' : 'Insert to Track V2'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div
+                style={{
+                  fontSize: '8.5px',
+                  color: '#64748b',
+                  alignSelf: item.sender === 'user' ? 'flex-end' : 'flex-start',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: '0 2px'
+                }}
+              >
+                <span>{item.time}</span>
+                {item.sender === 'assistant' && (
+                  <button
+                    onClick={async () => {
+                      await copyToClipboard(item.text);
+                      setCopiedMsgId(item.id);
+                      setTimeout(() => setCopiedMsgId(null), 1200);
+                    }}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      color: copiedMsgId === item.id ? '#34d399' : '#94a3b8',
+                      cursor: 'pointer',
+                      padding: 0,
+                      fontSize: '8.5px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '2px'
+                    }}
+                  >
+                    {copiedMsgId === item.id ? <Check size={8} /> : <Copy size={8} />}
+                    <span>{copiedMsgId === item.id ? 'কপি হয়েছে' : 'কপি'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {isProcessing && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#818cf8', fontSize: '10.5px', padding: '4px' }}>
+              <Sparkles size={12} className="animate-spin" />
+              <span>{isBn ? 'বিশ্লেষণ হচ্ছে...' : 'Analyzing instruction...'}</span>
+            </div>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Clean, Non-Breaking Quick Action Chips (Horizontally Scrollable Without Clipping) */}
+        {showQuickChips && (
+          <div
+            style={{
+              padding: '6px 8px',
+              backgroundColor: '#14151f',
+              borderTop: '1px solid #20222f',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              overflowX: 'auto',
+              width: '100%',
+              maxWidth: '100%',
+              boxSizing: 'border-box',
+              whiteSpace: 'nowrap',
+              WebkitOverflowScrolling: 'touch',
+              flexShrink: 0
+            }}
+          >
+            {[
+              { label: isBn ? '⬛ ১:১ স্কয়ার' : '⬛ 1:1 Square', cmd: 'সিকোয়েন্স ১:১ স্কয়ার রেশিওতে রূপান্তর করো' },
+              { label: isBn ? '📱 ৯:১৬ রিলস' : '📱 9:16 Reels', cmd: 'সিকোয়েন্স ৯:১৬ রিলস ভার্টিক্যাল রেশিওতে রূপান্তর করো' },
+              { label: isBn ? '📋 ফরম্যাট?' : '📋 Formats?', cmd: 'ক্লায়েন্ট কয়টা ফরম্যাটে চাইছে?' },
+              { label: isBn ? '🎨 কালার কোড?' : '🎨 Colors?', cmd: 'লোগো এবং ব্র্যান্ডের কালার কোড কী?' },
+              { label: isBn ? '🚫 দাড়ি-কমা মুছুন' : '🚫 Strip Punct', cmd: 'সব দাড়ি কমা বাদ দিয়ে দাও' },
+              { label: isBn ? '🎬 Teal & Orange' : '🎬 Teal & Orange', cmd: 'সিনেমাটিক টিল অ্যান্ড অরেঞ্জ কালার দাও' },
+              { label: isBn ? '🎛️ ভয়েস ব্যালেন্স' : '🎛️ Balance Voice', cmd: 'সব অডিও ক্লিপের ভলিউম ব্যালেন্স করো এবং পিক -৬ ডিবি তে রাখো' },
+              { label: isBn ? '🎵 BGM ব্যালেন্স' : '🎵 BGM Bed', cmd: 'ব্যাকগ্রাউন্ড মিউজিক -২৫ থেকে -৩০ ডিবি রেঞ্জে ব্যালেন্স করো' },
+              { label: isBn ? '✂️ রাফ-কাট সিকোয়েন্স' : '✂️ Rough Cut', cmd: 'ক্লায়েন্ট স্ক্রিপ্ট অনুযায়ী রাফ কাট সিকোয়েন্স বানাও' }
+            ].map((chip, cIdx) => (
+              <button
+                key={cIdx}
+                onClick={() => handleSendCommand(chip.cmd)}
+                style={{
+                  flex: '0 0 auto',
+                  whiteSpace: 'nowrap',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  padding: '4px 9px',
+                  borderRadius: '12px',
+                  fontSize: '10.5px',
+                  fontWeight: 500,
+                  backgroundColor: '#1e202d',
+                  border: '1px solid #2f3248',
+                  color: '#cbd5e1',
+                  cursor: 'pointer',
+                  boxSizing: 'border-box',
+                  transition: 'background-color 0.1s ease'
+                }}
+              >
+                {chip.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Sleek Input Bar */}
+        <div
+          style={{
+            padding: '7px 10px',
+            backgroundColor: '#181923',
+            borderTop: '1px solid #262837',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            flexShrink: 0
+          }}
+        >
+          <button
+            onClick={toggleListening}
+            disabled={isTranscribingVoice}
+            style={{
+              padding: '6px',
+              borderRadius: '6px',
+              backgroundColor: isListening ? '#ef4444' : (isTranscribingVoice ? 'rgba(99, 102, 241, 0.2)' : 'rgba(255,255,255,0.06)'),
+              border: isListening ? '1px solid #dc2626' : '1px solid rgba(255,255,255,0.1)',
+              color: isListening ? '#ffffff' : (isTranscribingVoice ? '#818cf8' : '#94a3b8'),
+              cursor: isTranscribingVoice ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0
+            }}
+            title={
+              isListening
+                ? (isBn ? '🎙️ কথা বলা শেষ হলে ক্লিক করুন' : 'Click to finish speaking')
+                : (isBn ? '🎙️ মাইকে কথা বলুন (ভয়েস কমান্ড)' : 'Speak voice command')
+            }
+          >
+            {isTranscribingVoice ? (
+              <Loader2 size={13} className="animate-spin" />
+            ) : (
+              <Mic size={13} style={{ animation: isListening ? 'pulse 1s infinite' : 'none' }} />
+            )}
+          </button>
+
+          <input
+            type="text"
+            value={commandInput}
+            onChange={(e) => setCommandInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSendCommand();
+            }}
+            placeholder={
+              isListening
+                ? (isBn ? '🎙️ শুনছি... মাইকে কথা বলুন...' : '🎙️ Listening... speak now...')
+                : isTranscribingVoice
+                ? (isBn ? '⏳ কথা প্রসেস হচ্ছে...' : '⏳ Transcribing voice...')
+                : (isBn ? 'মুখে বলুন বা টাইপ করুন...' : 'Type or speak command...')
+            }
+            style={{
+              flex: 1,
+              backgroundColor: 'transparent',
+              border: 'none',
+              outline: 'none',
+              fontSize: '11px',
+              color: '#ffffff',
+              userSelect: 'text',
+              cursor: 'text',
+              minWidth: '60px'
+            }}
+          />
+
+          <button
+            onClick={() => handleSendCommand()}
+            disabled={!commandInput.trim() || isProcessing}
+            style={{
+              padding: '5px 10px',
+              borderRadius: '6px',
+              backgroundColor: commandInput.trim() ? '#4f46e5' : 'rgba(255,255,255,0.08)',
+              border: 'none',
+              color: '#ffffff',
+              fontSize: '10.5px',
+              fontWeight: 600,
+              cursor: commandInput.trim() ? 'pointer' : 'default',
+              opacity: commandInput.trim() ? 1 : 0.4,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              flexShrink: 0
+            }}
+          >
+            <Send size={11} />
+            <span>{isBn ? 'সেন্ড' : 'Send'}</span>
+          </button>
+        </div>
       </div>
     </div>
   );

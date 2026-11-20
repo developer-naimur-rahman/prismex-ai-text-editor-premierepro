@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
+import { StudiosRibbon } from '../components/StudiosRibbon';
 import { 
   Palette, 
   Camera, 
@@ -136,7 +137,17 @@ export const ColorStudioView: React.FC = () => {
       const expRes = await bridge.exportFrameAtPlayhead(tmpPath);
       if (expRes && expRes.domExported) {
         setFramePath(tmpPath);
+        const b64 = await client.readImageBase64(tmpPath);
+        if (b64) setFrameBase64(b64);
         setStatusMessage(language === 'bn' ? '✓ ফ্রেম ক্যাপচার সফল' : '✓ Frame captured successfully');
+      } else if (expRes && expRes.clipInfo && expRes.clipInfo.mediaPath) {
+        const sec = expRes.clipInfo.sourceFrameSeconds || 0.0;
+        const ffmpegRes = await client.extractFrameFFmpeg(expRes.clipInfo.mediaPath, sec);
+        if (ffmpegRes && ffmpegRes.frameBase64) {
+          setFrameBase64(ffmpegRes.frameBase64);
+          setFramePath(ffmpegRes.framePath);
+          setStatusMessage(language === 'bn' ? '✓ ফ্রেম ক্যাপচার সফল' : '✓ Frame captured successfully');
+        }
       } else {
         // Fallback demo frame if no active sequence is open
         setStatusMessage(language === 'bn' ? 'টাইমলাইন থেকে ফ্রেম রিড করা যায়নি, বাটন ক্লিক করে আবার চেষ্টা করুন' : 'Click to capture current sequence playhead frame');
@@ -238,16 +249,18 @@ export const ColorStudioView: React.FC = () => {
   };
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      flexDirection: 'column', 
-      height: '100%', 
-      backgroundColor: 'var(--bg-primary)',
-      color: 'var(--text-primary)',
-      overflowY: 'auto',
-      padding: '16px',
-      gap: '16px'
-    }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <StudiosRibbon />
+      <div style={{ 
+        display: 'flex', 
+        flexDirection: 'column', 
+        flex: 1, 
+        backgroundColor: 'var(--bg-primary)',
+        color: 'var(--text-primary)',
+        overflowY: 'auto',
+        padding: '14px',
+        gap: '14px'
+      }}>
       {/* Header Banner */}
       <div style={{
         display: 'flex',
@@ -672,6 +685,7 @@ export const ColorStudioView: React.FC = () => {
             : (language === 'bn' ? '▶ স্টুডিও গ্রেড জেনারেট এবং প্রিমিয়ারে অ্যাপ্লাই করুন' : '▶ Generate Studio Grade 3D LUT')}
         </span>
       </button>
+      </div>
     </div>
   );
 };

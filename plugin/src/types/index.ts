@@ -132,9 +132,12 @@ export interface ProviderStatusInfo {
   isFreeTier: boolean;
   isConfigured: boolean;
   maskedKey?: string;
-  health: 'HEALTHY' | 'ERROR' | 'RATE_LIMITED' | 'UNCONFIGURED';
+  health: 'HEALTHY' | 'ERROR' | 'RATE_LIMITED' | 'UNCONFIGURED' | 'QUOTA_EXHAUSTED' | 'INVALID_KEY' | 'NOT_CONFIGURED';
   requestsToday: number;
   maxRpm: number;
+  quotaExhausted?: boolean;
+  needsKeyChange?: boolean;
+  statusMessage?: string;
 }
 
 export interface RoughCutSummaryReport {

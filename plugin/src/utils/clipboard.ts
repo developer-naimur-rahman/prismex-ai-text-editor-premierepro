@@ -56,7 +56,7 @@ export async function copyToClipboard(text: string): Promise<boolean> {
 
   // 4. Local Prismex Companion Daemon OS clipboard (macOS pbcopy / Windows clip)
   try {
-    const res = await fetch('http://127.0.0.1:49152/api/v1/system/clipboard', {
+    const res = await fetch('http://127.0.0.1:48152/api/v1/system/clipboard', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text })

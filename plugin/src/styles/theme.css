@@ -28,6 +28,7 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
+  --prismex-ui-scale: 1;
 }
 
 /* Bangla Typography for Bangla Mode */
@@ -43,14 +44,25 @@ body.lang-bn,
   margin: 0;
   padding: 0;
   user-select: none;
-  min-width: 0;
+}
+
+/* Allow text selection and cursor anywhere with .selectable-text or inside chat/copilot/inputs/pre */
+input, textarea, [contenteditable="true"], pre, code,
+.selectable-text,
+.copilot-message,
+.chat-bubble,
+[data-selectable="true"],
+.user-select-text {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  cursor: text;
 }
 
 html, body {
   background-color: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-family);
-  font-size: 12px;
+  font-size: calc(12px * var(--prismex-ui-scale, 1));
   line-height: 1.4;
   overflow: hidden;
   height: 100vh;

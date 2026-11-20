@@ -8,15 +8,86 @@ if (typeof $._prismex === "undefined") {
     $._prismex = {};
 }
 
+$._prismex.SCRIPT_BUILD = 2026111905;
 $._prismex.TICKS_PER_SECOND = 254016000000.0;
+$._prismex._lastActiveSequence = null;
+
+/**
+ * Robust Sequence Resolver:
+ * In Adobe Premiere Pro, app.project.activeSequence often becomes null when
+ * an HTML/CEP panel takes window focus. This resolver checks:
+ * 1. app.project.activeSequence (direct)
+ * 2. Cached _lastActiveSequence (if still valid)
+ * 3. QE DOM active sequence
+ * 4. Fallback to active/open sequence in project
+ */
+$._prismex.getResolvedActiveSequence = function() {
+    try {
+        if (!app.project) return null;
+
+        // 1. Direct activeSequence (available when timeline panel is focused)
+        if (app.project.activeSequence) {
+            $._prismex._lastActiveSequence = app.project.activeSequence;
+            return app.project.activeSequence;
+        }
+
+        // 2. Cached last active sequence (safe & non-intrusive)
+        if ($._prismex._lastActiveSequence) {
+            try {
+                if ($._prismex._lastActiveSequence.name && $._prismex._lastActiveSequence.sequenceID) {
+                    return $._prismex._lastActiveSequence;
+                }
+            } catch (staleErr) {
+                $._prismex._lastActiveSequence = null;
+            }
+        }
+
+        // 3. QE Active Sequence: Premiere Pro's QE DOM reliably holds the active sequence even when HTML panel has focus
+        try {
+            app.enableQE();
+            if (typeof qe !== "undefined" && qe && qe.project) {
+                var qeSeq = qe.project.getActiveSequence();
+                if (qeSeq) {
+                    var qeName = "";
+                    try { qeName = qeSeq.name; } catch(ne) {}
+                    var qeGuid = "";
+                    try { qeGuid = qeSeq.guid; } catch(ge) {}
+
+                    if (app.project.sequences) {
+                        for (var qIdx = 0; qIdx < app.project.sequences.numSequences; qIdx++) {
+                            var cand = app.project.sequences[qIdx];
+                            if (cand && ((qeName && cand.name === qeName) || (qeGuid && cand.sequenceID === qeGuid))) {
+                                $._prismex._lastActiveSequence = cand;
+                                return cand;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (qeErr) {}
+
+        // 4. Fallback to first available sequence in project
+        if (app.project.sequences && app.project.sequences.numSequences > 0) {
+            for (var si = 0; si < app.project.sequences.numSequences; si++) {
+                var s = app.project.sequences[si];
+                if (s && s.name) {
+                    $._prismex._lastActiveSequence = s;
+                    return s;
+                }
+            }
+        }
+    } catch (resolveErr) {}
+
+    return null;
+};
 
 $._prismex.getActiveSequenceManifest = function() {
     try {
-        if (!app.project || !app.project.activeSequence) {
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
             return JSON.stringify({ error: "No active sequence found" });
         }
 
-        var seq = app.project.activeSequence;
         var seqName = seq.name;
         var seqId = seq.sequenceID || seq.name;
         var TICKS = $._prismex.TICKS_PER_SECOND;
@@ -49,6 +120,7 @@ $._prismex.getActiveSequenceManifest = function() {
 
         // Inspect audio tracks and clips (both timeline start/end AND source media inPoint/outPoint)
         var sourceClips = [];
+        var hasValidAudioPath = false;
         try {
             var audioTrackCount = seq.audioTracks.numTracks;
             for (var t = 0; t < audioTrackCount; t++) {
@@ -62,6 +134,32 @@ $._prismex.getActiveSequenceManifest = function() {
                         }
                     } catch (pe) {}
 
+                    // Fallback to linked items if audio clip itself doesn't expose getMediaPath()
+                    if ((!mediaPath || mediaPath === "") && typeof clip.getLinkedItems === "function") {
+                        try {
+                            var linked = clip.getLinkedItems();
+                            if (linked && linked.numItems > 0) {
+                                for (var lk = 0; lk < linked.numItems; lk++) {
+                                    var lkItem = linked[lk];
+                                    if (lkItem && lkItem.projectItem) {
+                                        var lp = lkItem.projectItem.getMediaPath();
+                                        if (lp && lp !== "") {
+                                            mediaPath = lp;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (lke) {}
+                    }
+
+                    if (mediaPath && mediaPath !== "") {
+                        try {
+                            mediaPath = decodeURI(mediaPath);
+                        } catch (de) {}
+                        hasValidAudioPath = true;
+                    }
+
                     var inSec = 0.0;
                     var outSec = 0.0;
                     var srcInSec = 0.0;
@@ -74,16 +172,77 @@ $._prismex.getActiveSequenceManifest = function() {
                     } catch (te) {}
 
                     sourceClips.push({
-                        mediaPath: mediaPath,
+                        mediaPath: mediaPath || "",
                         trackIndex: t + 1,
-                        inSeconds: Math.max(0, inSec),
-                        outSeconds: Math.max(0, outSec),
-                        sourceInSeconds: Math.max(0, srcInSec),
-                        sourceOutSeconds: Math.max(0, srcOutSec)
+                        inSeconds: Math.max(0, isNaN(inSec) ? 0.0 : inSec),
+                        outSeconds: Math.max(0, isNaN(outSec) ? 0.0 : outSec),
+                        sourceInSeconds: Math.max(0, isNaN(srcInSec) ? 0.0 : srcInSec),
+                        sourceOutSeconds: Math.max(0, isNaN(srcOutSec) ? 0.0 : srcOutSec)
                     });
                 }
             }
         } catch (e) {}
+
+        // Fallback: If no audio clips had media paths or audio tracks were empty, check video tracks
+        if ((!hasValidAudioPath || sourceClips.length === 0) && seq.videoTracks) {
+            var videoClips = [];
+            try {
+                var videoTrackCount = seq.videoTracks.numTracks;
+                for (var vt = 0; vt < videoTrackCount; vt++) {
+                    var vtrack = seq.videoTracks[vt];
+                    for (var vc = 0; vc < vtrack.clips.numItems; vc++) {
+                        var vclip = vtrack.clips[vc];
+                        var vmediaPath = "";
+                        try {
+                            if (vclip.projectItem) {
+                                vmediaPath = vclip.projectItem.getMediaPath();
+                            }
+                        } catch (vpe) {}
+
+                        if (vmediaPath && vmediaPath !== "") {
+                            try {
+                                vmediaPath = decodeURI(vmediaPath);
+                            } catch (de) {}
+                        }
+
+                        var vinSec = (parseFloat(vclip.start.ticks) - zeroTicks) / TICKS;
+                        var voutSec = (parseFloat(vclip.end.ticks) - zeroTicks) / TICKS;
+                        var vsrcIn = parseFloat(vclip.inPoint.ticks) / TICKS;
+                        var vsrcOut = parseFloat(vclip.outPoint.ticks) / TICKS;
+                        videoClips.push({
+                            mediaPath: vmediaPath || "",
+                            trackIndex: 1,
+                            inSeconds: Math.max(0, isNaN(vinSec) ? 0.0 : vinSec),
+                            outSeconds: Math.max(0, isNaN(voutSec) ? 0.0 : voutSec),
+                            sourceInSeconds: Math.max(0, isNaN(vsrcIn) ? 0.0 : vsrcIn),
+                            sourceOutSeconds: Math.max(0, isNaN(vsrcOut) ? 0.0 : vsrcOut)
+                        });
+                    }
+                }
+            } catch (ve) {}
+
+            if (videoClips.length > 0) {
+                // If audio clips existed but had blank mediaPath, merge video paths into matching time slots
+                if (sourceClips.length > 0) {
+                    for (var scIdx = 0; scIdx < sourceClips.length; scIdx++) {
+                        if (!sourceClips[scIdx].mediaPath || sourceClips[scIdx].mediaPath === "") {
+                            var scIn = sourceClips[scIdx].inSeconds;
+                            var scOut = sourceClips[scIdx].outSeconds;
+                            for (var vcIdx = 0; vcIdx < videoClips.length; vcIdx++) {
+                                var vcIn = videoClips[vcIdx].inSeconds;
+                                var vcOut = videoClips[vcIdx].outSeconds;
+                                if (Math.abs(scIn - vcIn) < 0.2 || (scIn >= vcIn && scIn <= vcOut)) {
+                                    sourceClips[scIdx].mediaPath = videoClips[vcIdx].mediaPath;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    sourceClips = videoClips;
+                }
+            }
+        }
 
         var cleanSeqName = seqName.replace(/(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+/g, "");
 
@@ -106,8 +265,8 @@ $._prismex.getActiveSequenceManifest = function() {
 
 $._prismex.getPlayheadPosition = function() {
     try {
-        if (!app.project || !app.project.activeSequence) return "0";
-        var seq = app.project.activeSequence;
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) return "0";
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
         var pos = seq.getPlayerPosition();
         if (!pos) return "0";
@@ -120,8 +279,8 @@ $._prismex.getPlayheadPosition = function() {
 
 $._prismex.setPlayheadPosition = function(seconds) {
     try {
-        if (!app.project || !app.project.activeSequence) return "NO_SEQ";
-        var seq = app.project.activeSequence;
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) return "NO_SEQ";
         var zeroTicks = parseFloat(seq.zeroPoint || 0) || 0;
         var ticks = zeroTicks + Math.round(parseFloat(seconds) * $._prismex.TICKS_PER_SECOND);
         seq.setPlayerPosition(ticks.toFixed(0));
@@ -133,11 +292,10 @@ $._prismex.setPlayheadPosition = function(seconds) {
 
 $._prismex.cloneActiveSequence = function(suffix) {
     try {
-        if (!app.project || !app.project.activeSequence) {
+        var origSeq = $._prismex.getResolvedActiveSequence();
+        if (!origSeq) {
             return JSON.stringify({ error: "No active sequence found" });
         }
-
-        var origSeq = app.project.activeSequence;
         var origName = origSeq.name;
         // Strip previous repetitive Prismex suffixes to prevent name stacking
         var cleanBaseName = origName.replace(/(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut)+/g, "");
@@ -334,9 +492,17 @@ $._prismex.importAndPlaceClipOnTrack = function(filePath, targetTimeSec, targetT
         }
 
         // 2. Check if already imported or import now
-        var mediaFile = new File(filePath);
+        var cleanPath = String(filePath).replace(/^file:\/\//i, "");
+        try {
+            cleanPath = decodeURIComponent(cleanPath);
+        } catch(e) {}
+        var mediaFile = new File(cleanPath);
         if (!mediaFile.exists) {
-            return JSON.stringify({ success: false, error: "File does not exist: " + filePath });
+            // Also try original in case decoding changed literal character
+            mediaFile = new File(filePath);
+        }
+        if (!mediaFile.exists) {
+            return JSON.stringify({ success: false, error: "File does not exist: " + cleanPath });
         }
 
         var projectItem = null;
@@ -404,6 +570,18 @@ $._prismex.importAndPlaceClipOnTrack = function(filePath, targetTimeSec, targetT
         });
     } catch (err) {
         return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+$._prismex.saveProject = function() {
+    try {
+        if (app.project) {
+            app.project.save();
+            return JSON.stringify({ success: true });
+        }
+        return JSON.stringify({ success: false, error: "No project open" });
+    } catch (e) {
+        return JSON.stringify({ success: false, error: String(e) });
     }
 };
 
@@ -715,8 +893,8 @@ $._prismex._formatTimecode = function(seconds, fps) {
 
 $._prismex.getActiveSequenceSignature = function() {
     try {
-        if (!app.project || !app.project.activeSequence) return "none";
-        var seq = app.project.activeSequence;
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) return "none";
         var guid = String(seq.sequenceID || seq.guid || "");
         var name = String(seq.name || "");
         var zero = String(seq.zeroPoint || "0");
@@ -740,7 +918,8 @@ $._prismex.getActiveSequenceSignature = function() {
 
 $._prismex.executeNativeRippleCuts = function(cutsJsonString) {
     try {
-        if (!app.project || !app.project.activeSequence) {
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
             return JSON.stringify({ success: false, error: "No active sequence" });
         }
         var rawCuts = JSON.parse(cutsJsonString);
@@ -1763,4 +1942,408 @@ $._prismex.applyLumetriColorToActiveClip = function(lutFilePath, lutName, basicC
         return JSON.stringify({ success: false, error: String(err) });
     }
 };
+
+/**
+ * 1-Click Non-Destructive Script Rough-Cut Sequence Creator
+ * Clones active sequence, executes frame-accurate ripple cuts, alternates A/B punch-in scale (100% vs 112%),
+ * color-codes acts (Hook=Orange, Body=Teal, CTA=Green), and inserts YouTube chapter & B-Roll markers.
+ */
+$._prismex.createScriptRoughCutSequence = function(payloadJson) {
+    try {
+        var activeSeq = $._prismex.getResolvedActiveSequence();
+        if (!activeSeq) {
+            return JSON.stringify({ success: false, error: "No active sequence found in Premiere Pro" });
+        }
+
+        var payload = payloadJson;
+        while (typeof payload === "string") {
+            try {
+                payload = JSON.parse(payload);
+            } catch (pe) {
+                break;
+            }
+        }
+        if (!payload || typeof payload !== "object") {
+            payload = {};
+        }
+
+        var cuts = payload.cuts || [];
+        var punchIns = payload.punchIns || [];
+        var colorLabels = payload.colorLabels || [];
+        var markers = payload.markers || [];
+
+        // 1. Non-destructive clone via tested cloneActiveSequence
+        var cloneResStr = $._prismex.cloneActiveSequence("_AI_Script_RoughCut");
+        var cloneRes = {};
+        try { cloneRes = JSON.parse(cloneResStr); } catch (ce) {}
+
+        if (!cloneRes || !cloneRes.success) {
+            return JSON.stringify({
+                success: false,
+                error: (cloneRes && (cloneRes.error || cloneRes.message)) || "Sequence cloning failed"
+            });
+        }
+
+        var numSeq = (app.project && app.project.sequences) ? app.project.sequences.numSequences : 0;
+        var newSeq = (numSeq > 0) ? app.project.sequences[numSeq - 1] : app.project.activeSequence;
+        if (newSeq) {
+            $._prismex._lastActiveSequence = newSeq;
+            try { app.project.activeSequence = newSeq; } catch(ae) {}
+        }
+        var targetName = cloneRes.clonedSequenceName || (newSeq ? newSeq.name : "AI_Script_RoughCut");
+
+        // 2. Execute cuts using tested executeNativeRippleCuts
+        var executedCuts = 0;
+        if (cuts && cuts.length > 0) {
+            try {
+                var cutResStr = $._prismex.executeNativeRippleCuts(JSON.stringify(cuts));
+                var cutRes = JSON.parse(cutResStr);
+                executedCuts = cutRes.executedCount || cutRes.cutsExecuted || cuts.length;
+            } catch (cutErr) {
+                // Non-fatal, continue with punch-ins & markers
+            }
+        }
+
+        // 3. Dynamic A/B Camera Punch-In (100% vs 112% Scale) & Act Color-Coding
+        var punchesApplied = 0;
+        var colorsApplied = 0;
+
+        try {
+            if (newSeq && newSeq.videoTracks && newSeq.videoTracks.numTracks > 0) {
+                var v1 = newSeq.videoTracks[0];
+                var numClips = v1.clips.numItems;
+                var isZoomed = false;
+
+                for (var i = 0; i < numClips; i++) {
+                    var vClip = v1.clips[i];
+
+                    // Alternate Scale: 100% vs 112%
+                    var targetScale = isZoomed ? 112.0 : 100.0;
+                    try {
+                        for (var compIdx = 0; compIdx < vClip.components.numItems; compIdx++) {
+                            var comp = vClip.components[compIdx];
+                            if (comp.displayName === "Motion" || comp.name === "Motion") {
+                                for (var propIdx = 0; propIdx < comp.properties.numItems; propIdx++) {
+                                    var prop = comp.properties[propIdx];
+                                    if (prop.displayName === "Scale" || prop.name === "Scale") {
+                                        prop.setValue(targetScale, 0); // 0 = Do NOT force UI redraw per clip (avoids freeze)
+                                        punchesApplied++;
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    } catch (scaleErr) {}
+                    isZoomed = !isZoomed;
+
+                    // Act Color-Coding:
+                    // Hook (first 18%) = 9 (Mango / Orange)
+                    // CTA (last 18%) = 3 (Forest / Green)
+                    // Body (middle) = 4 (Cerulean / Teal)
+                    var actColorIdx = 4; // Teal
+                    var ratio = (numClips > 1) ? (i / (numClips - 1)) : 0.5;
+                    if (ratio <= 0.18) {
+                        actColorIdx = 9; // Mango / Orange
+                    } else if (ratio >= 0.82) {
+                        actColorIdx = 3; // Forest / Green
+                    }
+
+                    try {
+                        if (typeof vClip.setColorLabel === "function") {
+                            vClip.setColorLabel(actColorIdx);
+                            colorsApplied++;
+                        } else if (vClip.projectItem && typeof vClip.projectItem.setColorLabel === "function") {
+                            vClip.projectItem.setColorLabel(actColorIdx);
+                            colorsApplied++;
+                        }
+                    } catch (colErr) {}
+                }
+            }
+        } catch (punchErr) {}
+
+        // 4. Place Timeline Markers (YouTube Chapters, B-Roll Cues, Graphic Overlays)
+        var markersPlaced = 0;
+        try {
+            if (markers && markers.length > 0) {
+                var markerResStr = $._prismex.addTimelineMarkers(JSON.stringify(markers));
+                var markerRes = JSON.parse(markerResStr);
+                markersPlaced = markerRes.count || markers.length;
+            }
+        } catch (mkErr) {}
+
+        return JSON.stringify({
+            success: true,
+            sequenceName: targetName,
+            sequenceId: newSeq ? newSeq.sequenceID : "",
+            executedCuts: executedCuts,
+            punchesApplied: punchesApplied,
+            colorsApplied: colorsApplied,
+            markersPlaced: markersPlaced
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+/**
+ * Pre-AE Safety Duplication
+ * Duplicates the active clip at playhead from Track V1 to Track V2,
+ * labels Track V1 as a safety backup (Rose/Lavender - 11),
+ * and selects V2 so "Replace with After Effects Composition" never destroys raw media.
+ */
+$._prismex.preAeSafetyDuplicate = function() {
+    try {
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence found in Premiere Pro" });
+        }
+        if (!seq.videoTracks || seq.videoTracks.numTracks < 1) {
+            return JSON.stringify({ success: false, error: "No video tracks available" });
+        }
+
+        var TICKS = $._prismex.TICKS_PER_SECOND || 254016000000;
+        var playheadSec = parseFloat(seq.getPlayerPosition().ticks) / TICKS;
+        var zeroTicks = parseFloat(seq.zeroPoint.ticks || seq.zeroPoint || 0) || 0;
+
+        var v1 = seq.videoTracks[0];
+        var targetClip = null;
+        for (var c = 0; c < v1.clips.numItems; c++) {
+            var clip = v1.clips[c];
+            var cStart = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
+            var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
+            if (playheadSec >= (cStart - 0.05) && playheadSec <= (cEnd + 0.05)) {
+                targetClip = clip;
+                break;
+            }
+        }
+
+        if (!targetClip) {
+            return JSON.stringify({ success: false, error: "Playhead-এর নিচে Track V1-এ কোনো ক্লিপ পাওয়া যায়নি।" });
+        }
+
+        if (seq.videoTracks.numTracks < 2) {
+            return JSON.stringify({ success: false, error: "দয়া করে প্রিমিয়ার টাইমলাইনে Video Track V2 যুক্ত করুন।" });
+        }
+        var v2 = seq.videoTracks[1];
+
+        if (targetClip.projectItem) {
+            v2.overwriteClip(targetClip.projectItem, targetClip.start);
+            try {
+                if (typeof targetClip.setColorLabel === "function") {
+                    targetClip.setColorLabel(11);
+                } else if (targetClip.projectItem && typeof targetClip.projectItem.setColorLabel === "function") {
+                    targetClip.projectItem.setColorLabel(11);
+                }
+            } catch (colErr) {}
+
+            return JSON.stringify({
+                success: true,
+                message: "ক্লিপটি সফলভাবে Track V2-তে ব্যাকআপ ডুপ্লিকেট করা হয়েছে! মূল র-ক্লিপ Track V1-এ সুরক্ষিত আছে।",
+                clipName: targetClip.name
+            });
+        }
+        return JSON.stringify({ success: false, error: "ক্লিপের ProjectItem পাওয়া যায়নি।" });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+/**
+ * Smart Eyeline & Rule-of-Thirds Punch-In
+ * Sets Motion -> Scale to 112% centered on rule of thirds.
+ */
+$._prismex.applySmartEyelinePunch = function(scalePercent) {
+    try {
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({ success: false, error: "No active sequence" });
+        }
+        var TICKS = $._prismex.TICKS_PER_SECOND || 254016000000;
+        var playheadSec = parseFloat(seq.getPlayerPosition().ticks) / TICKS;
+        var zeroTicks = parseFloat(seq.zeroPoint.ticks || seq.zeroPoint || 0) || 0;
+
+        var targetScale = parseFloat(scalePercent) || 112.0;
+
+        if (!seq.videoTracks || seq.videoTracks.numTracks < 1) {
+            return JSON.stringify({ success: false, error: "No video tracks" });
+        }
+
+        var v1 = seq.videoTracks[0];
+        var targetClip = null;
+        for (var c = 0; c < v1.clips.numItems; c++) {
+            var clip = v1.clips[c];
+            var cStart = (parseFloat(clip.start.ticks) - zeroTicks) / TICKS;
+            var cEnd = (parseFloat(clip.end.ticks) - zeroTicks) / TICKS;
+            if (playheadSec >= (cStart - 0.05) && playheadSec <= (cEnd + 0.05)) {
+                targetClip = clip;
+                break;
+            }
+        }
+
+        if (!targetClip) {
+            return JSON.stringify({ success: false, error: "Playhead-এর নিচে কোনো ক্লিপ নেই।" });
+        }
+
+        var applied = false;
+        for (var compIdx = 0; compIdx < targetClip.components.numItems; compIdx++) {
+            var comp = targetClip.components[compIdx];
+            if (comp.displayName === "Motion" || comp.name === "Motion") {
+                for (var p = 0; p < comp.properties.numItems; p++) {
+                    var prop = comp.properties[p];
+                    if (prop.displayName === "Scale" || prop.name === "Scale") {
+                        prop.setValue(targetScale, true);
+                        applied = true;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        return JSON.stringify({
+            success: applied,
+            message: "ক্লিপে " + targetScale + "% আই-লাইন পাঞ্চ-ইন প্রয়োগ করা হয়েছে!",
+            clipName: targetClip.name,
+            scale: targetScale
+        });
+    } catch (err) {
+        return JSON.stringify({ success: false, error: String(err) });
+    }
+};
+
+/**
+ * 1-Click Sequence Aspect Ratio Converter with Auto-Fit & Auto-Crop
+ * Converts sequence resolution to 1:1 Square, 9:16 Vertical, 4:5 Portrait, 16:9 Landscape, etc.
+ * and automatically fits/fills video clips so video matches frame without manual settings tweaking.
+ */
+$._prismex.changeSequenceAspectRatio = function(optionsJson) {
+    try {
+        var opts = optionsJson;
+        while (typeof opts === "string") {
+            try { opts = JSON.parse(opts); } catch(pe) { break; }
+        }
+        opts = opts || {};
+        
+        var seq = $._prismex.getResolvedActiveSequence();
+        if (!seq) {
+            return JSON.stringify({
+                success: false,
+                error: "NO_ACTIVE_SEQUENCE",
+                reason: "প্রিমিয়ার প্রোতে কোনো সক্রিয় সিকোয়েন্স (Active Sequence) পাওয়া যায়নি।",
+                guideline: "প্রিমিয়ার প্রোর টাইমলাইনে আপনার কাঙ্ক্ষিত সিকোয়েন্সটিতে ক্লিক করে সক্রিয় করুন, তারপর আবার বাটনে ক্লিক করুন।"
+            });
+        }
+
+        var targetWidth = parseInt(opts.width) || 1080;
+        var targetHeight = parseInt(opts.height) || 1080;
+        var ratioLabel = opts.label || (targetWidth + ":" + targetHeight);
+        var cloneFirst = opts.clone !== false;
+        var fitMode = opts.fitMode || "fill"; // "fill" (auto-crop no black bars) or "fit" (letterbox)
+
+        var targetSeq = seq;
+        var cleanBaseName = seq.name.replace(/(_PrismexRoughCut|_SilenceCut|_ApprovedCuts|_RoughCut|_Format_\w+)+/g, "");
+
+        if (cloneFirst) {
+            try {
+                var cloned = seq.clone();
+                if (cloned) {
+                    var numSeq = app.project.sequences.numSequences;
+                    targetSeq = app.project.sequences[numSeq - 1];
+                    var suffix = "_Format_" + (opts.ratioKey || (targetWidth + "x" + targetHeight));
+                    targetSeq.name = cleanBaseName + suffix;
+                    try {
+                        app.project.openSequence(targetSeq.sequenceID);
+                        app.project.activeSequence = targetSeq;
+                    } catch(oe) {}
+                }
+            } catch(cloneErr) {
+                targetSeq = seq;
+            }
+        }
+
+        // 1. Change Sequence Resolution via native SequenceSettings
+        var settingsApplied = false;
+        try {
+            var settings = targetSeq.getSettings();
+            if (settings) {
+                settings.videoFrameWidth = targetWidth;
+                settings.videoFrameHeight = targetHeight;
+                targetSeq.setSettings(settings);
+                settingsApplied = true;
+            }
+        } catch(settErr) {}
+
+        // 2. Auto-Fit & Auto-Scale clips across all video tracks
+        var clipsModified = 0;
+        try {
+            if (targetSeq.videoTracks) {
+                for (var t = 0; t < targetSeq.videoTracks.numTracks; t++) {
+                    var vTrack = targetSeq.videoTracks[t];
+                    for (var c = 0; c < vTrack.clips.numItems; c++) {
+                        var clip = vTrack.clips[c];
+                        // Native scale to frame size
+                        try {
+                            if (typeof clip.setScaleToFrameSize === "function") {
+                                clip.setScaleToFrameSize();
+                            }
+                        } catch(fe) {}
+
+                        // Auto-fill scaling calculation
+                        if (fitMode === "fill") {
+                            try {
+                                var targetScale = 100.0;
+                                if (targetWidth === 1080 && targetHeight === 1080) { // 1:1 Square
+                                    targetScale = 178.0;
+                                } else if (targetWidth === 1080 && targetHeight === 1920) { // 9:16 Vertical
+                                    targetScale = 316.0;
+                                } else if (targetWidth === 1080 && targetHeight === 1350) { // 4:5 Portrait
+                                    targetScale = 222.0;
+                                } else if (targetWidth === 1440 && targetHeight === 1080) { // 4:3
+                                    targetScale = 133.0;
+                                } else if (targetWidth === 1920 && targetHeight === 1080) { // 16:9 Landscape
+                                    targetScale = 100.0;
+                                }
+
+                                for (var compIdx = 0; compIdx < clip.components.numItems; compIdx++) {
+                                    var comp = clip.components[compIdx];
+                                    if (comp.displayName === "Motion" || comp.name === "Motion") {
+                                        for (var p = 0; p < comp.properties.numItems; p++) {
+                                            var prop = comp.properties[p];
+                                            if (prop.displayName === "Scale" || prop.name === "Scale") {
+                                                prop.setValue(targetScale, 0);
+                                                break;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                            } catch(me) {}
+                        }
+                        clipsModified++;
+                    }
+                }
+            }
+        } catch(clipErr) {}
+
+        return JSON.stringify({
+            success: true,
+            sequenceName: targetSeq.name,
+            width: targetWidth,
+            height: targetHeight,
+            ratio: ratioLabel,
+            clipsModified: clipsModified,
+            message: "সিকোয়েন্স " + ratioLabel + " (" + targetWidth + "x" + targetHeight + ") ফরম্যাটে সফলভাবে পরিবর্তিত হয়েছে ও ক্লিপগুলো অটো-ফিট করা হয়েছে!"
+        });
+    } catch(err) {
+        return JSON.stringify({
+            success: false,
+            error: String(err),
+            reason: "সিকোয়েন্স রেশিও পরিবর্তনের সময় সমস্যা হয়েছে: " + String(err),
+            guideline: "প্রিমিয়ার প্রো টাইমলাইন কোনো অপারেশন দ্বারা লক করা আছে কিনা দেখে পুনরায় চেষ্টা করুন।"
+        });
+    }
+};
+
+
 

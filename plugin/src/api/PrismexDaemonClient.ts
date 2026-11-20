@@ -14,8 +14,8 @@ import {
 
 export class PrismexDaemonClient {
   private static instance: PrismexDaemonClient;
-  private baseUrl = 'http://127.0.0.1:49152';
-  private wsUrl = 'ws://127.0.0.1:49152/ws/events';
+  private baseUrl = 'http://127.0.0.1:48152';
+  private wsUrl = 'ws://127.0.0.1:48152/ws/events';
   private ws: WebSocket | null = null;
   private eventListeners: Array<(event: any) => void> = [];
 
@@ -378,6 +378,39 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async readImageBase64(filePath: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/color/read-image-base64`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return data.base64 || null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async generateAiImage(prompt: string, width = 1920, height = 1080, style = 'cinematic'): Promise<{ success: boolean; filePath?: string; base64?: string; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/ai/generate-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, width, height, style })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return { success: false, error: `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
   public async getReviewQueue(jobId: string): Promise<ReviewQueueItem[]> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/review-queue/${jobId}`);
@@ -518,6 +551,90 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async parseFeedbackMarkers(feedbackText: string, fps: number = 24.0): Promise<{ success: boolean; count: number; markers: any[] } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/client/parse-feedback-markers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feedbackText, fps })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async downloadAsset(url: string, assetType: string = 'video'): Promise<{ success: boolean; filePath?: string; cached?: boolean; error?: string } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/stock/download-asset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, assetType })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async checkForUpdates(): Promise<{
+    updateAvailable: boolean;
+    currentVersion: string;
+    latestVersion: string;
+    releaseDate: string;
+    releaseNotes: Array<{ id: string; title: string; description: string; tab: string; badge?: string }>;
+    downloadSize: string;
+    downloadUrl: string;
+  } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/update/check`);
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async downloadAndInstallUpdate(downloadUrl?: string): Promise<{ success: boolean; installedVersion?: string; message?: string; error?: string } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/update/download-and-install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ downloadUrl })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async restartHostApp(appName: string = 'Adobe Premiere Pro'): Promise<{ success: boolean; message?: string; error?: string } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/update/restart-app`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appName })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public async ensureSfxAssets(): Promise<{ whoosh: string; pop: string } | null> {
     try {
       const resp = await fetch(`${this.baseUrl}/api/v1/sfx/ensure-assets`, {
@@ -630,6 +747,28 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async batchScriptToShorts(
+    scripts: string,
+    words: any[],
+    sentences: any[],
+    fps: number = 24.0,
+    targetCount?: number
+  ): Promise<{ success: boolean; count: number; totalParsed: number; shorts: any[] } | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/transcript/batch-script-to-shorts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scripts, words, sentences, fps, targetCount })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   public async getProjectCache(projectId: string, sequenceName: string): Promise<any | null> {
     try {
       const p = encodeURIComponent(projectId || 'default_project');
@@ -695,6 +834,87 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async exportPdfReport(params: {
+    filename: string;
+    reportHtml: string;
+    folderPath?: string;
+    openAfterSave?: boolean;
+    revealInFinder?: boolean;
+  }): Promise<{ success: boolean; path?: string; folder?: string; isPdf?: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/files/export-pdf-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      return { success: false, error: err.detail || `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  public async revealFile(path: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/system/reveal-file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return { success: false, error: `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  public async restartPremierePro(): Promise<{ success: boolean; message?: string; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/system/restart-premiere`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      return { success: false, error: `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  public async startVoiceRecording(): Promise<{ success: boolean; recording?: boolean; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/voice/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      if (res.ok) return await res.json();
+      return { success: false, error: `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  public async stopVoiceRecording(language: string = 'auto'): Promise<{ success: boolean; text?: string; warning?: string; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/voice/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language })
+      });
+      if (res.ok) return await res.json();
+      return { success: false, error: `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
   public async enhanceAudio(params: {
     sequenceName: string;
     audioPath?: string;
@@ -705,6 +925,26 @@ export class PrismexDaemonClient {
   }): Promise<{ success: boolean; outputPath?: string; profileId?: string; error?: string }> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/audio/enhance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params)
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      return { success: false, error: err.detail || `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
+  public async masterBgm(params: {
+    bgmPath: string;
+    targetVolumeDb?: number;
+  }): Promise<{ success: boolean; outputPath?: string; targetVolumeDb?: number; error?: string }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/audio/master-bgm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params)
@@ -824,6 +1064,41 @@ export class PrismexDaemonClient {
     }
   }
 
+  public async generateScriptRoughCut(
+    scriptText: string,
+    words: any[],
+    durationSeconds: number,
+    fps: number = 23.976
+  ): Promise<{
+    success: boolean;
+    cuts?: any[];
+    punchIns?: any[];
+    colorLabels?: any[];
+    markers?: any[];
+    keptSegmentsCount?: number;
+    cutsCount?: number;
+    totalCutDuration?: number;
+    finalDuration?: number;
+    originalDuration?: number;
+    summary?: string;
+    error?: string;
+  }> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/timeline/script-rough-cut`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scriptText, words, durationSeconds, fps })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      const errData = await resp.json().catch(() => ({}));
+      return { success: false, error: errData.detail || 'Script rough cut failed' };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  }
+
   public async executeAssistantCommand(
     command: string,
     words: any[],
@@ -845,6 +1120,9 @@ export class PrismexDaemonClient {
     lutFileName?: string;
     basicCorrection?: any;
     musicData?: any;
+    clientScript?: string;
+    clientBrief?: string;
+    clientDossier?: any;
   } | null> {
     try {
       const resp = await fetch(`${this.baseUrl}/api/v1/assistant/execute-command`, {
@@ -920,6 +1198,34 @@ export class PrismexDaemonClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ revisionNotes, durationSeconds })
+      });
+      if (resp.ok) {
+        return await resp.json();
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  public async structureClientDossier(
+    clientBrief: string,
+    clientScript: string,
+    brandKit?: any,
+    sequenceManifest?: any,
+    language: string = 'bn'
+  ): Promise<any | null> {
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/client/structure-dossier`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientBrief,
+          clientScript,
+          brandKit,
+          sequenceManifest,
+          language
+        })
       });
       if (resp.ok) {
         return await resp.json();

@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { TimecodeConverter } from '../host/TimecodeConverter';
 import { copyToClipboard } from '../utils/clipboard';
+import { StudiosRibbon } from '../components/StudiosRibbon';
+import { AspectRatioSwitcher } from '../components/AspectRatioSwitcher';
 import {
   Flame,
   Sparkles,
@@ -27,7 +29,8 @@ import {
   HelpCircle,
   TrendingUp,
   Zap,
-  Film
+  Film,
+  Eye
 } from 'lucide-react';
 
 interface ShortBlock {
@@ -136,7 +139,11 @@ export const ViralShortsView: React.FC = () => {
   // Client Script Matcher state
   const [clientScriptInput, setClientScriptInput] = useState<string>('');
   const [matchedClientShort, setMatchedClientShort] = useState<ViralShortItem | null>(null);
+  const [matchedClientShorts, setMatchedClientShorts] = useState<ViralShortItem[]>([]);
   const [isMatchingScript, setIsMatchingScript] = useState<boolean>(false);
+  const [isBatchCreatingClientShorts, setIsBatchCreatingClientShorts] = useState<boolean>(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; name: string } | null>(null);
+  const [showSafeZoneGuide, setShowSafeZoneGuide] = useState<boolean>(false);
 
   // Auto-discover topics on first load only if transcript exists and persistent topics are empty
   useEffect(() => {
@@ -345,12 +352,48 @@ export const ViralShortsView: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 3000);
   };
 
-  // Client Script Matcher: Conform client script to timeline
+  // Helper to detect number of scripts in raw text
+  const detectedScriptCount = useMemo(() => {
+    const raw = clientScriptInput.trim();
+    if (!raw) return 0;
+    const headerMatches = raw.split(/(?:^|\n)(?:\[(?:Short|Reel|Clip|Video|শর্ট|পার্ট)\s*#?\d+\]|(?:Short|Reel|Clip|Video|শর্ট|পার্ট)\s*#?\d+[\s:\-–—]+|[#]{1,3}\s*(?:Short|Reel|Clip)\s*#?\d+|(?:\d+)\.\s+(?:Short|Reel|শর্ট))/i);
+    if (headerMatches.length > 2) return headerMatches.length - 1;
+    const divMatches = raw.split(/\n\s*[-=_*]{3,}\s*\n/);
+    if (divMatches.length > 1) return divMatches.length;
+    const numMatches = raw.match(/(?:^|\n)(?:\d{1,2}[\)\.]\s+)/g);
+    if (numMatches && numMatches.length > 1) return numMatches.length;
+    const paraClusters = raw.split(/\n{2,}/).filter(p => p.trim().length > 30);
+    if (paraClusters.length > 1) return paraClusters.length;
+    return 1;
+  }, [clientScriptInput]);
+
+  // Client Script Matcher: Conform client script(s) to timeline
   const handleMatchClientScript = async () => {
     if (!clientScriptInput.trim()) return;
     setIsMatchingScript(true);
-    setStatusMessage(language === 'bn' ? 'ভিডিও থেকে ক্লায়েন্টের ডায়ালগ খোঁজা হচ্ছে...' : 'Matching client script to spoken dialogue...');
+    setStatusMessage(language === 'bn' ? 'ভিডিও থেকে ডায়ালগ খোঁজা হচ্ছে ও স্ক্রিপ্ট ম্যাচ করা হচ্ছে...' : 'Matching client script(s) to spoken dialogue...');
     try {
+      // If multiple scripts detected, use batch endpoint
+      if (detectedScriptCount > 1) {
+        const batchRes = await client.batchScriptToShorts(
+          clientScriptInput,
+          transcriptWords,
+          transcriptSentences,
+          fps
+        );
+        if (batchRes && batchRes.success && batchRes.shorts && batchRes.shorts.length > 0) {
+          setMatchedClientShorts(batchRes.shorts);
+          setMatchedClientShort(batchRes.shorts[0]);
+          setStatusMessage(
+            language === 'bn'
+              ? `সফলভাবে ${batchRes.shorts.length} টি শর্টস স্ক্রিপ্ট টাইমলাইনের সাথে ম্যাচ করা হয়েছে!`
+              : `Matched ${batchRes.shorts.length} shorts from batch scripts!`
+          );
+          return;
+        }
+      }
+
+      // Single script matching fallback
       const matched = await client.matchClientScript(
         clientScriptInput,
         transcriptWords,
@@ -359,6 +402,7 @@ export const ViralShortsView: React.FC = () => {
       );
       if (matched && matched.segments && matched.segments.length > 0) {
         setMatchedClientShort(matched);
+        setMatchedClientShorts([matched]);
         setStatusMessage(
           language === 'bn'
             ? `স্ক্রিপ্ট সফলভাবে ম্যাচ হয়েছে (${matched.segments.length} টি ক্লিপ টাইমলাইনে চিহ্নিত)!`
@@ -367,10 +411,50 @@ export const ViralShortsView: React.FC = () => {
       } else {
         setStatusMessage(language === 'bn' ? 'স্ক্রিপ্টের সাথে ডায়ালগ মেলানো সম্ভব হয়নি।' : 'Could not match dialogue.');
       }
+    } catch (err) {
+      console.error(err);
+      setStatusMessage(language === 'bn' ? 'ম্যাচিং প্রক্রিয়া সম্পন্ন করা যায়নি।' : 'Failed to match scripts.');
     } finally {
       setIsMatchingScript(false);
       setTimeout(() => setStatusMessage(null), 5000);
     }
+  };
+
+  // Batch Create All Sequences for matched client shorts
+  const handleBatchCreateAllClientSequences = async () => {
+    const listToCreate = matchedClientShorts.length > 0 ? matchedClientShorts : (matchedClientShort ? [matchedClientShort] : []);
+    if (listToCreate.length === 0) return;
+
+    setIsBatchCreatingClientShorts(true);
+    let createdCount = 0;
+
+    for (let i = 0; i < listToCreate.length; i++) {
+      const item = listToCreate[i];
+      setBatchProgress({ current: i + 1, total: listToCreate.length, name: item.title });
+      try {
+        const segments = extractShortSegments(item);
+        const res = await hostBridge.createMultiSegmentVerticalShortSequence(
+          item.title,
+          segments,
+          item.markers
+        );
+        if (res && res.success && res.sequenceName) {
+          setCreatedSequences(prev => ({ ...prev, [item.id]: res.sequenceName! }));
+          createdCount++;
+        }
+      } catch (err) {
+        console.error(`Error creating sequence for ${item.title}:`, err);
+      }
+    }
+
+    setIsBatchCreatingClientShorts(false);
+    setBatchProgress(null);
+    setStatusMessage(
+      language === 'bn'
+        ? `অভিনন্দন! মোট ${createdCount}টি ৯:১৬ সিকোয়েন্স '_Prismex_Viral_Shorts' বিনে তৈরি হয়েছে!`
+        : `Done! Created ${createdCount} 9:16 sequences in '_Prismex_Viral_Shorts' bin!`
+    );
+    setTimeout(() => setStatusMessage(null), 6000);
   };
 
   // Helper to extract segments from a short item
@@ -482,7 +566,9 @@ export const ViralShortsView: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <StudiosRibbon />
+      <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflowY: 'auto', overflowX: 'hidden', minHeight: 0, paddingBottom: '75px' }}>
       {/* Header & Status Alert */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
         <div>
@@ -519,6 +605,11 @@ export const ViralShortsView: React.FC = () => {
             {statusMessage}
           </span>
         )}
+      </div>
+
+      {/* 1-Click Sequence Aspect Ratio Switcher with Auto-Fit */}
+      <div style={{ flexShrink: 0 }}>
+        <AspectRatioSwitcher />
       </div>
 
       {/* Sub-Nav Bar (3 Modes: Topics, Shorts Studio, Client Script) */}
@@ -582,11 +673,81 @@ export const ViralShortsView: React.FC = () => {
           <FileText size={12} />
           <span>{language === 'bn' ? 'ক্লায়েন্ট স্ক্রিপ্ট টু সিকোয়েন্স' : 'Client Script to Sequence'}</span>
         </button>
+
+        {/* 9:16 Social Safe Zone Guide Toggle */}
+        <button
+          onClick={() => setShowSafeZoneGuide(!showSafeZoneGuide)}
+          style={{
+            marginLeft: 'auto',
+            padding: '5px 9px',
+            fontSize: '10px',
+            borderRadius: '4px',
+            border: showSafeZoneGuide ? '1px solid #ea580c' : '1px solid rgba(249, 115, 22, 0.35)',
+            backgroundColor: showSafeZoneGuide ? 'rgba(234, 88, 12, 0.22)' : 'var(--bg-tertiary)',
+            color: showSafeZoneGuide ? '#ffffff' : '#fb923c',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontWeight: 600
+          }}
+          title={language === 'bn' ? 'ইনস্টাগ্রাম রিলস, টিকটক ও শর্টসের সেফ জোন গাইড' : 'Social Media Safe Zone Overlay Guide'}
+        >
+          <Eye size={12} />
+          <span>{language === 'bn' ? '🛡️ সেফ জোন ওভারলে' : '🛡️ Safe Zone'}</span>
+        </button>
       </div>
+
+      {/* Social Safe Zone Visual Explainer Banner */}
+      {showSafeZoneGuide && (
+        <div
+          className="card"
+          style={{
+            padding: '10px 12px',
+            backgroundColor: 'rgba(234, 88, 12, 0.08)',
+            border: '1px solid rgba(234, 88, 12, 0.4)',
+            borderRadius: '6px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '6px',
+            flexShrink: 0
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: '#fb923c', display: 'flex', alignItems: 'center', gap: '5px' }}>
+              🛡️ {language === 'bn' ? '৯:১৬ সোশ্যাল মিডিয়া সেফ জোন গাইড (Reels / TikTok / YouTube Shorts)' : '9:16 Safe Zone Guidelines'}
+            </span>
+            <button
+              onClick={() => setShowSafeZoneGuide(false)}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '11px' }}
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '8px', fontSize: '10px' }}>
+            <div style={{ padding: '6px', borderRadius: '4px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <span style={{ color: '#f87171', fontWeight: 600 }}>⚠️ উপরের ২০% জোন:</span>
+              <p style={{ margin: '2px 0 0 0', color: '#cbd5e1' }}>সার্চ বার ও ক্যামেরা নচ থাকে। কোনো ক্যাপশন বা গুরুত্বপূর্ণ টেক্সট এখানে রাখবেন না।</p>
+            </div>
+            <div style={{ padding: '6px', borderRadius: '4px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <span style={{ color: '#f87171', fontWeight: 600 }}>⚠️ ডানপাশের ১৫% জোন:</span>
+              <p style={{ margin: '2px 0 0 0', color: '#cbd5e1' }}>লাইক, কমেন্ট ও শেয়ার বাটন থাকে। টেক্সট যাতে ডানপাশে চেপে না যায়।</p>
+            </div>
+            <div style={{ padding: '6px', borderRadius: '4px', backgroundColor: 'rgba(0,0,0,0.3)', border: '1px solid rgba(255,255,255,0.06)' }}>
+              <span style={{ color: '#f87171', fontWeight: 600 }}>⚠️ নিচের ২৫% জোন:</span>
+              <p style={{ margin: '2px 0 0 0', color: '#cbd5e1' }}>ইউজারনেম ও ক্যাপশন ডেসক্রিপশন থাকে। সাবটাইটেল ফ্রেমের মাঝের ৩০-৫৫% এ রাখুন।</p>
+            </div>
+            <div style={{ padding: '6px', borderRadius: '4px', backgroundColor: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+              <span style={{ color: '#34d399', fontWeight: 600 }}>✓ সেন্ট্রাল সেফ জোন:</span>
+              <p style={{ margin: '2px 0 0 0', color: '#cbd5e1' }}>স্পিকারের মুখ এবং প্রধান ডায়ালগ ক্যাপশন সেন্টারে রাখুন (Center 1080x1080 safe square)।</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ===================== VIEW 1: TOPIC SUGGESTIONS ===================== */}
       {subTab === 'TOPICS' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/* Topic Finder Control */}
           <div className="card" style={{ padding: '8px 10px', display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
             <input
@@ -629,7 +790,7 @@ export const ViralShortsView: React.FC = () => {
           </div>
 
           {/* Topics List Container */}
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px', minHeight: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {topics.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '11px' }}>
                 {transcriptWords.length === 0
@@ -788,7 +949,7 @@ export const ViralShortsView: React.FC = () => {
 
       {/* ===================== VIEW 2: ACTIVE SHORTS STUDIO ===================== */}
       {subTab === 'STUDIO' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/* Top Control Bar */}
           <div className="card" style={{ padding: '8px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px', flexShrink: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -832,7 +993,7 @@ export const ViralShortsView: React.FC = () => {
           </div>
 
           {/* Shorts Cards Container */}
-          <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px', minHeight: 0 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {shorts.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '11px' }}>
                 {language === 'bn'
@@ -1217,18 +1378,25 @@ export const ViralShortsView: React.FC = () => {
 
       {/* ===================== VIEW 3: CLIENT SCRIPT CONFORMER ===================== */}
       {subTab === 'CLIENT_SCRIPT' && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', overflow: 'hidden', minHeight: 0 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
           <div className="card" style={{ padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: '6px', flexShrink: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#fb923c', fontWeight: 600, fontSize: '11px' }}>
-              <FileText size={13} />
-              <span>{language === 'bn' ? 'ক্লায়েন্টের দেওয়া কাস্টম স্ক্রিপ্ট পেস্ট করুন:' : 'Paste Client Custom Script:'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#fb923c', fontWeight: 600, fontSize: '11px' }}>
+                <FileText size={13} />
+                <span>{language === 'bn' ? 'ক্লায়েন্টের স্ক্রিপ্ট পেস্ট করুন (একক বা ৫-১০টি ব্যাচ):' : 'Paste Client Scripts (Single or 5-10+ Batch):'}</span>
+              </div>
+              {detectedScriptCount > 1 && (
+                <span style={{ fontSize: '10px', backgroundColor: 'rgba(234, 88, 12, 0.2)', color: '#fb923c', padding: '2px 8px', borderRadius: '12px', fontWeight: 600 }}>
+                  ⚡ {language === 'bn' ? `${detectedScriptCount}টি স্ক্রিপ্ট শনাক্ত হয়েছে` : `${detectedScriptCount} scripts detected`}
+                </span>
+              )}
             </div>
             <textarea
               rows={4}
               placeholder={
                 language === 'bn'
-                  ? 'ক্লায়েন্ট যে ডায়ালগ বা স্ক্রিপ্ট দিয়েছে তা এখানে পেস্ট করুন। এআই পুরো ভিডিও স্ক্যান করে ঠিক কোন কোন সেকেন্ডে এই ডায়ালগগুলো বলা হয়েছে তা স্বয়ংক্রিয়ভাবে খুঁজে বের করবে...'
-                  : 'Paste client script or dialogue paragraphs here. AI will scan the entire timeline and match exact spoken moments...'
+                  ? 'এখানে ৫টি, ৮টি বা ১০টি স্ক্রিপ্ট একবারে পেস্ট করতে পারেন (যেমন [Short 1], [Short 2] বা --- দিয়ে আলাদা করে)। এআই স্বয়ংক্রিয়ভাবে ভিডিওর অডিও স্ক্যান করে প্রতিটি স্ক্রিপ্টের জন্য আলাদা আলাদা ৯:১৬ শর্টস সিকোয়েন্স সাজিয়ে দেবে...'
+                  : 'Paste multiple scripts separated by [Short 1], [Short 2], numbers, or blank lines. AI will detect all scripts and conform each into 9:16 vertical sequences...'
               }
               value={clientScriptInput}
               onChange={(e) => setClientScriptInput(e.target.value)}
@@ -1245,103 +1413,207 @@ export const ViralShortsView: React.FC = () => {
               }}
             />
 
-            <button
-              onClick={handleMatchClientScript}
-              disabled={isMatchingScript || !clientScriptInput.trim() || transcriptWords.length === 0}
-              className="btn-primary"
-              style={{
-                alignSelf: 'flex-end',
-                padding: '5px 12px',
-                fontSize: '11px',
-                backgroundColor: '#ea580c',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              <Sparkles size={11} />
-              <span>{isMatchingScript ? (language === 'bn' ? 'ডায়ালগ মেলানো হচ্ছে...' : 'Matching Dialogue...') : (language === 'bn' ? 'ভিডিওতে ডায়ালগ খুঁজুন ও শর্টস সাজান' : 'Match Dialogue & Conform')}</span>
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '2px' }}>
+              <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                {language === 'bn' ? '💡 এডিটেড সিকোয়েন্স বা AE ডায়নামিক লিংক সম্পূর্ণ অক্ষুণ্ন থাকবে' : '💡 AE Dynamic Links and color grades preserved'}
+              </span>
+              <button
+                onClick={handleMatchClientScript}
+                disabled={isMatchingScript || !clientScriptInput.trim() || transcriptWords.length === 0}
+                className="btn-primary"
+                style={{
+                  padding: '5px 14px',
+                  fontSize: '11px',
+                  backgroundColor: '#ea580c',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  cursor: 'pointer'
+                }}
+              >
+                <Sparkles size={11} />
+                <span>
+                  {isMatchingScript
+                    ? (language === 'bn' ? 'ডায়ালগ মেলানো হচ্ছে...' : 'Matching Dialogue...')
+                    : (detectedScriptCount > 1
+                        ? (language === 'bn' ? `⚡ একবারে ${detectedScriptCount}টি শর্টস ডায়ালগ ম্যাচ করুন` : `⚡ Match All ${detectedScriptCount} Shorts`)
+                        : (language === 'bn' ? 'ভিডিওতে ডায়ালগ খুঁজুন ও শর্টস সাজান' : 'Match Dialogue & Conform'))}
+                </span>
+              </button>
+            </div>
           </div>
 
-          {/* Matched Result Card */}
-          {matchedClientShort && (
+          {/* Master Batch Header if Multiple Matched */}
+          {matchedClientShorts.length > 1 && (
             <div
               className="card"
               style={{
-                padding: '10px 12px',
+                padding: '8px 12px',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: '8px',
-                backgroundColor: 'rgba(52, 211, 153, 0.04)',
-                borderColor: 'rgba(52, 211, 153, 0.3)',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                backgroundColor: 'rgba(234, 88, 12, 0.08)',
+                borderColor: 'rgba(234, 88, 12, 0.3)',
                 borderRadius: '6px',
-                flex: 1,
-                overflowY: 'auto'
+                flexShrink: 0
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#34d399' }}>
-                  ✓ {matchedClientShort.title}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#fb923c' }}>
+                  🎯 {language === 'bn' ? `মোট ${matchedClientShorts.length}টি শর্টস তৈরি প্রস্তুত` : `${matchedClientShorts.length} Shorts Ready`}
                 </span>
-                <span style={{ fontSize: '10px', color: '#a7f3d0', fontFamily: 'monospace' }}>
-                  মোট দৈর্ঘ্য: ~{matchedClientShort.totalDurationSeconds}s ({matchedClientShort.segments?.length} টি ক্লিপ)
+                <span style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                  ({language === 'bn' ? "সবগুলো '_Prismex_Viral_Shorts' বিনে জমা হবে" : "Saved into '_Prismex_Viral_Shorts' bin"})
                 </span>
               </div>
+              <button
+                onClick={handleBatchCreateAllClientSequences}
+                disabled={isBatchCreatingClientShorts}
+                className="btn-primary"
+                style={{
+                  padding: '5px 12px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  backgroundColor: '#059669',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px'
+                }}
+              >
+                <Scissors size={12} />
+                <span>
+                  {isBatchCreatingClientShorts
+                    ? (language === 'bn' ? `তৈরি হচ্ছে (${batchProgress?.current}/${batchProgress?.total})...` : `Creating (${batchProgress?.current}/${batchProgress?.total})...`)
+                    : (language === 'bn' ? `⚡ ১-ক্লিকে সব (${matchedClientShorts.length}টি) সিকোয়েন্স বানান` : `⚡ Create All (${matchedClientShorts.length}) Sequences`)}
+                </span>
+              </button>
+            </div>
+          )}
 
-              {/* Matched Segments Preview */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                {matchedClientShort.segments?.map((seg, sIdx) => (
+          {/* Matched Result Cards (Batch or Single) */}
+          {(matchedClientShorts.length > 0 ? matchedClientShorts : (matchedClientShort ? [matchedClientShort] : [])).length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {(matchedClientShorts.length > 0 ? matchedClientShorts : (matchedClientShort ? [matchedClientShort] : [])).map((shortItem, idx) => {
+                const isCreated = !!createdSequences[shortItem.id];
+                return (
                   <div
-                    key={`seg_${sIdx}`}
+                    key={shortItem.id || `client_short_${idx}`}
+                    className="card"
                     style={{
-                      padding: '4px 8px',
-                      borderRadius: '4px',
-                      backgroundColor: 'rgba(0,0,0,0.25)',
-                      border: '1px solid rgba(52, 211, 153, 0.2)',
+                      padding: '10px 12px',
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: '2px',
-                      fontSize: '10.5px'
+                      gap: '8px',
+                      backgroundColor: isCreated ? 'rgba(52, 211, 153, 0.08)' : 'rgba(52, 211, 153, 0.03)',
+                      borderColor: isCreated ? 'rgba(52, 211, 153, 0.5)' : 'rgba(52, 211, 153, 0.25)',
+                      borderRadius: '6px'
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#34d399', fontSize: '9px', fontWeight: 600 }}>
-                      <span>{seg.role}</span>
-                      <span>{TimecodeConverter.formatTimecode(seg.startSeconds, fps)} → {TimecodeConverter.formatTimecode(seg.endSeconds, fps)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '10px', backgroundColor: '#059669', color: '#fff', padding: '1px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                          #{idx + 1}
+                        </span>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: '#34d399' }}>
+                          {shortItem.title}
+                        </span>
+                      </div>
+                      <span style={{ fontSize: '10px', color: '#a7f3d0', fontFamily: 'monospace' }}>
+                        মোট দৈর্ঘ্য: ~{shortItem.totalDurationSeconds}s ({shortItem.segments?.length} টি ক্লিপ)
+                      </span>
                     </div>
-                    <span style={{ color: '#ffffff' }}>"{seg.text}"</span>
-                  </div>
-                ))}
-              </div>
 
-              {/* 1-Click Create Sequence Button */}
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '6px' }}>
-                <button
-                  onClick={() => handleCreateSequence(matchedClientShort)}
-                  className="btn-primary"
-                  style={{
-                    padding: '6px 14px',
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    backgroundColor: '#059669',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '4px'
-                  }}
-                >
-                  <Scissors size={12} />
-                  <span>{language === 'bn' ? '১-ক্লিকে ক্লায়েন্ট স্ক্রিপ্ট অনুযায়ী ৯:১৬ সিকোয়েন্স বানান' : 'Create 9:16 Sequence from Client Script'}</span>
-                </button>
-              </div>
+                    {/* Matched Segments Preview */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {shortItem.segments?.map((seg, sIdx) => (
+                        <div
+                          key={`seg_${sIdx}`}
+                          style={{
+                            padding: '4px 8px',
+                            borderRadius: '4px',
+                            backgroundColor: 'rgba(0,0,0,0.25)',
+                            border: '1px solid rgba(52, 211, 153, 0.2)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '2px',
+                            fontSize: '10.5px'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', color: '#34d399', fontSize: '9px', fontWeight: 600 }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: seg.role === 'HOOK' ? '#ef4444' : (seg.role === 'CTA' ? '#3b82f6' : '#10b981') }} />
+                              {seg.role}
+                            </span>
+                            <span>{TimecodeConverter.formatTimecode(seg.startSeconds, fps)} → {TimecodeConverter.formatTimecode(seg.endSeconds, fps)}</span>
+                          </div>
+                          <span style={{ color: '#ffffff' }}>"{seg.text}"</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px' }}>
+                      <button
+                        onClick={() => {
+                          const firstSeg = shortItem.segments?.[0];
+                          if (firstSeg) {
+                            hostBridge.setPlayheadPosition(firstSeg.startSeconds);
+                          }
+                        }}
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: 'var(--text-secondary)',
+                          fontSize: '10px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          cursor: 'pointer',
+                          padding: '2px 4px'
+                        }}
+                        title={language === 'bn' ? 'টাইমলাইনে প্লেহেড নিয়ে যান' : 'Seek playhead to short start'}
+                      >
+                        <Play size={10} />
+                        <span>{language === 'bn' ? 'প্লেহেড প্রিভিউ' : 'Seek Timeline'}</span>
+                      </button>
+
+                      <button
+                        onClick={() => handleCreateSequence(shortItem)}
+                        className="btn-primary"
+                        style={{
+                          padding: '5px 12px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          backgroundColor: isCreated ? '#047857' : '#059669',
+                          color: '#ffffff',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px'
+                        }}
+                      >
+                        {isCreated ? <CheckCircle2 size={12} /> : <Scissors size={12} />}
+                        <span>
+                          {isCreated
+                            ? (language === 'bn' ? `তৈরি হয়েছে (${createdSequences[shortItem.id]})` : `Created (${createdSequences[shortItem.id]})`)
+                            : (language === 'bn' ? '১-ক্লিকে ৯:১৬ সিকোয়েন্স বানান' : 'Create 9:16 Sequence')}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       )}
+      </div>
     </div>
   );
 };

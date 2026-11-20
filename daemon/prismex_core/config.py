@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Server Network Configuration
 HOST = "127.0.0.1"
-PORT = 49152
+PORT = 48152
 
 # Platform Detection
 IS_MACOS = platform.system() == "Darwin"

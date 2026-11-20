@@ -16,7 +16,10 @@ import { ViralShortsView } from './views/ViralShortsView';
 import { ColorStudioView } from './views/ColorStudioView';
 import { AudioStudioView } from './views/AudioStudioView';
 import { ClientHubView } from './views/ClientHubView';
+import { SmartProductionGuideBar } from './components/SmartProductionGuideBar';
 import { GlobalCopilotDrawer } from './components/GlobalCopilotDrawer';
+import { BottomNavDock } from './components/BottomNavDock';
+import { ActionGuidelineBanner } from './components/ActionGuidelineBanner';
 import { Loader2, CheckCircle2, AlertCircle, Sparkles, Mic } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -46,6 +49,31 @@ export const App: React.FC = () => {
       usePrismexStore.getState().checkSequenceChange();
     };
 
+    // Auto-detect sequence changes when editing in Premiere
+    const seqInterval = setInterval(() => {
+      usePrismexStore.getState().checkSequenceChange();
+    }, 2500);
+
+    // Reliable Ctrl+V / Cmd+V Paste anywhere in inputs & textareas
+    const handlePaste = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'v' || e.key === 'V')) {
+        const activeEl = document.activeElement as HTMLElement | null;
+        const isEditable = activeEl && (
+          activeEl.tagName === 'INPUT' || 
+          activeEl.tagName === 'TEXTAREA' || 
+          activeEl.isContentEditable
+        );
+        if (isEditable && navigator.clipboard && navigator.clipboard.readText) {
+          navigator.clipboard.readText().then((clipText) => {
+            if (clipText) {
+              document.execCommand('insertText', false, clipText);
+            }
+          }).catch(() => {});
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handlePaste);
     window.addEventListener('focus', handleFocusOrHover);
     window.addEventListener('mouseenter', handleFocusOrHover);
     const handleVisibility = () => {
@@ -56,6 +84,8 @@ export const App: React.FC = () => {
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
+      clearInterval(seqInterval);
+      window.removeEventListener('keydown', handlePaste);
       window.removeEventListener('focus', handleFocusOrHover);
       window.removeEventListener('mouseenter', handleFocusOrHover);
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -84,17 +114,44 @@ export const App: React.FC = () => {
     >
       {/* Layer 1: Studio Boot & Sync Screen (Startup Overlay) */}
       {isAppInitializing && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          zIndex: 9999,
-          backgroundColor: '#09090b',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '24px'
-        }}>
+        <div 
+          onClick={() => usePrismexStore.setState({ isAppInitializing: false })}
+          title="Click to enter editor immediately"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            backgroundColor: '#09090b',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+            cursor: 'pointer'
+          }}
+        >
+          {/* Skip Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              usePrismexStore.setState({ isAppInitializing: false });
+            }}
+            style={{
+              position: 'absolute',
+              top: '16px',
+              right: '16px',
+              backgroundColor: 'rgba(255, 255, 255, 0.08)',
+              border: '1px solid rgba(255, 255, 255, 0.15)',
+              color: '#a1a1aa',
+              fontSize: '11px',
+              padding: '4px 10px',
+              borderRadius: '6px',
+              cursor: 'pointer'
+            }}
+          >
+            {language === 'bn' ? 'স্কিপ করুন ✕' : 'Skip ✕'}
+          </button>
+
           {/* Animated Glowing Logo */}
           <div style={{
             width: '46px',
@@ -203,31 +260,53 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Global Floating Toast Alert */}
+      {/* Sleek, Non-Intrusive Floating Toast Alert */}
       {globalToast && (
         <div style={{
           position: 'fixed',
-          top: '12px',
-          right: '16px',
+          top: '6px',
+          right: '8px',
           zIndex: 9998,
           backgroundColor: globalToast.type === 'error' ? '#dc2626' : (globalToast.type === 'info' ? '#2563eb' : '#059669'),
           color: '#fff',
-          padding: '8px 14px',
-          borderRadius: '6px',
-          fontSize: '11.5px',
+          padding: '4px 10px',
+          borderRadius: '5px',
+          fontSize: '10.5px',
           fontWeight: 600,
           display: 'flex',
           alignItems: 'center',
-          gap: '8px',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
-          border: '1px solid rgba(255,255,255,0.2)'
+          gap: '6px',
+          boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
+          border: '1px solid rgba(255,255,255,0.2)',
+          maxWidth: 'calc(100vw - 16px)'
         }}>
-          {globalToast.type === 'error' ? <AlertCircle size={14} /> : <CheckCircle2 size={14} />}
-          <span>{globalToast.message}</span>
+          {globalToast.type === 'error' ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{globalToast.message}</span>
+          <button
+            onClick={() => usePrismexStore.setState({ globalToast: null })}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'rgba(255,255,255,0.7)',
+              cursor: 'pointer',
+              padding: '0 2px',
+              fontSize: '11px',
+              marginLeft: '4px',
+              lineHeight: 1
+            }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
       <NavigationHeader />
+
+      {/* Universal Action Guideline & Success Feedback Banner */}
+      <ActionGuidelineBanner />
+
+      {/* Layer 1.5: Smart Post-Production Workflow Guide & Milestones */}
+      <SmartProductionGuideBar />
 
       {/* Layer 2: Always-Visible Global Activity & Progress Strip */}
       {isBusy && (
@@ -283,35 +362,10 @@ export const App: React.FC = () => {
         {activeTab === 'history' && <HistoryView />}
       </main>
 
-      {/* Universal Floating Co-Pilot Action Button */}
-      <button
-        onClick={() => setIsGlobalCopilotOpen(!isGlobalCopilotOpen)}
-        title={language === 'bn' ? 'এআই কো-পাইলট ওপেন করুন' : 'Open AI Co-Pilot'}
-        style={{
-          position: 'fixed',
-          bottom: '16px',
-          right: '16px',
-          zIndex: 9990,
-          backgroundColor: '#4f46e5',
-          color: '#ffffff',
-          borderRadius: '50px',
-          padding: '8px 14px',
-          border: '1px solid rgba(255, 255, 255, 0.25)',
-          boxShadow: '0 8px 24px rgba(79, 70, 229, 0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '6px',
-          fontSize: '11px',
-          fontWeight: 700,
-          cursor: 'pointer',
-          transition: 'all 0.2s ease'
-        }}
-      >
-        <Mic size={14} />
-        <span>Co-Pilot</span>
-      </button>
+      {/* Modern 5-Hub Persistent Bottom Dock */}
+      <BottomNavDock />
 
-      {/* Universal Co-Pilot Drawer */}
+      {/* Universal Co-Pilot Modal with Click-Outside Auto-Dismiss */}
       <GlobalCopilotDrawer />
     </div>
   );

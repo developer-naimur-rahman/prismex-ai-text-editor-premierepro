@@ -22,6 +22,8 @@ import {
   Mic
 } from 'lucide-react';
 import { PremiereHostBridge } from '../host/PremiereHostBridge';
+import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
+import { UpdateTourModal } from './UpdateTourModal';
 
 export const NavigationHeader: React.FC = () => {
   const { 
@@ -38,6 +40,26 @@ export const NavigationHeader: React.FC = () => {
   } = usePrismexStore();
 
   const [undoStatus, setUndoStatus] = React.useState<string | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = React.useState<boolean>(false);
+  const [updateInfo, setUpdateInfo] = React.useState<any>(null);
+
+  // Auto-check for updates on load
+  React.useEffect(() => {
+    PrismexDaemonClient.getInstance().checkForUpdates().then((res) => {
+      if (res) {
+        setUpdateInfo(res);
+        if (res.updateAvailable) {
+          try {
+            const seenKey = `prismex_seen_update_${res.latestVersion}`;
+            if (!localStorage.getItem(seenKey)) {
+              setIsUpdateModalOpen(true);
+              localStorage.setItem(seenKey, 'true');
+            }
+          } catch {}
+        }
+      }
+    });
+  }, []);
 
   const t = translations[language];
   const pendingReviewCount = reviewItems.filter(i => i.status === 'PENDING').length;
@@ -66,15 +88,18 @@ export const NavigationHeader: React.FC = () => {
       display: 'flex', 
       flexDirection: 'column' 
     }}>
-      {/* Top Bar */}
+      {/* Top Bar (Narrow CEP Panel Resilient & Non-Overlapping) */}
       <div style={{ 
         display: 'flex', 
         alignItems: 'center', 
         justifyContent: 'space-between', 
-        padding: '6px 12px',
-        borderBottom: '1px solid rgba(255,255,255,0.05)'
+        padding: '5px 8px',
+        borderBottom: '1px solid rgba(255,255,255,0.05)',
+        gap: '6px',
+        overflow: 'hidden'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Brand Logo & Name */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, flexShrink: 0 }}>
           <div style={{ 
             width: '18px', 
             height: '18px', 
@@ -85,118 +110,150 @@ export const NavigationHeader: React.FC = () => {
             justifyContent: 'center',
             fontWeight: 800,
             fontSize: '10px',
-            color: '#fff'
+            color: '#fff',
+            flexShrink: 0
           }}>
             P
           </div>
-          <span style={{ fontWeight: 600, fontSize: '12px', letterSpacing: '0.3px' }}>Prismex Studio Editor</span>
+          <span style={{ fontWeight: 700, fontSize: '11px', letterSpacing: '0.2px', color: '#f8fafc', whiteSpace: 'nowrap' }}>
+            Prismex
+          </span>
         </div>
 
-        {/* Sequence & Status Pills */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        {/* Action & Status Buttons Group (No Collisions, Clean Flow) */}
+        <div style={{ 
+          display: 'flex', 
+          alignItems: 'center', 
+          gap: '4px', 
+          overflowX: 'auto', 
+          scrollbarWidth: 'none',
+          flexShrink: 1,
+          justifyContent: 'flex-end'
+        }}>
+          {/* Active Sequence Indicator */}
           <div 
             onClick={refreshSequence}
-            title="Click to refresh sequence metadata"
+            title={language === 'bn' ? 'সিকোয়েন্স মেটাডাটা রিফ্রেশ করুন' : 'Click to refresh sequence'}
             style={{ 
               display: 'flex', 
               alignItems: 'center', 
-              gap: '4px', 
+              gap: '3px', 
               backgroundColor: 'var(--bg-tertiary)',
-              padding: '2px 8px',
-              borderRadius: '12px',
-              fontSize: '10px',
+              padding: '2px 6px',
+              borderRadius: '10px',
+              fontSize: '9.5px',
               color: 'var(--text-secondary)',
-              cursor: 'pointer'
+              cursor: 'pointer',
+              flexShrink: 0,
+              maxWidth: '85px',
+              border: '1px solid var(--border-subtle)'
             }}
           >
-            <RefreshCw size={10} />
-            <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {sequenceManifest ? sequenceManifest.sequenceName : 'No Sequence'}
+            <RefreshCw size={9} style={{ flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {sequenceManifest ? sequenceManifest.sequenceName : (language === 'bn' ? 'নো সিকোয়েন্স' : 'No Seq')}
             </span>
           </div>
 
-          <div style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '4px', 
-            fontSize: '10px',
-            color: daemonOnline ? 'var(--success-color)' : 'var(--warning-color)'
-          }}>
-            <span style={{ 
-              width: '6px', 
-              height: '6px', 
-              borderRadius: '50%', 
-              backgroundColor: daemonOnline ? 'var(--success-color)' : 'var(--warning-color)' 
-            }} />
-            <span>{daemonOnline ? t.engineReady : t.engineOffline}</span>
-          </div>
-
-          <button
-            onClick={() => setIsGlobalCopilotOpen(!isGlobalCopilotOpen)}
-            title={language === 'bn' ? 'এআই ভয়েস ও টেক্সট কো-পাইলট অন/অফ' : 'Toggle AI Voice & Text Co-Pilot'}
-            style={{
-              backgroundColor: isGlobalCopilotOpen ? '#4f46e5' : 'rgba(99, 102, 241, 0.15)',
-              border: isGlobalCopilotOpen ? '1px solid #818cf8' : '1px solid rgba(99, 102, 241, 0.4)',
+          {/* Engine Status Dot */}
+          <div 
+            title={daemonOnline ? (language === 'bn' ? 'এআই ব্যাকএন্ড ইঞ্জিন অনলাইন' : 'AI Engine Online') : (language === 'bn' ? 'এআই ব্যাকএন্ড ইঞ্জিন অফলাইন' : 'AI Engine Offline')}
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '3px', 
+              padding: '2px 5px',
               borderRadius: '10px',
-              color: isGlobalCopilotOpen ? '#ffffff' : '#a5b4fc',
-              fontSize: '9.5px',
-              fontWeight: 700,
-              padding: '2px 8px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              boxShadow: isGlobalCopilotOpen ? '0 0 10px rgba(99, 102, 241, 0.5)' : 'none',
-              transition: 'all 0.2s ease'
+              backgroundColor: daemonOnline ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.15)',
+              border: daemonOnline ? '1px solid rgba(16, 185, 129, 0.3)' : '1px solid rgba(239, 68, 68, 0.3)',
+              fontSize: '9px',
+              color: daemonOnline ? '#34d399' : '#f87171',
+              flexShrink: 0,
+              cursor: 'help'
             }}
           >
-            <Mic size={10} />
-            <span>Co-Pilot</span>
-          </button>
+            <span style={{ 
+              width: '5px', 
+              height: '5px', 
+              borderRadius: '50%', 
+              backgroundColor: daemonOnline ? '#34d399' : '#ef4444' 
+            }} />
+            <span style={{ fontWeight: 600 }}>{daemonOnline ? 'Engine' : 'Offline'}</span>
+          </div>
 
+          {/* Undo Button */}
           <button
             onClick={async () => {
               setUndoStatus('...');
               const res = await PremiereHostBridge.getInstance().undoLastCut();
               if (res.success) {
-                setUndoStatus(language === 'bn' ? '✓ সফল' : '✓ Done');
+                setUndoStatus(language === 'bn' ? '✓' : '✓');
                 await refreshSequence();
               } else {
-                setUndoStatus(language === 'bn' ? 'ইতিহাস নেই' : 'No history');
+                setUndoStatus(language === 'bn' ? '✕' : '✕');
               }
-              setTimeout(() => setUndoStatus(null), 2500);
+              setTimeout(() => setUndoStatus(null), 2000);
             }}
             title={language === 'bn' ? 'পূর্ববর্তী সিকোয়েন্সে ফিরে যান (Undo)' : 'Revert to previous un-cut sequence (Undo)'}
             style={{
-              backgroundColor: undoStatus ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.15)',
-              border: undoStatus ? '1px solid #10b981' : '1px solid rgba(239, 68, 68, 0.35)',
+              backgroundColor: undoStatus ? 'rgba(16, 185, 129, 0.2)' : 'rgba(239, 68, 68, 0.12)',
+              border: undoStatus ? '1px solid #10b981' : '1px solid rgba(239, 68, 68, 0.3)',
               borderRadius: '10px',
               color: undoStatus ? '#34d399' : '#fca5a5',
               fontSize: '9.5px',
               fontWeight: 600,
-              padding: '2px 7px',
+              padding: '2px 6px',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
-              gap: '3px'
+              gap: '2px',
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
             }}
           >
-            <RotateCcw size={10} />
-            <span>{undoStatus || (language === 'bn' ? 'আনডু' : 'Undo')}</span>
+            <RotateCcw size={9} />
+            <span>{undoStatus || 'Undo'}</span>
           </button>
 
+          {/* What's New Updates Button */}
+          <button
+            onClick={() => setIsUpdateModalOpen(true)}
+            title={language === 'bn' ? 'নতুন আপডেট ও ফিচার দেখুন' : "View What's New & Updates"}
+            style={{
+              backgroundColor: updateInfo?.updateAvailable ? 'rgba(249, 115, 22, 0.22)' : 'rgba(139, 92, 246, 0.15)',
+              border: updateInfo?.updateAvailable ? '1px solid #f97316' : '1px solid rgba(139, 92, 246, 0.35)',
+              color: updateInfo?.updateAvailable ? '#fb923c' : '#c084fc',
+              borderRadius: '10px',
+              fontSize: '9.5px',
+              fontWeight: 700,
+              padding: '2px 6px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <Sparkles size={9} />
+            <span>{updateInfo?.updateAvailable ? 'Update' : 'New'}</span>
+          </button>
+
+          {/* Language Toggle */}
           <button
             onClick={() => setLanguage(language === 'en' ? 'bn' : 'en')}
-            title="Switch Language (English / বাংলা)"
+            title={language === 'en' ? 'বাংলায় পরিবর্তন করুন' : 'Switch to English'}
             style={{
               backgroundColor: 'var(--bg-tertiary)',
               border: '1px solid var(--border-subtle)',
               borderRadius: '10px',
               color: 'var(--text-primary)',
-              fontSize: '9.5px',
-              fontWeight: 600,
-              padding: '2px 7px',
-              cursor: 'pointer'
+              fontSize: '9px',
+              fontWeight: 700,
+              padding: '2px 5px',
+              cursor: 'pointer',
+              flexShrink: 0,
+              whiteSpace: 'nowrap'
             }}
           >
             {language === 'en' ? 'বাং' : 'EN'}
@@ -204,57 +261,12 @@ export const NavigationHeader: React.FC = () => {
         </div>
       </div>
 
-      {/* Workflow Ordered Tabs */}
-      <nav style={{ 
-        display: 'flex', 
-        gap: '4px', 
-        overflowX: 'auto', 
-        padding: '3px 6px',
-        backgroundColor: 'var(--bg-primary)',
-        scrollbarWidth: 'none',
-        alignItems: 'center'
-      }}>
-        {tabs.map((tab) => {
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              style={{
-                backgroundColor: isActive ? 'var(--accent-color)' : 'var(--bg-tertiary)',
-                color: isActive ? '#ffffff' : 'var(--text-secondary)',
-                borderRadius: '4px',
-                padding: '3px 7px',
-                fontSize: '9.5px',
-                fontWeight: isActive ? 600 : 500,
-                position: 'relative',
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-                border: isActive ? '1px solid var(--accent-hover)' : '1px solid var(--border-subtle)',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '3px'
-              }}
-            >
-              {tab.icon}
-              <span>{tab.label}</span>
-              {Boolean(tab.badge && tab.badge > 0) && (
-                <span style={{
-                  backgroundColor: isActive ? '#ef4444' : 'var(--accent-color)',
-                  color: '#fff',
-                  borderRadius: '8px',
-                  padding: '0 4px',
-                  fontSize: '8.5px',
-                  fontWeight: 700,
-                  marginLeft: '2px'
-                }}>
-                  {tab.badge}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
+      {/* Interactive What's New & 1-Click Update Tour Modal */}
+      <UpdateTourModal
+        isOpen={isUpdateModalOpen}
+        onClose={() => setIsUpdateModalOpen(false)}
+        updateData={updateInfo}
+      />
     </header>
   );
 };

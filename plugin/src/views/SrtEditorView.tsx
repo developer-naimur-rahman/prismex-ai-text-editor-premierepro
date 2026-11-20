@@ -5,6 +5,7 @@ import { TimecodeConverter } from '../host/TimecodeConverter';
 import { PrismexDaemonClient } from '../api/PrismexDaemonClient';
 import { translations } from '../i18n/translations';
 import { copyToClipboard } from '../utils/clipboard';
+import { EditorTopRibbon } from '../components/EditorTopRibbon';
 import {
   Subtitles,
   Sparkles,
@@ -428,7 +429,9 @@ export const SrtEditorView: React.FC = () => {
   }, [cues, searchQuery]);
 
   return (
-    <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px', height: '100%', overflow: 'hidden', minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <EditorTopRibbon />
+      <div style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: '8px', flex: 1, overflow: 'hidden', minHeight: 0 }}>
       {/* Header & Status */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '6px', flexShrink: 0 }}>
         <div>
@@ -1056,6 +1059,7 @@ export const SrtEditorView: React.FC = () => {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 };

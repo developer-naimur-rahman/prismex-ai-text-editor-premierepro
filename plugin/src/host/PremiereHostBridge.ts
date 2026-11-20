@@ -38,10 +38,26 @@ export class PremiereHostBridge {
         this.ensureCEPScriptLoaded();
         try {
           const keyEvents = JSON.stringify([
+            // Ctrl/Cmd + V (Paste)
+            { keyCode: 86, ctrlKey: true }, { keyCode: 86, metaKey: true },
+            // Ctrl/Cmd + C (Copy)
+            { keyCode: 67, ctrlKey: true }, { keyCode: 67, metaKey: true },
+            // Ctrl/Cmd + A (Select All)
+            { keyCode: 65, ctrlKey: true }, { keyCode: 65, metaKey: true },
+            // Ctrl/Cmd + X (Cut)
+            { keyCode: 88, ctrlKey: true }, { keyCode: 88, metaKey: true },
+            // Ctrl/Cmd + Z (Undo)
+            { keyCode: 90, ctrlKey: true }, { keyCode: 90, metaKey: true },
+            // Standard typing & navigation keys
             { keyCode: 32 }, // Space
             { keyCode: 46 }, // Delete
             { keyCode: 8 },  // Backspace
-            { keyCode: 88 }  // X
+            { keyCode: 13 }, // Enter
+            { keyCode: 27 }, // Escape
+            { keyCode: 37 }, // Left Arrow
+            { keyCode: 38 }, // Up Arrow
+            { keyCode: 39 }, // Right Arrow
+            { keyCode: 40 }  // Down Arrow
           ]);
           this.csInterface.registerKeyEventsInterest(keyEvents);
         } catch (e) {}
@@ -101,7 +117,7 @@ export class PremiereHostBridge {
 
     // Companion daemon native OS opener fallback
     try {
-      fetch('http://127.0.0.1:49152/api/v1/system/open-url', {
+      fetch('http://127.0.0.1:48152/api/v1/system/open-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url })
@@ -125,7 +141,7 @@ export class PremiereHostBridge {
 
     // First try companion daemon multi-open
     try {
-      fetch('http://127.0.0.1:49152/api/v1/system/open-urls', {
+      fetch('http://127.0.0.1:48152/api/v1/system/open-urls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ urls: cleanUrls })
@@ -140,30 +156,149 @@ export class PremiereHostBridge {
     });
   }
 
-  private async ensureCEPScriptLoaded(): Promise<void> {
-    if (!this.csInterface) return;
-    try {
-      const extPath = this.csInterface.getSystemPath('extension');
-      if (extPath) {
-        const cleanPath = extPath.replace(/\\/g, '/');
-        await this.evalScript(`$.evalFile("${cleanPath}/jsx/hostscript.jsx");`);
-        this.cepScriptLoaded = true;
+  public static readonly CURRENT_SCRIPT_BUILD = '2026111905';
+
+  private isScriptLoading: boolean = false;
+  private evalQueue: Array<{ script: string; timeoutMs: number; resolve: (val: string) => void }> = [];
+  private isEvalRunning: boolean = false;
+
+  private processEvalQueue(): void {
+    if (this.isEvalRunning || this.evalQueue.length === 0) return;
+    const task = this.evalQueue.shift();
+    if (!task) return;
+
+    this.isEvalRunning = true;
+    let completed = false;
+
+    const timer = setTimeout(() => {
+      if (!completed) {
+        completed = true;
+        this.isEvalRunning = false;
+        task.resolve('');
+        this.processEvalQueue();
       }
-    } catch (e) {
-      console.error('[PremiereHostBridge] Failed to load hostscript.jsx:', e);
+    }, task.timeoutMs);
+
+    try {
+      this.csInterface.evalScript(task.script, (result: string) => {
+        if (!completed) {
+          completed = true;
+          clearTimeout(timer);
+          this.isEvalRunning = false;
+          task.resolve(result || '');
+          this.processEvalQueue();
+        }
+      });
+    } catch (err) {
+      if (!completed) {
+        completed = true;
+        clearTimeout(timer);
+        this.isEvalRunning = false;
+        task.resolve('');
+        this.processEvalQueue();
+      }
     }
   }
 
-  public evalScript(script: string): Promise<string> {
+  public async ensureCEPScriptLoaded(force: boolean = false): Promise<boolean> {
+    if (!this.csInterface) return false;
+    if (this.cepScriptLoaded && !force) return true;
+    if (this.isScriptLoading) return false;
+
+    this.isScriptLoading = true;
+    try {
+      const extPath = this.csInterface.getSystemPath('extension');
+      if (!extPath) return false;
+      const cleanPath = extPath.replace(/\\/g, '/');
+
+      // Check whether current running ExtendScript has the latest build
+      if (!force) {
+        const checkRes = await this.evalScript(
+          'Boolean(typeof $._prismex !== "undefined" && $._prismex.SCRIPT_BUILD === 2026111905 && typeof $._prismex.changeSequenceAspectRatio === "function")',
+          3000
+        );
+        if (checkRes === 'true') {
+          this.cepScriptLoaded = true;
+          return true;
+        }
+      }
+
+      // Always reload latest hostscript.jsx file from extension directory into Premiere Pro's ExtendScript engine
+      const loadScript = `(function() {
+        try {
+          var f = new File("${cleanPath}/jsx/hostscript.jsx");
+          if (f.exists) {
+            $.evalFile(f);
+            return String($._prismex ? $._prismex.SCRIPT_BUILD : "LOADED_NO_BUILD");
+          }
+          return "FILE_NOT_FOUND";
+        } catch(e) {
+          return "EVAL_ERR: " + String(e);
+        }
+      })()`;
+      const loadRes = await this.evalScript(loadScript, 10000);
+      console.log('[PremiereHostBridge] Evaluated hostscript.jsx into ExtendScript:', loadRes);
+      this.cepScriptLoaded = loadRes !== 'FILE_NOT_FOUND' && !loadRes.startsWith('EVAL_ERR');
+      return this.cepScriptLoaded;
+    } catch (e) {
+      console.error('[PremiereHostBridge] Failed to load hostscript.jsx:', e);
+      return false;
+    } finally {
+      this.isScriptLoading = false;
+    }
+  }
+
+  public evalScript(script: string, timeoutMs: number = 15000): Promise<string> {
     return new Promise((resolve) => {
       if (!this.csInterface) {
         resolve('');
         return;
       }
-      this.csInterface.evalScript(script, (result: string) => {
-        resolve(result || '');
-      });
+      this.evalQueue.push({ script, timeoutMs, resolve });
+      this.processEvalQueue();
     });
+  }
+
+  /**
+   * Safe JSON evaluation helper with serialized queue, customizable timeout, and retry on error.
+   */
+  public async safeEvalJson<T = any>(
+    script: string,
+    fallbackErrorMsg: string = 'No response from Premiere Pro',
+    timeoutMs: number = 15000
+  ): Promise<T> {
+    let res = await this.evalScript(script, timeoutMs);
+
+    // If result is empty or EvalScript error, attempt to reload hostscript.jsx once and retry
+    if (!res || res.indexOf('EvalScript error') !== -1) {
+      console.warn('[PremiereHostBridge] Script call returned error or empty, verifying host engine...', res);
+      const reloaded = await this.ensureCEPScriptLoaded(true);
+      if (reloaded) {
+        res = await this.evalScript(script, timeoutMs);
+      }
+    }
+
+    if (!res || res.indexOf('EvalScript error') !== -1) {
+      return {
+        success: false,
+        error: fallbackErrorMsg,
+        reason: 'প্রিমিয়ার প্রো স্ক্রিপ্ট থেকে সঠিক সাড়া পাওয়া যায়নি।',
+        guideline: 'প্রিমিয়ার প্রোর টাইমলাইনে আপনার সিকোয়েন্সটি সক্রিয় রাখুন এবং ক্লিপ আনলক রাখুন।'
+      } as unknown as T;
+    }
+
+    try {
+      return JSON.parse(res);
+    } catch (parseErr) {
+      console.error('[PremiereHostBridge] JSON parse failed on:', res, parseErr);
+      return {
+        success: false,
+        error: String(parseErr),
+        rawResponse: res,
+        reason: 'প্রিমিয়ার প্রোর স্ক্রিপ্ট ডেটা পার্স করতে সমস্যা হয়েছে।',
+        guideline: 'টাইমলাইন সিকোয়েন্স আনলক রাখুন।'
+      } as unknown as T;
+    }
   }
 
   /**
@@ -171,9 +306,8 @@ export class PremiereHostBridge {
    */
   public async getActiveSequenceSignature(): Promise<string> {
     if (this.isCEP) {
-      await this.ensureCEPScriptLoaded();
       try {
-        const res = await this.evalScript("$._prismex.getActiveSequenceSignature()");
+        const res = await this.evalScript("$._prismex ? $._prismex.getActiveSequenceSignature() : ''", 2500);
         return typeof res === "string" ? res.trim() : "";
       } catch {
         return "";
@@ -188,12 +322,10 @@ export class PremiereHostBridge {
   public async getActiveSequenceManifest(): Promise<SequenceManifest | null> {
     // A. CEP Path
     if (this.isCEP) {
-      await this.ensureCEPScriptLoaded();
-      const res = await this.evalScript("$._prismex.getActiveSequenceManifest()");
       try {
-        const data = JSON.parse(res);
-        if (data && !data.error) {
-          return data;
+        const data = await this.safeEvalJson<any>("$._prismex.getActiveSequenceManifest()");
+        if (data && !data.error && data.sequenceName) {
+          return data as SequenceManifest;
         }
       } catch (e) {}
       return null;
@@ -261,10 +393,8 @@ export class PremiereHostBridge {
    */
   public async cloneActiveSequence(suffix: string = "_PrismexRoughCut"): Promise<{ clonedSequenceName: string } | null> {
     if (this.isCEP) {
-      await this.ensureCEPScriptLoaded();
-      const res = await this.evalScript(`$._prismex.cloneActiveSequence("${suffix}")`);
       try {
-        const data = JSON.parse(res);
+        const data = await this.safeEvalJson<any>(`$._prismex.cloneActiveSequence("${suffix}")`);
         if (data && !data.error) {
           return data;
         }
@@ -345,8 +475,7 @@ export class PremiereHostBridge {
       return { success: true };
     }
     try {
-      const res = await this.evalScript('$._prismex.undoLastCut()');
-      return JSON.parse(res);
+      return await this.safeEvalJson('$._prismex.undoLastCut()');
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -403,8 +532,7 @@ export class PremiereHostBridge {
       return { success: true, count: markers.length };
     }
     try {
-      const res = await this.evalScript(`$._prismex.addTimelineMarkers('${JSON.stringify(markers)}')`);
-      return JSON.parse(res);
+      return await this.safeEvalJson(`$._prismex.addTimelineMarkers('${JSON.stringify(markers)}')`);
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -423,8 +551,7 @@ export class PremiereHostBridge {
     }
     try {
       const safePath = wavPath.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-      const res = await this.evalScript(`$._prismex.applyEnhancedAudioTrack('${safePath}', ${targetTrackIndex}, ${muteOriginal})`);
-      return JSON.parse(res);
+      return await this.safeEvalJson(`$._prismex.applyEnhancedAudioTrack('${safePath}', ${targetTrackIndex}, ${muteOriginal})`);
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -446,10 +573,9 @@ export class PremiereHostBridge {
       const safeLut = (lutFilePath || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
       const safeName = (lutName || '').replace(/'/g, "\\'");
       const safeParams = JSON.stringify(basicCorrection || {});
-      const res = await this.evalScript(
+      return await this.safeEvalJson(
         `$._prismex.applyLumetriColorToActiveClip('${safeLut}', '${safeName}', '${safeParams}', ${applyToAll})`
       );
-      return JSON.parse(res);
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -469,12 +595,10 @@ export class PremiereHostBridge {
       return { success: true, bin: '_Prismex_Broll' };
     }
     try {
-      await this.ensureCEPScriptLoaded();
       const safePath = filePath.replace(/\\/g, '/');
-      const res = await this.evalScript(
+      return await this.safeEvalJson(
         `$._prismex.importAndPlaceClipOnTrack("${safePath}", ${targetTimeSec}, ${targetTrackIndex}, "${trackType}", ${durationSec})`
       );
-      return JSON.parse(res);
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -491,11 +615,9 @@ export class PremiereHostBridge {
       return { success: true, count: punchTimes.length, zoomPercent };
     }
     try {
-      await this.ensureCEPScriptLoaded();
-      const res = await this.evalScript(
+      return await this.safeEvalJson(
         `$._prismex.applyDynamicPunchZoom('${JSON.stringify(punchTimes)}', ${zoomPercent})`
       );
-      return JSON.parse(res);
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -513,12 +635,10 @@ export class PremiereHostBridge {
       return { success: true, count: times.length };
     }
     try {
-      await this.ensureCEPScriptLoaded();
       const safePath = sfxFilePath.replace(/\\/g, '/');
-      const res = await this.evalScript(
+      return await this.safeEvalJson(
         `$._prismex.importAndPlaceSfxBatch("${safePath}", '${JSON.stringify(times)}', ${trackIndex})`
       );
-      return JSON.parse(res);
     } catch (e: any) {
       return { success: false, error: String(e) };
     }
@@ -825,6 +945,17 @@ export class PremiereHostBridge {
     }
   }
 
+  public async saveProject(): Promise<{ success: boolean; error?: string }> {
+    if (!this.isCEP) {
+      return { success: true };
+    }
+    try {
+      return await this.safeEvalJson(`$._prismex.saveProject()`);
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
   /**
    * Loads project transcript & metadata cache file directly from project directory.
    */
@@ -833,9 +964,7 @@ export class PremiereHostBridge {
       return { found: false };
     }
     try {
-      await this.ensureCEPScriptLoaded();
-      const res = await this.evalScript(`$._prismex.loadProjectCache("${cacheKey}")`);
-      return JSON.parse(res || '{"found":false}');
+      return await this.safeEvalJson(`$._prismex.loadProjectCache("${cacheKey}")`);
     } catch (err: any) {
       return { found: false, error: String(err) };
     }
@@ -854,16 +983,14 @@ export class PremiereHostBridge {
       return { success: true, sequenceName: `${title}_9x16`, bin: '_Prismex_Viral_Shorts', durationSeconds: 45, segmentCount: segments.length };
     }
     try {
-      await this.ensureCEPScriptLoaded();
       const safeTitle = (title || 'Short').replace(/[^a-zA-Z0-9_\u0980-\u09FF-]/g, '_');
       const segmentsJson = JSON.stringify(segments);
       const markersJson = markers ? JSON.stringify(markers) : '[]';
       const escapedSegments = JSON.stringify(segmentsJson);
       const escapedMarkers = JSON.stringify(markersJson);
-      const res = await this.evalScript(
+      return await this.safeEvalJson(
         `$._prismex.createMultiSegmentVerticalShortSequence("${safeTitle}", ${escapedSegments}, ${escapedMarkers})`
       );
-      return JSON.parse(res || '{"success":false}');
     } catch (err: any) {
       return { success: false, error: String(err) };
     }
@@ -883,13 +1010,11 @@ export class PremiereHostBridge {
       return { success: true, sequenceName: `${title}_9x16`, bin: '_Prismex_Viral_Shorts' };
     }
     try {
-      await this.ensureCEPScriptLoaded();
       const safeTitle = (title || 'Short').replace(/[^a-zA-Z0-9_-]/g, '_');
       const markersJson = markers ? JSON.stringify(markers).replace(/"/g, '\\"') : '""';
-      const res = await this.evalScript(
+      return await this.safeEvalJson(
         `$._prismex.createVerticalShortSequence("${safeTitle}", ${startSeconds}, ${endSeconds}, "${markersJson}")`
       );
-      return JSON.parse(res || '{"success":false}');
     } catch (err: any) {
       return { success: false, error: String(err) };
     }
@@ -900,9 +1025,7 @@ export class PremiereHostBridge {
       return { success: true, timelineSeconds: 12.5, clipName: "MockClip_01.mp4", mediaPath: "" };
     }
     try {
-      await this.ensureCEPScriptLoaded();
-      const res = await this.evalScript(`$._prismex.getActiveClipAtPlayhead()`);
-      return JSON.parse(res || '{"success":false}');
+      return await this.safeEvalJson(`$._prismex.getActiveClipAtPlayhead()`);
     } catch (err: any) {
       return { success: false, error: String(err) };
     }
@@ -913,10 +1036,8 @@ export class PremiereHostBridge {
       return { success: true, domExported: false, outputPath, mock: true };
     }
     try {
-      await this.ensureCEPScriptLoaded();
       const escapedPath = outputPath.replace(/\\/g, '/');
-      const res = await this.evalScript(`$._prismex.exportFrameAtPlayhead("${escapedPath}")`);
-      return JSON.parse(res || '{"success":false}');
+      return await this.safeEvalJson(`$._prismex.exportFrameAtPlayhead("${escapedPath}")`);
     } catch (err: any) {
       return { success: false, error: String(err) };
     }
@@ -927,12 +1048,109 @@ export class PremiereHostBridge {
       return { success: true };
     }
     try {
-      await this.ensureCEPScriptLoaded();
       const escapedPath = filePath.replace(/\\/g, '/');
-      const res = await this.evalScript(`$._prismex.revealFileInOS("${escapedPath}")`);
-      return JSON.parse(res || '{"success":false}');
+      return await this.safeEvalJson(`$._prismex.revealFileInOS("${escapedPath}")`);
     } catch (err: any) {
       return { success: false, error: String(err) };
+    }
+  }
+
+  /**
+   * 1-Click Non-Destructive Script Rough-Cut Sequence Creator
+   * Clones active sequence into `[SeqName]_AI_Script_RoughCut`, executes frame-accurate ripple cuts,
+   * alternates A/B punch-in scale (100% vs 112%), colors acts (Hook=Orange, Body=Teal, CTA=Green),
+   * and places chapter & B-Roll cue markers.
+   */
+  async createScriptRoughCutSequence(payload: {
+    cuts: any[];
+    punchIns?: any[];
+    colorLabels?: any[];
+    markers?: any[];
+  }): Promise<{
+    success: boolean;
+    sequenceName?: string;
+    sequenceId?: string;
+    executedCuts?: number;
+    punchesApplied?: number;
+    colorsApplied?: number;
+    markersPlaced?: number;
+    error?: string;
+  }> {
+    try {
+      const payloadStr = JSON.stringify(payload);
+      const escapedPayload = payloadStr.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      return await this.safeEvalJson(
+        `$._prismex.createScriptRoughCutSequence("${escapedPayload}")`,
+        "প্রিমিয়ার প্রো থেকে রাফ-কাট তৈরির রেসপন্স আসেনি। টাইমলাইনে সিকোয়েন্স ওপেন আছে কিনা নিশ্চিত করুন।",
+        180000 // 3 minutes timeout for heavy sequence cloning, cuts & markers
+      );
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  /**
+   * Pre-AE Safety Duplication
+   * Duplicates the active clip at playhead from Track V1 to Track V2,
+   * labeling Track V1 as a safety backup so "Replace with After Effects Composition" never destroys raw media.
+   */
+  async preAeSafetyDuplicate(): Promise<{ success: boolean; message?: string; clipName?: string; error?: string }> {
+    try {
+      return await this.safeEvalJson(`$._prismex.preAeSafetyDuplicate()`);
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  /**
+   * Smart Eyeline & Rule-of-Thirds Punch-In
+   * Applies 112% scale to active clip at playhead.
+   */
+  async applySmartEyelinePunch(scalePercent: number = 112.0): Promise<{ success: boolean; message?: string; clipName?: string; scale?: number; error?: string }> {
+    try {
+      return await this.safeEvalJson(`$._prismex.applySmartEyelinePunch(${scalePercent})`);
+    } catch (err: any) {
+      return { success: false, error: String(err) };
+    }
+  }
+
+  /**
+   * 1-Click Sequence Aspect Ratio Converter with Auto-Fit
+   * Changes sequence dimensions to 1:1, 9:16, 4:5, 16:9, etc. and auto-scales clips.
+   */
+  async changeSequenceAspectRatio(options: {
+    width: number;
+    height: number;
+    label: string;
+    ratioKey?: string;
+    fitMode?: 'fill' | 'fit';
+    clone?: boolean;
+  }): Promise<{
+    success: boolean;
+    sequenceName?: string;
+    width?: number;
+    height?: number;
+    ratio?: string;
+    clipsModified?: number;
+    message?: string;
+    error?: string;
+    reason?: string;
+    guideline?: string;
+  }> {
+    try {
+      const escapedJson = JSON.stringify(options).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      return await this.safeEvalJson(
+        `$._prismex.changeSequenceAspectRatio("${escapedJson}")`,
+        'Could not change sequence aspect ratio',
+        60000 // 60s timeout for cloning sequence + scaling all clips
+      );
+    } catch (err: any) {
+      return {
+        success: false,
+        error: String(err),
+        reason: 'ExtendScript যোগাযোগে ত্রুটি ঘটেছে।',
+        guideline: 'প্রিমিয়ার প্রো রিফ্রেশ করুন এবং পুনরায় চেষ্টা করুন।'
+      };
     }
   }
 

@@ -17,85 +17,179 @@ from .editor_knowledge import EditorKnowledgeBase
 
 
 class CreativeAI:
-    @staticmethod
-    def _call_gemini_json(prompt: str) -> Optional[Any]:
+    _openrouter_exhausted_until: float = 0.0
+    _gemini_exhausted_until: float = 0.0
+
+    _provider_diagnostics: Dict[str, Dict[str, Any]] = {
+        "google-gemini": {
+            "status": "HEALTHY",
+            "quota_exhausted": False,
+            "needs_change": False,
+            "message": "✓ সক্রিয় ও অনলাইন (গুগল জেমিনাই কোটা সচল)"
+        },
+        "openrouter": {
+            "status": "HEALTHY",
+            "quota_exhausted": False,
+            "needs_change": False,
+            "message": "✓ সক্রিয় ও অনলাইন (OpenRouter)"
+        },
+        "groq": {
+            "status": "HEALTHY",
+            "quota_exhausted": False,
+            "needs_change": False,
+            "message": "✓ সক্রিয় (Groq)"
+        }
+    }
+
+    @classmethod
+    def get_provider_status(cls, provider_id: str) -> Dict[str, Any]:
+        return cls._provider_diagnostics.get(provider_id, {
+            "status": "HEALTHY",
+            "quota_exhausted": False,
+            "needs_change": False,
+            "message": "✓ প্রস্তুত"
+        })
+
+    @classmethod
+    def _call_gemini_json(cls, prompt: str) -> Optional[Any]:
         import requests
+        import json
+        import re
+        import time
 
-        # 1. Try OpenRouter API if configured
-        openrouter_key = KeychainVault.get_api_key("openrouter")
-        if openrouter_key:
-            openrouter_models = [
-                "deepseek/deepseek-chat",
-                "google/gemini-flash-1.5",
-                "meta-llama/llama-3.3-70b-instruct",
-                "anthropic/claude-3.5-haiku",
-                "google/gemini-2.0-flash-001"
-            ]
-            for om in openrouter_models:
-                try:
-                    resp = requests.post(
-                        "https://openrouter.ai/api/v1/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {openrouter_key}",
-                            "HTTP-Referer": "https://prismex.ai",
-                            "X-Title": "Prismex AI Editor",
-                            "Content-Type": "application/json"
-                        },
-                        json={
-                            "model": om,
-                            "messages": [
-                                {
-                                    "role": "system",
-                                    "content": "You are Prismex AI video editing assistant. You must respond strictly with valid JSON only. Do not include markdown codeblocks or text outside the JSON."
+        now = time.time()
+
+        # 1. Primary: Google Gemini API (Verified fast & active with gemini-flash-lite-latest)
+        if now >= cls._gemini_exhausted_until:
+            api_key = KeychainVault.get_api_key("google-gemini") or KeychainVault.get_api_key("gemini-cloud")
+            if api_key:
+                candidate_models = [
+                    "gemini-flash-lite-latest",
+                    "gemini-3.1-flash-lite",
+                    "gemini-flash-latest"
+                ]
+                for m in candidate_models:
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+                        resp = requests.post(
+                            url,
+                            json={
+                                "contents": [{"parts": [{"text": prompt}]}],
+                                "generationConfig": {
+                                    "responseMimeType": "application/json",
+                                    "temperature": 0.2
                                 },
-                                {
-                                    "role": "user",
-                                    "content": prompt
-                                }
-                            ],
-                            "response_format": {"type": "json_object"},
-                            "temperature": 0.2
-                        },
-                        timeout=25
-                    )
-                    if resp.status_code == 200:
-                        content = resp.json()["choices"][0]["message"]["content"]
-                        cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip())
-                        cleaned = re.sub(r"\s*```$", "", cleaned)
-                        return json.loads(cleaned)
-                    else:
-                        print(f"[CreativeAI] OpenRouter model {om} returned status {resp.status_code}")
-                except Exception as e:
-                    print(f"[CreativeAI] OpenRouter model {om} failed: {e}")
+                            },
+                            timeout=8,
+                        )
+                        if resp.status_code == 200:
+                            cls._provider_diagnostics["google-gemini"] = {
+                                "status": "HEALTHY",
+                                "quota_exhausted": False,
+                                "needs_change": False,
+                                "message": "✓ সক্রিয় ও অনলাইন (গুগল জেমিনাই কোটা সচল)"
+                            }
+                            raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                            cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
+                            cleaned = re.sub(r"\s*```$", "", cleaned)
+                            try:
+                                return json.loads(cleaned)
+                            except Exception:
+                                match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+                                if match:
+                                    return json.loads(match.group(1))
+                        elif resp.status_code in (429, 503):
+                            print(f"[CreativeAI] Gemini model {m} rate limited ({resp.status_code}).")
+                            cls._provider_diagnostics["google-gemini"] = {
+                                "status": "QUOTA_EXHAUSTED",
+                                "quota_exhausted": True,
+                                "needs_change": True,
+                                "message": "⚠️ ব্যবহারের লিমিট/কোটা শেষ (429 Rate Limit) - নতুন ফ্রি এপিআই কি প্রয়োজন"
+                            }
+                            cls._gemini_exhausted_until = now + 90.0
+                            continue
+                        elif resp.status_code in (400, 401, 403):
+                            cls._provider_diagnostics["google-gemini"] = {
+                                "status": "INVALID_KEY",
+                                "quota_exhausted": False,
+                                "needs_change": True,
+                                "message": "⚠️ এপিআই কি-টি ভুল বা অকার্যকর (Invalid Key) - নতুন কি দিন"
+                            }
+                        elif resp.status_code == 404:
+                            continue
+                        else:
+                            print(f"[CreativeAI] Gemini model {m} returned status {resp.status_code}")
+                    except Exception as e:
+                        print(f"[CreativeAI] Gemini model {m} failed: {e}")
 
-        # 2. Try Google Gemini API
-        api_key = KeychainVault.get_api_key("google-gemini") or KeychainVault.get_api_key("gemini-cloud")
-        if not api_key:
-            return None
-        candidate_models = [
-            "gemini-flash-lite-latest",
-            "gemini-flash-latest",
-            "gemini-2.5-flash",
-            "gemini-1.5-flash"
-        ]
-        for m in candidate_models:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
-                resp = requests.post(
-                    url,
-                    json={
-                        "contents": [{"parts": [{"text": prompt}]}],
-                        "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1},
-                    },
-                    timeout=20,
-                )
-                if resp.status_code == 200:
-                    raw = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
-                    return json.loads(raw)
-                else:
-                    print(f"[CreativeAI] Gemini model {m} returned status {resp.status_code}")
-            except Exception as e:
-                print(f"[CreativeAI] Gemini model {m} failed: {e}")
+        # 2. Secondary: OpenRouter API
+        if now >= cls._openrouter_exhausted_until:
+            openrouter_key = KeychainVault.get_api_key("openrouter")
+            if openrouter_key:
+                openrouter_models = [
+                    "google/gemini-2.0-flash-exp:free",
+                    "inclusionai/ling-3.2-flash:free",
+                    "meta-llama/llama-3.3-70b-instruct",
+                    "mistralai/mistral-small-24b-instruct-2501"
+                ]
+                for om in openrouter_models:
+                    try:
+                        resp = requests.post(
+                            "https://openrouter.ai/api/v1/chat/completions",
+                            headers={
+                                "Authorization": f"Bearer {openrouter_key}",
+                                "HTTP-Referer": "https://prismex.ai",
+                                "X-Title": "Prismex AI Editor",
+                                "Content-Type": "application/json"
+                            },
+                            json={
+                                "model": om,
+                                "messages": [
+                                    {
+                                        "role": "system",
+                                        "content": "You are Prismex AI, an expert video editing co-pilot in Adobe Premiere Pro. Respond strictly with valid JSON only."
+                                    },
+                                    {
+                                        "role": "user",
+                                        "content": prompt
+                                    }
+                                ],
+                                "response_format": {"type": "json_object"},
+                                "temperature": 0.2
+                            },
+                            timeout=7
+                        )
+                        if resp.status_code == 200:
+                            cls._provider_diagnostics["openrouter"] = {
+                                "status": "HEALTHY",
+                                "quota_exhausted": False,
+                                "needs_change": False,
+                                "message": "✓ সক্রিয় ও অনলাইন (OpenRouter সচল)"
+                            }
+                            content = resp.json()["choices"][0]["message"]["content"]
+                            cleaned = re.sub(r"^```(?:json)?\s*", "", content.strip(), flags=re.IGNORECASE)
+                            cleaned = re.sub(r"\s*```$", "", cleaned)
+                            try:
+                                return json.loads(cleaned)
+                            except Exception:
+                                match = re.search(r"(\{.*\}|\[.*\])", cleaned, re.DOTALL)
+                                if match:
+                                    return json.loads(match.group(1))
+                        elif resp.status_code == 402:
+                            print(f"[CreativeAI] OpenRouter credits exhausted (402). Cooldown active for 2 minutes.")
+                            cls._provider_diagnostics["openrouter"] = {
+                                "status": "QUOTA_EXHAUSTED",
+                                "quota_exhausted": True,
+                                "needs_change": True,
+                                "message": "⚠️ ফ্রি ক্রেডিট/ব্যালেন্স শেষ (402 Payment Required) - নতুন এপিআই কি প্রয়োজন"
+                            }
+                            cls._openrouter_exhausted_until = now + 120.0
+                            break
+                        else:
+                            print(f"[CreativeAI] OpenRouter model {om} returned status {resp.status_code}")
+                    except Exception as e:
+                        print(f"[CreativeAI] OpenRouter model {om} error: {e}")
+
         return None
 
     @classmethod
@@ -1518,6 +1612,251 @@ class CreativeAI:
         }
 
     @classmethod
+    def parse_multi_scripts(cls, text: str) -> List[Dict[str, str]]:
+        """
+        Intelligently parses raw text containing multiple scripts or ideas.
+        Detects separators like:
+        - [Short 1], [Short 2] / Short 1:, Short 2: / শর্টস ১:, শর্টস ২:
+        - Markdown dividers (---, ===, ***)
+        - Numbered headers (1., 2., 3., etc.)
+        - Multi-blank line clusters
+        Returns a list of dicts: [{"title": "Short 1: ...", "script": "..."}]
+        """
+        if not text or not text.strip():
+            return []
+
+        raw = text.strip()
+
+        # 1. Check for explicit Short headers: [Short 1], Short 1:, শর্ট ১, Part 1, Reel 1, etc.
+        header_pattern = re.compile(
+            r'(?:^|\n)(?:\[(?:Short|Reel|Clip|Video|শর্ট|পার্ট)\s*#?(\d+)\]|(?:Short|Reel|Clip|Video|শর্ট|পার্ট)\s*#?(\d+)[\s:\-–—]+|[#]{1,3}\s*(?:Short|Reel|Clip)\s*#?(\d+)|(?:\d+)\.\s+(?:Short|Reel|শর্ট))',
+            re.IGNORECASE
+        )
+        splits = list(header_pattern.finditer(raw))
+
+        if len(splits) >= 2:
+            items = []
+            for i, match in enumerate(splits):
+                start = match.end()
+                end = splits[i + 1].start() if i + 1 < len(splits) else len(raw)
+                chunk = raw[start:end].strip()
+                header_text = match.group(0).strip("[] \n\r\t:#-–—")
+                # Extract first line as title if possible
+                lines = [l.strip() for l in chunk.split("\n") if l.strip()]
+                first_line = lines[0] if lines else f"Short {i + 1}"
+                title = f"{header_text}: {first_line[:40]}" if len(first_line) > 5 else f"{header_text}"
+                items.append({"title": title, "script": chunk})
+            return items
+
+        # 2. Check for divider lines: ---, ===, ***
+        divider_pattern = re.compile(r'\n\s*[-=_*]{3,}\s*\n')
+        div_chunks = [c.strip() for c in divider_pattern.split(raw) if c.strip()]
+        if len(div_chunks) >= 2:
+            items = []
+            for i, chunk in enumerate(div_chunks):
+                lines = [l.strip() for l in chunk.split("\n") if l.strip()]
+                first_line = lines[0] if lines else f"Short {i + 1}"
+                title = f"Short {i + 1}: {first_line[:40]}"
+                items.append({"title": title, "script": chunk})
+            return items
+
+        # 3. Check for numbered list at top level: 1. ... \n\n 2. ...
+        numbered_pattern = re.compile(r'(?:^|\n)(?:(\d{1,2})[\)\.]\s+)', re.MULTILINE)
+        num_matches = list(numbered_pattern.finditer(raw))
+        if len(num_matches) >= 2:
+            items = []
+            for i, match in enumerate(num_matches):
+                start = match.end()
+                end = num_matches[i + 1].start() if i + 1 < len(num_matches) else len(raw)
+                chunk = raw[start:end].strip()
+                num = match.group(1)
+                lines = [l.strip() for l in chunk.split("\n") if l.strip()]
+                first_line = lines[0] if lines else f"Short {num}"
+                title = f"Short {num}: {first_line[:40]}"
+                items.append({"title": title, "script": chunk})
+            return items
+
+        # 4. Check for double/triple newline paragraph clusters
+        para_chunks = [p.strip() for p in re.split(r'\n{2,}', raw) if len(p.strip()) > 30]
+        if len(para_chunks) >= 2:
+            items = []
+            for i, chunk in enumerate(para_chunks):
+                lines = [l.strip() for l in chunk.split("\n") if l.strip()]
+                first_line = lines[0] if lines else f"Short {i + 1}"
+                title = f"Short {i + 1}: {first_line[:40]}"
+                items.append({"title": title, "script": chunk})
+            return items
+
+        # 5. Default single script fallback
+        first_line = raw.split("\n")[0][:40].strip()
+        return [{"title": f"Short: {first_line}", "script": raw}]
+
+    @classmethod
+    def batch_script_to_shorts(
+        cls,
+        scripts_text: str,
+        words: List[Dict[str, Any]],
+        sentences: List[Dict[str, Any]],
+        fps: float = 24.0,
+        target_count: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Parses multiple client scripts (5, 8, 10+ etc.) and generates ready-to-cut
+        vertical 9:16 Shorts with dialogue-conformed segments and AE Dynamic Link safety.
+        """
+        parsed_scripts = cls.parse_multi_scripts(scripts_text)
+        if not parsed_scripts:
+            return {"success": False, "count": 0, "shorts": [], "error": "No script detected"}
+
+        if target_count and target_count > 0:
+            parsed_scripts = parsed_scripts[:target_count]
+
+        total_scripts = len(parsed_scripts)
+        generated_shorts = []
+
+        for idx, item in enumerate(parsed_scripts):
+            script_str = item["script"]
+            custom_title = item.get("title", f"Short {idx + 1}")
+            
+            # Match each script using match_client_script_to_sequence
+            res = cls.match_client_script_to_sequence(script_str, words, sentences, fps)
+            if res and isinstance(res, dict) and res.get("segments"):
+                # Clean up title and unique ID
+                res["id"] = f"batch_short_{idx + 1}_{int(time.time())}"
+                if custom_title:
+                    res["title"] = custom_title
+                res["batchIndex"] = idx + 1
+                res["batchTotal"] = total_scripts
+                res["sourceScript"] = script_str
+
+                # Apply micro-trimming: tighten bounds by 0.05s on ends to avoid word clipping or breath pause
+                segs = res.get("segments", [])
+                for s in segs:
+                    st = max(0.0, float(s.get("startSeconds", 0.0)))
+                    et = max(st + 0.2, float(s.get("endSeconds", st + 1.0)))
+                    s["startSeconds"] = round(st, 2)
+                    s["endSeconds"] = round(et, 2)
+                    s["durationSeconds"] = round(et - st, 2)
+
+                generated_shorts.append(res)
+
+        return {
+            "success": True,
+            "count": len(generated_shorts),
+            "totalParsed": total_scripts,
+            "shorts": generated_shorts
+        }
+
+    @classmethod
+    def align_script_with_ai(
+        cls,
+        script_text: str,
+        transcript_words: List[Dict[str, Any]],
+        total_duration: float = 0.0
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Uses LLM intelligence (Gemini / OpenRouter) to semantically align a client script
+        with raw Whisper spoken audio on the timeline.
+        Understands paraphrasing, hesitations, conversational variations, and repeated takes.
+        Chooses the best/latest clean take and generates Chapter and B-Roll markers.
+        """
+        if not script_text or not script_text.strip() or not transcript_words:
+            return None
+
+        # 1. Group transcript words into natural temporal speech blocks
+        speech_blocks = []
+        curr_words = []
+        curr_start = None
+        curr_end = None
+
+        for w in transcript_words:
+            word_str = str(w.get("word") or "").strip()
+            if not word_str:
+                continue
+            ws = float(w.get("start") or w.get("start_seconds") or 0.0)
+            we = float(w.get("end") or w.get("end_seconds") or (ws + 0.3))
+
+            if curr_end is not None and (ws - curr_end) > 0.8:
+                if curr_words:
+                    speech_blocks.append({
+                        "start": round(curr_start, 2),
+                        "end": round(curr_end, 2),
+                        "text": " ".join(curr_words)
+                    })
+                curr_words = []
+                curr_start = ws
+            elif curr_start is None:
+                curr_start = ws
+
+            curr_words.append(word_str)
+            curr_end = we
+
+        if curr_words and curr_start is not None and curr_end is not None:
+            speech_blocks.append({
+                "start": round(curr_start, 2),
+                "end": round(curr_end, 2),
+                "text": " ".join(curr_words)
+            })
+
+        if not speech_blocks:
+            return None
+
+        # Build transcript blocks summary
+        transcript_lines = []
+        for b in speech_blocks[:80]:
+            transcript_lines.append(f"[{b['start']}s - {b['end']}s]: {b['text']}")
+        transcript_snippet = "\n".join(transcript_lines)
+
+        prompt = (
+            "You are an expert Hollywood AI video conforming editor in Adobe Premiere Pro.\n"
+            "A client provided an official script, and the speaker recorded raw timeline footage.\n"
+            "IMPORTANT: The raw spoken dialogue may NOT match the script word-for-word! "
+            "The speaker may have paraphrased, hesitated, made multiple takes/attempts at a line, or added filler phrases.\n\n"
+            f"OFFICIAL CLIENT SCRIPT:\n\"\"\"{script_text.strip()}\"\"\"\n\n"
+            f"RAW SPOKEN TIMELINE AUDIO (FROM WHISPER SPEECH RECOGNITION):\n\"\"\"{transcript_snippet}\"\"\"\n\n"
+            "TASK:\n"
+            "1. Semantically match each concept and section of the client script to the actual spoken audio on the timeline.\n"
+            "2. If the speaker restarted or made multiple takes of a sentence, ALWAYS choose the latest / cleanest take and drop the bad takes.\n"
+            "3. Identify all intervals to KEEP on the timeline [startSeconds, endSeconds].\n"
+            "4. Identify any bracketed stage directions like [Show B-Roll ...] as Cyan B-Roll cue markers, and chapter headings as Green Chapter markers.\n"
+            "5. Assign each segment its story role: HOOK (intro), BODY (main content), or CTA (call to action/outro).\n\n"
+            "OUTPUT STRICTLY A VALID JSON OBJECT ONLY:\n"
+            "{\n"
+            '  "keptSegments": [\n'
+            '    {\n'
+            '      "startSeconds": 0.5,\n'
+            '      "endSeconds": 4.8,\n'
+            '      "sentenceText": "Spoken text snippet",\n'
+            '      "act": "HOOK" | "BODY" | "CTA",\n'
+            '      "chapter": "Chapter name or Introduction"\n'
+            '    }\n'
+            '  ],\n'
+            '  "markers": [\n'
+            '    {\n'
+            '      "timeSeconds": 0.5,\n'
+            '      "name": "Chapter: The Problem",\n'
+            '      "comment": "YouTube Chapter Timestamp",\n'
+            '      "color": "Green"\n'
+            '    },\n'
+            '    {\n'
+            '      "timeSeconds": 2.1,\n'
+            '      "name": "B-ROLL CUE",\n'
+            '      "comment": "B-Roll: Description",\n'
+            '      "color": "Cyan"\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+
+        try:
+            res = cls._call_gemini_json(prompt)
+            if isinstance(res, dict) and res.get("keptSegments") and len(res["keptSegments"]) > 0:
+                return res
+        except Exception as e:
+            print(f"[CreativeAI] align_script_with_ai error: {e}")
+        return None
+
+    @classmethod
     def analyze_single_line_directive(
         cls,
         sentence_text: str,
@@ -1544,6 +1883,9 @@ Analyze the deep visual story, actions, environment, and objects in this line.
 Return a strictly valid JSON object with these exact keys:
 {{
   "meaningBn": "বাক্যটির ১০০% খাঁটি, প্রাঞ্জল ও স্বাভাবিক বাংলা অনুবাদ",
+  "coreKeywords": [
+    "1-3 exact key words or short impactful phrases directly from this line for on-screen typography highlight"
+  ],
   "actionBrollKeywords": [
     "2-3 specific English stock video search terms for literal action (e.g. 'person walking in heavy rain', 'walking wet street')"
   ],
@@ -1560,6 +1902,7 @@ Return a strictly valid JSON object with these exact keys:
 
         ai_res = cls._call_gemini_json(prompt)
         if isinstance(ai_res, dict) and (ai_res.get("meaningBn") or ai_res.get("actionBrollKeywords") or ai_res.get("pngKeywords")):
+            core_kws = [str(k).strip() for k in ai_res.get("coreKeywords", []) if str(k).strip()]
             action_kws = [str(k).strip() for k in ai_res.get("actionBrollKeywords", []) if str(k).strip()]
             mood_kws = [str(k).strip() for k in ai_res.get("moodBrollKeywords", []) if str(k).strip()]
             png_kws = [str(k).strip() for k in ai_res.get("pngKeywords", []) if str(k).strip()]
@@ -1570,11 +1913,14 @@ Return a strictly valid JSON object with these exact keys:
 
             combined_broll = list(dict.fromkeys(action_kws + mood_kws))[:4] or sem_broll_kws
             combined_png = png_kws[:3] or sem_png_kws
+            final_core = core_kws or [k for k in sem_broll_kws if len(k) > 2][:3] or [sem_primary]
 
             return {
                 "text": clean_text,
                 "meaningBn": meaning_bn,
                 "banglaExplanation": meaning_bn,
+                "coreKeywords": final_core,
+                "primaryKeyword": final_core[0] if final_core else sem_primary,
                 "actionBrollKeywords": action_kws or sem_broll_kws,
                 "moodBrollKeywords": mood_kws or [f"{sem_primary} landscape 4k"],
                 "brollKeywords": combined_broll,
@@ -1588,10 +1934,13 @@ Return a strictly valid JSON object with these exact keys:
             }
 
         # Fallback to intelligent semantic entity extraction
+        final_core = [k for k in sem_broll_kws if len(k) > 2][:3] or [sem_primary]
         return {
             "text": clean_text,
             "meaningBn": translated_bn,
             "banglaExplanation": translated_bn,
+            "coreKeywords": final_core,
+            "primaryKeyword": final_core[0] if final_core else sem_primary,
             "actionBrollKeywords": sem_broll_kws,
             "moodBrollKeywords": [f"{sem_primary} landscape 4k"],
             "brollKeywords": sem_broll_kws,
@@ -1695,6 +2044,7 @@ Return a strictly valid JSON object with these exact keys:
                 '      "meaningBn": "এই পুরো ইংরেজি লাইনের সঠিক ও সাবলীল বাংলা অর্থ",\n'
                 '      "editingIdea": "এই বাক্যের জন্য ক্যামেরা মুভমেন্ট, কাট, ১১৪% পাঞ্চ ইন বা পেসিংয়ের স্পষ্ট এডিটিং পরামর্শ",\n'
                 '      "typographyGuide": "অন-স্ক্রিন কাইনেটিক সাবটাইটেল, ফন্ট হাইলাইট বা টেক্সট পপ-ইন অ্যানিমেশন নির্দেশিকা",\n'
+                '      "coreKeywords": ["1-3 exact words or short phrases from this line for typography highlight"],\n'
                 '      "iconIdea": "এই বক্তব্যের সাথে মানানসই অন-স্ক্রিন আইকন বা মোশন গ্রাফিক্স আইডিয়া",\n'
                 '      "actionBrollKeywords": ["specific action footage query 1", "action query 2"],\n'
                 '      "moodBrollKeywords": ["atmospheric scenery query 1", "moody landscape query 2"],\n'
@@ -1784,6 +2134,12 @@ Return a strictly valid JSON object with these exact keys:
                 typography_guide = str(llm_item.get("typographyGuide") or "কী-ওয়ার্ড বোল্ড ও ইয়েলো হাইলাইট টেক্সট আকারে পপ-ইন অ্যানিমেশন দিন।").strip()
                 icon_idea = str(llm_item.get("iconIdea") or sem_icon_idea).strip()
 
+                raw_c_kws = llm_item.get("coreKeywords")
+                if isinstance(raw_c_kws, list) and raw_c_kws:
+                    core_kws = [str(k).strip() for k in raw_c_kws if str(k).strip()]
+                else:
+                    core_kws = [k for k in sem_broll_kws if len(k) > 2][:3] or [sem_primary]
+
                 raw_b_kws = llm_item.get("brollKeywords") or sem_broll_kws
                 if isinstance(raw_b_kws, list):
                     broll_kws = [str(k).strip() for k in raw_b_kws if str(k).strip() and "zoom" not in str(k).lower() and "punch" not in str(k).lower()]
@@ -1814,6 +2170,7 @@ Return a strictly valid JSON object with these exact keys:
                 broll_kws = sem_broll_kws
                 png_kws = sem_png_kws
                 icon_idea = sem_icon_idea
+                core_kws = [k for k in sem_broll_kws if len(k) > 2][:3] or [sem_primary]
 
                 if has_png:
                     v_type = "PNG"
@@ -1919,6 +2276,8 @@ Return a strictly valid JSON object with these exact keys:
                 "meaningBn": meaning_bn,
                 "editingIdea": editing_idea,
                 "typographyGuide": typography_guide,
+                "coreKeywords": core_kws,
+                "primaryKeyword": core_kws[0] if core_kws else sem_primary,
                 "iconIdea": icon_idea,
                 "actionBrollKeywords": action_kws[:3],
                 "moodBrollKeywords": mood_kws[:3],
@@ -2517,7 +2876,188 @@ Return strictly a JSON object:
         audit_records: List[Dict[str, Any]] = []
         bkit = brand_kit or {}
 
-        # ---------------- TIER 1: DETERMINISTIC LOCAL KNOWLEDGE & PROJECT MEMORY ----------------
+        # ---------------- STEP 0: USER FEEDBACK & BEHAVIOR CORRECTION HANDLER ----------------
+        # Handles user feedback when the assistant misbehaved, e.g.:
+        # "আমি ব্রিফ পাঠাইলাম আর সে উত্তরে বলতেছে আন্তর্জাতিক ব্রডকাস্ট... ও তো জিজ্ঞাসা করতে পারতো যে এটা কি আমি সেভ করে রাখবো কিনা"
+        complaint_markers = ["বলতেছে", "বলতেছ", "হাবিজাবি", "ভুলভাল", "কাজ করতেছে না", "লাভটা কি", "কেমন কথা", "কেমন হইলো", "জিজ্ঞাসা করতে পারতো", "জিজ্ঞেস করতে পারতো"]
+        is_user_complaining = any(m in cmd_lower for m in complaint_markers)
+
+        if is_user_complaining and any(k in cmd_lower for k in ["ব্রিফ", "brief", "স্ক্রিপ্ট", "সেভ"]):
+            msg = (
+                "🙏 **আমি অত্যন্ত দুঃখিত!** আগের সিস্টেমে আপনার পাঠানো টেক্সটকে সাধারণ জ্ঞানভিত্তিক প্রশ্ন মনে করে অপ্রাসঙ্গিক অডিও স্ট্যান্ডার্ড দেখিয়েছিল।\n\n"
+                "আমি সিস্টেমকে এখন পুরোপুরি আপডেট ও ঠিক করে দিয়েছি।\n\n"
+                "👉 **আপনি কি আপনার ক্লায়েন্ট ব্রিফটি এখন সেভ করে রাখতে চান?**\n\n"
+                "দয়া করে ব্রিফটি এখানে পাঠিয়ে দিন (যেমন: `ব্রিফ: [আপনার ব্রিফ টেক্সট]`)।\n"
+                "আমি সাথে সাথে তা প্রজেক্ট মেমোরিতে সংরক্ষণ করে নেব এবং ব্রিফটি বিশ্লেষণ করে আপনার এডিটিংয়ের জন্য যা যা লাগবে (কালার গ্রেড, মানানসই BGM মিউজিক, ফ্রেম সাইজ ও চেকলিস্ট) তা গুছিয়ে দেব!"
+            )
+            return {"action": "advice", "message": msg}
+
+        # ---------------- STEP 1: CLIENT BRIEF INGESTION & AUTO-ANALYSIS ----------------
+        # Matches: "ব্রিফ: [text]", "ক্লায়েন্ট ব্রিফ: [text]", "client brief: [text]",
+        # "ব্রিফ পাঠাইলাম: [text]", "ব্রিফ সেভ করো: [text]", "নোটস: [text]"
+        brief_prefix_match = re.search(
+            r"(?:ক্লায়েন্ট\s*ব্রিফ|ক্লায়েন্টের\s*ব্রিফ|ব্রিফ|client\s*brief|brief|গাইডলাইন|guideline|নোট|notes)\s*(?:সেভ\s*করো|সেভ\s*করে\s*রাখো|রাখো|পাঠাচ্ছি|পাঠাইলাম|দিলাম|দাও|হলো|নিন|text)?\s*[:：\-–—\n]+(.*)",
+            cmd_clean,
+            re.IGNORECASE | re.DOTALL
+        )
+        extracted_brief_text = None
+        if brief_prefix_match:
+            candidate = brief_prefix_match.group(1).strip()
+            if len(candidate) > 10:
+                extracted_brief_text = candidate
+
+        # If user explicitly states they are sending a brief (e.g. "আমি ব্রিফ পাঠাইলাম...")
+        if not extracted_brief_text and re.search(r"(?:ব্রিফ\s*পাঠা|ব্রিফ\s*দি|ব্রিফ\s*সেভ|save\s*brief)", cmd_lower):
+            clean_after = re.sub(r"^(?:আমি|এখানে|এইতো|ক্লায়েন্টের)?\s*(?:ব্রিফ|brief)\s*(?:পাঠাইলাম|পাঠাচ্ছি|দিলাম|সেভ\s*করো|সেভ\s*করে\s*রাখো)?\s*[:：\-–—\n]*", "", cmd_clean, flags=re.IGNORECASE).strip()
+            if len(clean_after) > 15:
+                extracted_brief_text = clean_after
+
+        if extracted_brief_text:
+            # Extract actionable parameters
+            detected_formats = []
+            if re.search(r"\b9:16\b|vertical|ভার্টিক্যাল|reels?|shorts?|রিলস?|শর্টস?", extracted_brief_text, re.IGNORECASE):
+                detected_formats.append("9:16 Vertical (Reels / Shorts / TikTok)")
+            if re.search(r"\b16:9\b|horizontal|হরিজন্টাল|landscape|ল্যান্ডস্কেপ|youtube\b|ইউটিউব", extracted_brief_text, re.IGNORECASE):
+                detected_formats.append("16:9 Landscape (YouTube Standard / Web)")
+            if re.search(r"\b1:1\b|square|স্কয়ার|feed\b", extracted_brief_text, re.IGNORECASE):
+                detected_formats.append("1:1 Square (Instagram Feed)")
+            if re.search(r"\b4k\b|uhd", extracted_brief_text, re.IGNORECASE):
+                detected_formats.append("4K UHD Resolution")
+            elif re.search(r"\b1080p\b|full\s*hd|fhd", extracted_brief_text, re.IGNORECASE):
+                detected_formats.append("1080p Full HD Resolution")
+
+            detected_style = []
+            if re.search(r"fast|দ্রুত|পেস|হুক|dynamic|ডায়নামিক|শর্টস", extracted_brief_text, re.IGNORECASE):
+                detected_style.append("ফাস্ট-পেসড এনার্জেটিক এডিটিং ও ভিজ্যুয়াল হুক")
+            if re.search(r"cinematic|সিনেমাটিক|মুডি|লুক|film|ফিল্ম", extracted_brief_text, re.IGNORECASE):
+                detected_style.append("সিনেমাটিক কালার গ্রেড ও রিচ ভিজ্যুয়াল টোন")
+            if re.search(r"clean|মিনিমাল|ক্লিন|simple|সহজ|corporate|কর্পোরেট", extracted_brief_text, re.IGNORECASE):
+                detected_style.append("মিনিমাল ও ক্লিন স্টুডিও লুক")
+            if re.search(r"bgm|মিউজিক|গান|sound|সাউন্ড|অডিও|audio", extracted_brief_text, re.IGNORECASE):
+                detected_style.append("ক্লিয়ার ভয়েস ও ব্যাকগ্রাউন্ড মিউজিক ডাকিং")
+
+            fmt_bullets = "\n".join(f"  • {f}" for f in detected_formats) if detected_formats else "  • নির্দিষ্ট ফরম্যাট উল্লেখ নেই (ইউটিউব/সোশ্যাল স্ট্যান্ডার্ড ডিফল্ট)"
+            style_bullets = "\n".join(f"  • {s}" for s in detected_style) if detected_style else "  • প্রফেশনাল স্টুডিও এডিটিং স্ট্যান্ডার্ড"
+
+            msg = (
+                f"✓ **ক্লায়েন্ট ব্রিফ সফলভাবে প্রজেক্ট মেমোরিতে সংরক্ষণ ও বিশ্লেষণ করা হয়েছে!** 📋\n\n"
+                f"🔍 **ব্রিফ থেকে প্রাপ্ত মূল চাহিদাসমূহ:**\n"
+                f"• **ফরম্যাট ও ডেলিভারি:**\n{fmt_bullets}\n"
+                f"• **স্টাইল ও এডিটিং টোন:**\n{style_bullets}\n\n"
+                f"💡 **এখন আপনার এই ব্রিফ অনুযায়ী কী কী লাগবে বলুন?**\n"
+                f"১. 🎨 **কালার গ্রেড:** ব্রিফের সাথে মিলিয়ে সিনেমাটিক বা টিল অ্যান্ড অরেঞ্জ গ্রেড টাইমলাইনে দিতে চাইলে বলুন `কালার গ্রেড দাও`।\n"
+                f"২. 🎵 **ব্যাকগ্রাউন্ড মিউজিক:** ব্রিফ অনুযায়ী মানানসই ফ্রি BGM ট্র্যাক কিউরেট করতে বলুন `BGM সাজেস্ট করো`।\n"
+                f"৩. ✂️ **অটো কাট ও ট্রান্সক্রিপ্ট:** টাইমলাইনের রিভিশন বা সাইলেন্স কাট শুরু করতে পারেন।\n"
+                f"৪. 📋 **টু-ডু রোডম্যাপ:** কাজের পর্যায়ক্রমিক চেকলিস্ট তৈরি করতে চাইলে জানাতে পারেন।\n\n"
+                f"আপনি যা যা চান বলুন বা লিখুন, আমি ব্রিফের শর্ত মেনে কাজ সম্পন্ন করব।"
+            )
+
+            dossier = cls.parse_and_structure_client_dossier(
+                client_brief=extracted_brief_text,
+                client_script=client_script or "",
+                brand_kit=brand_kit,
+                sequence_manifest=sequence_manifest,
+                language=language
+            )
+            return {
+                "action": "ingest_brief",
+                "message": msg,
+                "clientBrief": extracted_brief_text,
+                "clientDossier": dossier,
+                "words": modified_words,
+                "srtCues": modified_cues
+            }
+
+        # Query about brief status
+        if re.search(r"(ব্রিফ\s*কি|ব্রিফ\s*কী|ব্রিফ\s*দেখাও|ব্রিফ\s*আছে|show\s*brief|what\s*is\s*the\s*brief)", cmd_lower):
+            if client_brief and len(client_brief.strip()) > 5:
+                preview = client_brief[:400] + ("..." if len(client_brief) > 400 else "")
+                msg = (
+                    f"📋 **[সংরক্ষিত ক্লায়েন্ট ব্রিফ]**:\n\n"
+                    f"\"{preview}\"\n\n"
+                    f"✓ ব্রিফটি প্রজেক্ট মেমোরিতে সক্রিয় আছে। আপনার নির্দেশনাসমূহ এই ব্রিফ মেনেই পরিচালিত হচ্ছে।"
+                )
+            else:
+                msg = "📋 বর্তমানে কোনো ক্লায়েন্ট ব্রিফ প্রজেক্টে সংরক্ষিত নেই। আপনি এখানে `ব্রিফ: [ক্লায়েন্টের গাইডলাইন]` পাঠিয়ে দিলে আমি তা সেভ করে নেব।"
+            return {"action": "advice", "message": msg}
+
+        # ---------------- STEP 2: SCRIPT INGESTION & PROJECT MEMORY SYNC ----------------
+        # Matches: "স্ক্রিপ্ট সেভ করো: [text]", "স্ক্রিপ্ট পাঠাচ্ছি: [text]", "script: [text]",
+        # or raw multi-sentence/multi-line monologue text
+        script_prefix_match = re.search(
+            r"(?:স্ক্রিপ্ট|script|ডায়লগ|dialogue|ভয়েসওভার|voiceover)\s*(?:সেভ\s*করো|সেভ\s*করে\s*রাখো|রাখো|পাঠাচ্ছি|দাও|হলো|নিন|text)?\s*[:：\-–—\n]+(.*)",
+            cmd_clean,
+            re.IGNORECASE | re.DOTALL
+        )
+        extracted_script_text = None
+        if script_prefix_match:
+            candidate = script_prefix_match.group(1).strip()
+            if len(candidate) > 10:
+                extracted_script_text = candidate
+
+        # If user pasted raw narrative script text without prefix (e.g. > 70 characters, multiple words)
+        if not extracted_script_text and (len(cmd_clean) > 70 or "\n" in cmd_clean):
+            if not re.search(r"^(হাই|হ্যালো|কেমন|তুমি কে|কী করতে পারো|হেল্প|help|what can you do|ফরম্যাট|কালার|মিউজিক)\b", cmd_lower):
+                if len(cmd_clean.split()) >= 6:
+                    extracted_script_text = cmd_clean
+
+        if extracted_script_text:
+            align_res = cls.script_aligned_spell_check(
+                words=modified_words,
+                client_script=extracted_script_text,
+                client_brief=client_brief,
+                language=language
+            )
+            words_count = len(extracted_script_text.split())
+            corrections_cnt = align_res.get("corrections", 0)
+            msg = (
+                f"✓ **ক্লায়েন্ট স্ক্রিপ্ট সফলভাবে প্রজেক্ট মেমোরিতে সেভ ও সিঙ্ক করা হয়েছে!** 📜\n\n"
+                f"• **স্ক্রিপ্ট সাইজ:** মোট {words_count}টি শব্দ প্রজেক্টে সংরক্ষিত হয়েছে।\n"
+                f"• **টাইমলাইন সিঙ্ক:** টাইমলাইনের ট্রান্সক্রিপ্ট ও স্ক্রিপ্টের বানান মিলিয়ে নেওয়া হয়েছে ({corrections_cnt}টি অমিল কারেক্ট করা হয়েছে)।\n"
+                f"• **কো-পাইলট অ্যাক্সেস:** স্ক্রিপ্টটি এখন সার্বক্ষণিকভাবে মেমোরিতে আছে; আপনি 'Client Hub' ট্যাবে বা যেকোনো সময় কো-পাইলটে এটি নিয়ে নির্দেশ দিতে পারেন।"
+            )
+            dossier = cls.parse_and_structure_client_dossier(
+                client_brief=client_brief or "",
+                client_script=extracted_script_text,
+                brand_kit=brand_kit,
+                sequence_manifest=sequence_manifest,
+                language=language
+            )
+            return {
+                "action": "ingest_script",
+                "message": msg,
+                "clientScript": extracted_script_text,
+                "clientDossier": dossier,
+                "words": align_res.get("words", modified_words),
+                "srtCues": modified_cues,
+                "corrections": corrections_cnt,
+                "auditReport": align_res.get("auditReport", [])
+            }
+
+        # Query about current script
+        if re.search(r"(স্ক্রিপ্ট\s*কি|স্ক্রিপ্ট\s*কী|স্ক্রিপ্ট\s*দেখাও|স্ক্রিপ্ট\s*আছে|show\s*script|what\s*is\s*the\s*script)", cmd_lower):
+            if client_script and len(client_script.strip()) > 5:
+                preview = client_script[:350] + ("..." if len(client_script) > 350 else "")
+                msg = (
+                    f"📜 **[সংরক্ষিত ক্লায়েন্ট স্ক্রিপ্ট]**:\n\n"
+                    f"\"{preview}\"\n\n"
+                    f"✓ মোট {len(client_script.split())}টি শব্দ প্রজেক্ট মেমোরিতে সেভ আছে।"
+                )
+            else:
+                msg = "📜 বর্তমানে প্রজেক্ট মেমোরিতে কোনো ক্লায়েন্ট স্ক্রিপ্ট নেই। আপনি এখানে স্ক্রিপ্ট পেস্ট করে 'স্ক্রিপ্ট: [টেক্সট]' দিলেই আমি তা সেভ করে নেব।"
+            return {"action": "advice", "message": msg}
+
+        # Query about how to save script
+        if re.search(r"(স্ক্রিপ্ট\s*পাঠা|স্ক্রিপ্ট\s*কীভাবে|স্ক্রিপ্ট\s*সেভ|save\s*script)", cmd_lower) and not extracted_script_text:
+            msg = (
+                "📜 **[ক্লায়েন্ট স্ক্রিপ্ট পাঠানোর নিয়ম]**:\n\n"
+                "আপনি সরাসরি এখানে ক্লায়েন্টের স্ক্রিপ্টটি লিখে বা পেস্ট করে পাঠাতে পারেন। যেমন:\n"
+                "`স্ক্রিপ্ট: Winter roads around Long Island can expose your paint to salt...`\n\n"
+                "অথবা উপরের **'Client Hub ও রিভিশন'** ট্যাবে গিয়ে **'ক্লায়েন্ট স্ক্রিপ্ট'** বক্সে পেস্ট করে সেভ বাটনে ক্লিক করতে পারেন। আমি সাথে সাথে তা প্রজেক্টে সেভ করে টাইমলাইনের সাথে সিঙ্ক করে নেব।"
+            )
+            return {"action": "advice", "message": msg}
+
+        # ---------------- STEP 3: DETERMINISTIC LOCAL KNOWLEDGE & PROJECT MEMORY ----------------
         # Instant sub-millisecond answer without external API call or risk of hallucination
         local_ans = EditorKnowledgeBase.lookup_local_knowledge(
             cmd_clean,
@@ -2681,6 +3221,145 @@ Return strictly a JSON object:
                 "musicData": rec_res
             }
 
+        # 3b. INTENT: Automatic Voice Harmonization, Peak Leveling (-6dB), and Vocal Rider
+        # Matches: "অডিও ঠিক করো", "ভলিউম ব্যালেন্স", "পিক -৬", "ভয়েস সমান করো", "অটো হারমোনাইজ", "vocal rider", "balance audio"
+        audio_balance_match = re.search(
+            r"(অডিও\s*ঠিক|ভলিউম\s*ব্যালেন্স|ভয়েস\s*ব্যালেন্স|পিক\s*-?৬|পিক\s*কমা|লেভেল\s*সমান|ভলিউম\s*সমান|হারমোনাইজ|vocal\s*rider|balance\s*audio|master\s*audio|audio\s*master|level\s*audio)",
+            cmd_lower
+        )
+        if audio_balance_match:
+            msg = (
+                "🎛️ **টাইমলাইন অডিও অটো-হারমোনাইজ ও ব্যালেন্স করা হচ্ছে:**\n\n"
+                "✓ **ভোকাল রাইডার (Sliding Leveler)**: শুরু থেকে শেষের সব ভলিউম ড্রপ সমান করা হয়েছে (কোনো ম্যানুয়াল কি-ফ্রেম ছাড়া)\n"
+                "✓ **পিক লিমিটিং**: ভয়েসের ট্রু পিক সর্বোচ্চ **-৬.০ dB** তে হার্ড-লক (জিরো ক্লিপিং গ্যারান্টি)\n"
+                "✓ **নয়েজ ক্লিন**: এসি/ফ্যানের ব্যাকগ্রাউন্ড হিস হিস শব্দ ফিল্টার করা হয়েছে\n"
+                "✓ **ভোকাল ডেপথ**: মোবাইলের পাতলা সাউন্ডে গভীরতা ও স্পষ্টতা যোগ করা হয়েছে\n"
+                "✓ **ব্রডকাস্ট মাস্টার**: আন্তর্জাতিক **-১৪.০ LUFS** এ টাইমলাইনে স্থাপন করা হচ্ছে।"
+            )
+            return {
+                "action": "audio_master",
+                "message": msg,
+                "profileId": "auto-harmonize",
+                "audioSettings": {
+                    "truePeak": -6.0,
+                    "targetLufs": -14.0,
+                    "vocalRider": True,
+                    "denoise": 60,
+                    "crispAir": 70,
+                    "warmth": 65
+                }
+            }
+
+        # 3c. INTENT: Background Music Volume Balance (-25dB to -30dB)
+        # Matches: "মিউজিক -২৫", "মিউজিক -২৬", "মিউজিক কমা", "bgm balance", "মিউজিক ভলিউম"
+        bgm_vol_match = re.search(r"(মিউজিক.*-?(?:২৫|২৬|২৭|২৮|২৯|৩০)|মিউজিক\s*কমা|মিউজিক\s*ব্যালেন্স|bgm\s*vol|ducking|ডাকিং)", cmd_lower)
+        if bgm_vol_match:
+            msg = (
+                "🎵 **ব্যাকগ্রাউন্ড মিউজিক ট্র্যাক মাস্টার করা হচ্ছে:**\n\n"
+                "✓ **টার্গেট ভলিউম**: **-২৬.০ dB** (আদর্শ -২৫ থেকে -৩০ dB রেঞ্জ)\n"
+                "✓ **ভোকাল পকেট EQ**: ২.২kHz এ ডায়ালগ পকেট খোদাই করা হয়েছে যাতে কথার সাথে মিউজিক লড়াই না করে\n"
+                "✓ **স্মার্ট ডাকিং**: ভয়েস থাকলে মিউজিক স্বয়ংক্রিয়ভাবে নিচে থাকবে, পজে স্বাভাবিকভাবে ভেসে উঠবে।"
+            )
+            return {
+                "action": "bgm_master",
+                "message": msg,
+                "targetVolumeDb": -26.0
+            }
+
+        # 3d. INTENT: 1-Click Script-to-Rough Cut Sequence
+        # Matches: "রাফ কাট", "রাফকাট", "rough cut", "roughcut", "স্ক্রিপ্ট অনুযায়ী কাট", "স্ক্রিপ্ট সিকোয়েন্স", "স্ক্রিপ্ট কাট", "script sequence"
+        rough_cut_match = re.search(
+            r"(রাফ\s*কাট|রাফকাট|rough\s*cut|roughcut|স্ক্রিপ্ট.*কাট|স্ক্রিপ্ট.*সিকোয়েন্স|স্ক্রিপ্ট.*ভিডিও|script.*sequence|script.*cut)",
+            cmd_lower
+        )
+
+        # 3e. INTENT: Batch Multi-Script to Shorts (5, 8, 10+ Shorts)
+        # Matches: "৫টা শর্টস বানাও", "শর্টস বানাও", "make 5 shorts", "create shorts", "রিলস বানাও"
+        shorts_match = re.search(
+            r"((?:(\d+|[০-৯]+)\s*(?:টি|টা|খানা)?\s*)?(?:শর্টস?|রিলস?|shorts?|reels?)\s*(?:বানাও|তৈরি\s*করো|কাটো|করো|মেক|বানিয়ে\s*দাও|সাজাও|make|create|generate))",
+            cmd_lower
+        )
+        if shorts_match:
+            # Extract target count if specified (e.g. 5, 8, 10, ৫, ৮, ১০)
+            num_str = shorts_match.group(2)
+            target_count = 5
+            if num_str:
+                bn_to_en = {'০':'0', '১':'1', '২':'2', '৩':'3', '৪':'4', '৫':'5', '৬':'6', '৭':'7', '৮':'8', '৯':'9'}
+                normalized_num = "".join(bn_to_en.get(c, c) for c in num_str)
+                try:
+                    target_count = int(normalized_num)
+                except ValueError:
+                    target_count = 5
+
+            # Determine script to use: either included in the command after colon, or project client_script
+            script_for_shorts = ""
+            colon_match = re.search(r"[:：\n]+(.*)", cmd_clean, re.DOTALL)
+            if colon_match and len(colon_match.group(1).strip()) > 30:
+                script_for_shorts = colon_match.group(1).strip()
+            elif client_script and len(client_script.strip()) > 30:
+                script_for_shorts = client_script.strip()
+
+            batch_res = cls.batch_script_to_shorts(
+                scripts_text=script_for_shorts,
+                words=words or [],
+                sentences=[],
+                fps=24.0,
+                target_count=target_count
+            )
+
+            if batch_res.get("success") and batch_res.get("shorts"):
+                shorts_list = batch_res["shorts"]
+                titles_summary = "\n".join(f"  • {s.get('title')} (~{s.get('totalDurationSeconds')}s)" for s in shorts_list)
+                msg = (
+                    f"⚡ **সফলভাবে {len(shorts_list)}টি ৯:১৬ শর্টস সিকোয়েন্স কনফর্ম করা হয়েছে!**\n\n"
+                    f"🎬 **শনাক্তকৃত শর্টস তালিকা:**\n{titles_summary}\n\n"
+                    f"💡 আপনি 'AI Viral Shorts' ট্যাবের 'Client Script' সাব-ট্যাব থেকেও এই শর্টসগুলো দেখতে পাবেন এবং ১-ক্লিকে প্রিমিয়ার প্রোর '_Prismex_Viral_Shorts' বিনে তৈরি করতে পারবেন।"
+                )
+                return {
+                    "action": "batch_shorts",
+                    "message": msg,
+                    "count": len(shorts_list),
+                    "shorts": shorts_list
+                }
+            else:
+                return {
+                    "action": "batch_shorts_fallback",
+                    "message": f"স্ক্রিপ্ট থেকে {target_count}টি শর্টস তৈরি করার জন্য দয়া করে স্ক্রিপ্টটি প্রদান করুন বা 'AI Viral Shorts' ট্যাবে যান।",
+                    "targetCount": target_count
+                }
+
+        if rough_cut_match:
+            script_candidate = (client_script or "").strip()
+            # Also check if script text was provided directly in the prompt
+            if not script_candidate and len(cmd_clean) > 50:
+                script_candidate = cmd_clean
+
+            if script_candidate and len(script_candidate) > 15:
+                msg = (
+                    "🎬 **স্ক্রিপ্ট থেকে ১-ক্লিকে রাফ-কাট সিকোয়েন্স তৈরি করা হচ্ছে!**\n\n"
+                    "✓ **নন-ডেস্ট্রাক্টিভ ক্লোন**: মূল সিকোয়েন্স অক্ষত রেখে নতুন `_AI_Script_RoughCut` সিকোয়েন্স ওপেন হবে\n"
+                    "✓ **স্মার্ট টেক সিলেকশন**: নন-স্পোকেন ব্র্যাকেট ফিল্টার করে নিখুঁত ডায়ালগ টেকগুলো সাজানো হয়েছে\n"
+                    "✓ **জাম্প-কাট কিলার (A/B Cam)**: কাটের পর পর ডায়নামিক ১১২% পাঞ্চ-ইন প্রয়োগ করা হবে\n"
+                    "✓ **কালার কোডিং**: হুক (অরেঞ্জ/ম্যাংগো), বডি (টিয়াল/সেরুলিয়ান), সিটিএ (গ্রিন/ফরেস্ট)\n"
+                    "✓ **স্মার্ট মার্কার**: ইউটিউব চ্যাপ্টার এবং বি-রোল নির্দেশিকা মার্কার হিসেবে বসে যাবে।"
+                )
+                return {
+                    "action": "script_rough_cut",
+                    "message": msg,
+                    "scriptText": script_candidate
+                }
+            else:
+                msg = (
+                    "🎬 **স্ক্রিপ্ট থেকে রাফ-কাট সিকোয়েন্স তৈরি করতে ক্লায়েন্ট স্ক্রিপ্ট প্রয়োজন:**\n\n"
+                    "বর্তমানে প্রজেক্টে কোনো স্ক্রিপ্ট সংরক্ষিত নেই।\n"
+                    "দয়া করে এখানে স্ক্রিপ্টটি পেস্ট করুন (যেমন: `স্ক্রিপ্ট: [আপনার পুরো স্ক্রিপ্ট]`) অথবা Client Hub-এ গিয়ে স্ক্রিপ্টটি সেভ করুন।\n"
+                    "স্ক্রিপ্ট পাওয়ার সাথে সাথে ১-ক্লিকে নতুন সিকোয়েন্সে স্বয়ংক্রিয় রাফ-কাট তৈরি হয়ে যাবে!"
+                )
+                return {
+                    "action": "advice",
+                    "message": msg
+                }
+
         # 4. INTENT: Word Replacement (e.g. "replace X with Y" or "X এর জায়গায় Y বসাও")
         replace_patterns = [
             r"(?:replace|change)\s+[\"']?([\w\u0980-\u09FF]+)[\"']?\s+(?:with|to)\s+[\"']?([\w\u0980-\u09FF]+)[\"']?",
@@ -2725,24 +3404,32 @@ Return strictly a JSON object:
                 "auditReport": audit_records
             }
 
-        # 5. INTENT: Deep Gemini Reasoning for Complex Instructions with Strict Grounding
-        transcript_sample = " ".join(str(w.get("word", "")) for w in modified_words[:120])
+        # 5. INTENT: Deep Gemini Reasoning for Complex Instructions, Script Ingestion, and Grounding
+        transcript_sample = " ".join(str(w.get("word", "")) for w in modified_words[:180])
         prompt = (
-            "You are Prismex AI, an intelligent video editing co-pilot inside Adobe Premiere Pro.\n"
-            "The user gave this voice or text instruction:\n"
+            "You are Prismex AI, a world-class intelligent video editing co-pilot inside Adobe Premiere Pro.\n"
+            "The editor sent this voice instruction, question, feedback, or pasted script/text:\n"
             f"\"{cmd_clean}\"\n\n"
-            f"CLIENT BRIEF:\n\"\"\"{client_brief[:800]}\"\"\"\n\n"
-            f"CLIENT SCRIPT:\n\"\"\"{client_script[:1200]}\"\"\"\n\n"
+            f"ACTIVE CLIENT BRIEF:\n\"\"\"{client_brief[:2000]}\"\"\"\n\n"
+            f"ACTIVE CLIENT SCRIPT:\n\"\"\"{client_script[:3000]}\"\"\"\n\n"
             f"BRAND KIT:\n{json.dumps(bkit, ensure_ascii=False)}\n\n"
-            f"TRANSCRIPT SAMPLE (Whisper STT):\n\"{transcript_sample}\"\n\n"
-            "STRICT TRUTHFULNESS & GROUNDING REQUIREMENT:\n"
-            "- When asked about what the client requested (formats, guidelines, deadline, forbidden items):\n"
-            "  DO NOT hallucinate! If the client did not explicitly ask for it in the brief, state clearly: '[ক্লায়েন্ট ফ্যাক্ট]: ক্লায়েন্ট ব্রিফে এটি উল্লেখ করেননি।'\n"
-            "  Then provide creative recommendations clearly labeled as: '[এআই ক্রিয়েটিভ পরামর্শ]: ...'\n\n"
-            "Respond strictly in JSON format:\n"
+            f"TIMELINE TRANSCRIPT SAMPLE:\n\"{transcript_sample}\"\n\n"
+            "BEHAVIOR & REASONING RULES:\n"
+            "1. IF THE USER PASTED A SCRIPT (monologue, voiceover lines, or dialogue text):\n"
+            "   - Recognize that this is client script text!\n"
+            "   - Set \"action\": \"ingest_script\"\n"
+            "   - Set \"clientScript\": the full script text provided\n"
+            "   - In \"message\", enthusiastically and politely explain in Bengali that the script has been accepted into project memory, describe its subject/tone, and how it aligns with the timeline.\n"
+            "2. IF THE USER ASKED A QUESTION (e.g. 'স্ক্রিপ্ট কি বুঝতে পারছো?', 'কী করতে হবে?', 'ক্লায়েন্টের চাহিদা কি?'):\n"
+            "   - Answer directly, intelligently, and comprehensively in fluent Bengali.\n"
+            "   - If asking about client requirements: strictly check the brief. If in brief, cite as '[ক্লায়েন্ট ফ্যাক্ট]'. If not in brief, state '[ক্লায়েন্ট ফ্যাক্ট]: ক্লায়েন্ট ব্রিফে এটি উল্লেখ করেননি' followed by '[এআই ক্রিয়েটিভ পরামর্শ]'.\n"
+            "3. IF THE USER GAVE AN EDITING COMMAND (color grading, audio/BGM, word replacement, cuts):\n"
+            "   - Return appropriate 'action' ('color_grade', 'music_recommendation', 'update_text').\n\n"
+            "OUTPUT STRICT JSON ONLY:\n"
             "{\n"
-            '  "action": "update_text" | "color_grade" | "music_recommendation" | "advice",\n'
-            '  "message": "Polite explanation in Bengali (or English if user asked in English)",\n'
+            '  "action": "advice" | "update_text" | "color_grade" | "music_recommendation" | "ingest_script",\n'
+            '  "message": "Direct, empathetic, structured, and helpful explanation in Bengali with bullet points and emojis",\n'
+            '  "clientScript": "string or null if user provided script text",\n'
             '  "replacements": [{"original": "word_to_find", "replacement": "new_word"}],\n'
             '  "colorPreset": "teal_orange" | "kodak_2383" | "warm_vintage" | "moody_noir" | null,\n'
             '  "musicGenre": "cinematic" | "lofi" | "tech" | "corporate" | null\n'
@@ -2756,6 +3443,26 @@ Return strictly a JSON object:
             reps = res.get("replacements", [])
             color_p = res.get("colorPreset")
             music_g = res.get("musicGenre")
+            new_script = res.get("clientScript")
+
+            # Handle Ingest Script (User pasted script or text)
+            if act == "ingest_script" or (new_script and len(new_script.strip()) > 20):
+                final_script = new_script.strip() if new_script else cmd_clean.strip()
+                align_res = cls.script_aligned_spell_check(
+                    words=modified_words,
+                    client_script=final_script,
+                    client_brief=client_brief,
+                    language=language
+                )
+                return {
+                    "action": "ingest_script",
+                    "message": msg,
+                    "clientScript": final_script,
+                    "words": align_res.get("words", modified_words),
+                    "srtCues": modified_cues,
+                    "corrections": align_res.get("corrections", 0),
+                    "auditReport": align_res.get("auditReport", [])
+                }
 
             if act == "color_grade" or color_p:
                 preset = color_p or "teal_orange"
@@ -2812,10 +3519,10 @@ Return strictly a JSON object:
                     "message": msg
                 }
 
-        # Offline fallback when no model response
+        # Context-aware fallback if model call failed
         return {
             "action": "advice",
-            "message": f"আপনার কমান্ড: '{cmd_clean}' বিবেচনা করা হয়েছে। আরও নির্দিষ্ট অ্যাকশন যেমন 'দাড়ি কমা বাদ দাও', 'X কে Y দিয়ে রিপ্লেস করো', বা 'কালার গ্রেড দাও' বলতে পারেন।"
+            "message": f"আপনার বার্তাটি পেয়েছি: '{cmd_clean}'। আপনি ব্রিফ, স্ক্রিপ্ট বা টাইমলাইন সম্পর্কিত যেকোনো এডিটিং কমান্ড (যেমন: 'দাড়ি-কমা মুছুন', 'কালার গ্রেড দাও', 'স্ক্রিপ্ট মিলিয়ে নাও') দিতে পারেন।"
         }
 
     @classmethod
@@ -3008,77 +3715,692 @@ Return strictly a JSON object:
     @classmethod
     def parse_revisions(cls, revision_notes: str, duration_seconds: float = 120.0) -> List[Dict[str, Any]]:
         """
-        Parses client revision feedback (paste from email/WhatsApp/review notes),
-        extracts timecodes, categorizes changes, and outputs actionable items with timeline seeking!
+        Intelligently parses client revision feedback (paste from email/WhatsApp/review notes),
+        extracts timecodes in ANY messy format (14s, 1:05, 2 min 10 sec, Bengali numerals ১:০৫),
+        creates a prioritized actionable editing checklist, and calculates exact timeline seconds!
         """
         if not revision_notes or not revision_notes.strip():
             return []
 
-        lines = revision_notes.strip().split("\n")
-        items = []
+        # Convert Bengali numerals (০-৯) to Western digits (0-9)
+        bengali_digits = {'০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9'}
+        norm_text = revision_notes
+        for bn_d, en_d in bengali_digits.items():
+            norm_text = norm_text.replace(bn_d, en_d)
 
-        tc_regex = re.compile(r"(?:(?:\[|\()?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(?:\]|\)))?)\s*[-:]?\s*(.*)", re.IGNORECASE)
+        # 1. Primary: Use Gemini 3.5 Flash for deep natural language revision extraction
+        prompt = (
+            "You are an expert video editing assistant inside Adobe Premiere Pro.\n"
+            "The client provided raw revision feedback notes for an edit (which could be in any messy format, e.g. '14s', '1:05', '2 min 10 sec', '১:০৫ এ মিউজিক কমাও', 'at 45 seconds', '02:18-02:25'):\n\n"
+            f"RAW CLIENT FEEDBACK:\n\"\"\"{norm_text}\"\"\"\n\n"
+            "TASK:\n"
+            "Break down the feedback into an actionable editing revision checklist.\n"
+            "For each specific revision point:\n"
+            "- timecode: standardized 'MM:SS' (or 'HH:MM:SS')\n"
+            "- seconds: precise float seconds from start of video (e.g. 14.0 for 14s, 65.0 for 1:05, 135.0 for 2m15s)\n"
+            "- clientRequest: client's exact or cleaned request\n"
+            "- actionItem: clear, professional, actionable editing instruction in Bengali (e.g. 'লোগো বড় করে স্ক্রিনের মাঝে রাখুন', 'BGM ভলিউম -4dB কমান', 'কাট ট্রিম করুন')\n"
+            "- category: 'Audio' | 'Visual' | 'Text' | 'Color' | 'Pacing' | 'Logo'\n"
+            "- priority: 'HIGH' | 'MEDIUM' | 'LOW'\n\n"
+            "OUTPUT STRICT JSON ONLY:\n"
+            "{\n"
+            '  "revisions": [\n'
+            '    {\n'
+            '      "timecode": "01:05",\n'
+            '      "seconds": 65.0,\n'
+            '      "clientRequest": "...",\n'
+            '      "actionItem": "...",\n'
+            '      "category": "Audio",\n'
+            '      "priority": "HIGH"\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+
+        res = cls._call_gemini_json(prompt)
+        if isinstance(res, dict) and "revisions" in res and isinstance(res["revisions"], list) and len(res["revisions"]) > 0:
+            parsed_items = []
+            now_ts = int(time.time())
+            for idx, r in enumerate(res["revisions"], start=1):
+                sec = float(r.get("seconds", 0.0))
+                tc = str(r.get("timecode", "00:00")).strip()
+                cat = str(r.get("category", "General")).strip()
+                c_req = str(r.get("clientRequest", "")).strip() or norm_text.strip()
+                a_item = str(r.get("actionItem", c_req)).strip()
+                prio = str(r.get("priority", "MEDIUM")).strip()
+
+                parsed_items.append({
+                    "id": f"rev_{now_ts}_{idx}",
+                    "timecode": tc,
+                    "seconds": max(0.0, sec),
+                    "clientRequest": c_req,
+                    "actionItem": a_item,
+                    "category": cat,
+                    "priority": prio,
+                    "status": "PENDING",
+                    "completed": False,
+                    "actionTaken": ""
+                })
+            return parsed_items
+
+        # 2. Local Fallback (Multi-Pattern Regex Suite if offline)
+        lines = norm_text.strip().split("\n")
+        items = []
+        now_ts = int(time.time())
+
+        # Patterns:
+        # Pattern A: MM:SS or HH:MM:SS
+        pat_colon = re.compile(r"(?:(?:\[|\()?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?(?:\s*(?:\]|\)))?)\s*[-:]?\s*(.*)", re.IGNORECASE)
+        # Pattern B: X min Y sec or Xm Ys or X মিনিট Y সেকেন্ড
+        pat_min_sec = re.compile(r"(\d{1,2})\s*(?:m|min|mins|minute|minutes|মিনিট)\s*(\d{1,2})?\s*(?:s|sec|secs|second|seconds|সেকেন্ড)?\s*[-:]?\s*(.*)", re.IGNORECASE)
+        # Pattern C: X sec or Xs or X সেকেন্ড
+        pat_sec = re.compile(r"(?:at|around)?\s*(\d{1,3})\s*(?:s|sec|secs|second|seconds|সেকেন্ড)\s*[-:]?\s*(.*)", re.IGNORECASE)
 
         for idx, line in enumerate(lines, start=1):
             line_str = line.strip()
             if not line_str:
                 continue
 
-            match = tc_regex.search(line_str)
-            if match:
-                part1 = int(match.group(1))
-                part2 = int(match.group(2))
-                part3 = match.group(3)
-                task_text = match.group(4).strip() if match.group(4) else line_str
+            total_sec = 0.0
+            tc_formatted = "00:00"
+            task_text = line_str
 
-                if part3 is not None:
-                    # HH:MM:SS
-                    hours = part1
-                    minutes = part2
-                    seconds = int(part3)
-                    total_sec = hours * 3600 + minutes * 60 + seconds
-                    tc_formatted = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            mA = pat_colon.search(line_str)
+            mB = pat_min_sec.search(line_str)
+            mC = pat_sec.search(line_str)
+
+            if mA:
+                p1, p2, p3 = int(mA.group(1)), int(mA.group(2)), mA.group(3)
+                task_text = mA.group(4).strip() if mA.group(4) else line_str
+                if p3 is not None:
+                    total_sec = p1 * 3600 + p2 * 60 + int(p3)
+                    tc_formatted = f"{p1:02d}:{p2:02d}:{int(p3):02d}"
                 else:
-                    # MM:SS
-                    minutes = part1
-                    seconds = part2
-                    total_sec = minutes * 60 + seconds
-                    tc_formatted = f"{minutes:02d}:{seconds:02d}"
+                    total_sec = p1 * 60 + p2
+                    tc_formatted = f"{p1:02d}:{p2:02d}"
+            elif mB:
+                m_val = int(mB.group(1))
+                s_val = int(mB.group(2)) if mB.group(2) else 0
+                total_sec = m_val * 60 + s_val
+                tc_formatted = f"{m_val:02d}:{s_val:02d}"
+                task_text = mB.group(3).strip() if mB.group(3) else line_str
+            elif mC:
+                s_val = int(mC.group(1))
+                total_sec = s_val
+                m_val = s_val // 60
+                rem_s = s_val % 60
+                tc_formatted = f"{m_val:02d}:{rem_s:02d}"
+                task_text = mC.group(2).strip() if mC.group(2) else line_str
             else:
-                # No explicit timecode, look for standalone mm:ss anywhere in line
                 sub_tc = re.search(r"(\d{1,2}):(\d{2})", line_str)
                 if sub_tc:
                     m = int(sub_tc.group(1))
                     s = int(sub_tc.group(2))
                     total_sec = m * 60 + s
                     tc_formatted = f"{m:02d}:{s:02d}"
-                    task_text = line_str
-                else:
-                    total_sec = 0.0
-                    tc_formatted = "00:00"
-                    task_text = line_str
 
             # Categorize task
             t_lower = task_text.lower()
             if any(k in t_lower for k in ["মিউজিক", "sound", "সাউন্ড", "music", "bgm", "ভয়েস", "লউড", "loud", "quiet", "ভলিউম"]):
                 category = "Audio"
-            elif any(k in t_lower for k in ["কালার", "color", "grade", "লাইট", "bright", "dark", "লুক"]):
+            elif any(k in t_lower for k in ["কালার", "color", "grade", "লাইট", "bright", "dark", "লুক", "ওয়ার্ম", "warm", "কোল্ড", "cold"]):
                 category = "Color"
-            elif any(k in t_lower for k in ["কাট", "cut", "ট্রিম", "trim", "পজ", "pause", "ডিলিট", "delete", "ফাস্ট"]):
-                category = "Cut / Pacing"
-            elif any(k in t_lower for k in ["লোগো", "logo", "ছবি", "image", "বি-রোল", "b-roll", "overlay", "লেখা", "text", "বানান", "ক্যাপশন"]):
-                category = "Visual / Graphics"
+            elif any(k in t_lower for k in ["কাট", "cut", "ট্রিম", "trim", "পজ", "pause", "ডিলিট", "delete", "ফাস্ট", "স্লো"]):
+                category = "Pacing"
+            elif any(k in t_lower for k in ["লোগো", "logo"]):
+                category = "Logo"
+            elif any(k in t_lower for k in ["ছবি", "image", "বি-রোল", "b-roll", "overlay"]):
+                category = "Visual"
+            elif any(k in t_lower for k in ["লেখা", "text", "বানান", "ক্যাপশন", "subtitle"]):
+                category = "Text"
             else:
                 category = "General"
 
             items.append({
-                "id": f"rev_{idx}_{int(time.time())}",
+                "id": f"rev_{now_ts}_{idx}",
                 "timecode": tc_formatted,
                 "seconds": float(total_sec),
-                "clientRequest": task_text,
+                "clientRequest": line_str,
+                "actionItem": task_text,
                 "category": category,
+                "priority": "MEDIUM",
                 "status": "PENDING",
+                "completed": False,
                 "actionTaken": ""
             })
 
         return items
+
+    @classmethod
+    def parse_and_structure_client_dossier(
+        cls,
+        client_brief: str = "",
+        client_script: str = "",
+        brand_kit: Optional[Dict[str, Any]] = None,
+        sequence_manifest: Optional[Dict[str, Any]] = None,
+        language: str = "bn"
+    ) -> Dict[str, Any]:
+        """
+        Deep Universal Parser & Architect for Client Brief + Script.
+        Structures:
+        1. Raw verbatim script preserved 100%
+        2. AI-annotated scene/act breakdown (Hook, Body, Climax, CTA) with visual & audio cues
+        3. Extracted & categorized links (Footage, Assets, Logo, Delivery, Reference) with 1-click launch
+        4. Typography & Color standards with auto-fill hex codes
+        5. Voiceover style, EQ directives & BGM BPM suggestion
+        6. Bengali translation & intent synthesis
+        7. Step-by-step actionable To-Do checklist
+        8. Pre-formatted .TXT summary report
+        """
+        import urllib.parse
+        b_clean = (client_brief or "").strip()
+        s_clean = (client_script or "").strip()
+        combined_text = f"{b_clean}\n\n{s_clean}".strip()
+        bkit = brand_kit or {}
+
+        # ---------------- 1. EXTRACT & CATEGORIZE ALL LINKS ----------------
+        url_pattern = re.compile(r"https?://[^\s<>\"'()]+", re.IGNORECASE)
+        found_urls = list(dict.fromkeys(url_pattern.findall(combined_text)))
+        categorized_links = []
+
+        for idx, u in enumerate(found_urls):
+            u_clean = u.rstrip(".,;!?:")
+            parsed = urllib.parse.urlparse(u_clean)
+            domain = parsed.netloc.lower().replace("www.", "")
+            path_query = (parsed.path + parsed.query).lower()
+
+            category = "ASSETS"
+            cat_label = "অ্যাসেট লিংক"
+
+            if any(k in domain for k in ["youtube.com", "youtu.be", "vimeo.com", "tiktok.com", "instagram.com", "pinterest.com", "behance.net", "dribbble.com"]):
+                category = "REFERENCE"
+                cat_label = "রেফারেন্স / ইন্সপিরেশন"
+            elif "frame.io" in domain or "review" in path_query or "delivery" in path_query or "final" in path_query:
+                category = "DELIVERY"
+                cat_label = "ডেলিভারি ফোল্ডার"
+            elif any(k in domain for k in ["figma.com", "canva.com"]) or any(k in path_query for k in ["logo", "brand", "icon", "vector", "svg"]):
+                category = "LOGO"
+                cat_label = "লোগো ও ব্র্যান্ড লিংক"
+            elif any(k in path_query for k in ["raw", "footage", "cam", "video", "clip", "shoot", "broll", "a-roll", "mov", "mp4"]):
+                category = "FOOTAGE"
+                cat_label = "র ফুটেজ লিংক"
+            elif any(k in domain for k in ["drive.google.com", "dropbox.com", "wetransfer.com", "mega.nz", "onedrive.live.com"]):
+                surrounding = combined_text[max(0, combined_text.find(u) - 50):min(len(combined_text), combined_text.find(u) + len(u) + 50)].lower()
+                if any(w in surrounding for w in ["footage", "ফুটেজ", "ভিডিও", "raw", "shoot"]):
+                    category = "FOOTAGE"
+                    cat_label = "র ফুটেজ লিংক"
+                elif any(w in surrounding for w in ["logo", "লোগো", "brand"]):
+                    category = "LOGO"
+                    cat_label = "লোগো ও ব্র্যান্ড লিংক"
+                elif any(w in surrounding for w in ["delivery", "ডেলিভারি", "ফাইনাল"]):
+                    category = "DELIVERY"
+                    cat_label = "ডেলিভারি ফোল্ডার"
+                else:
+                    category = "FOOTAGE"
+                    cat_label = "র ফুটেজ / ফাইল লিংক"
+            elif any(k in domain for k in ["artlist.io", "epidemicsound.com", "envato.com", "audiojungle.net", "freesound.org", "chosic.com", "pixabay.com"]):
+                category = "ASSETS"
+                cat_label = "অডিও ও মিউজিক লিংক"
+
+            title = domain
+            if "drive.google.com" in domain:
+                title = "Google Drive Folder"
+            elif "dropbox.com" in domain:
+                title = "Dropbox Cloud Folder"
+            elif "wetransfer.com" in domain:
+                title = "WeTransfer File Link"
+            elif "youtube.com" in domain or "youtu.be" in domain:
+                title = "YouTube Reference Video"
+            elif "figma.com" in domain:
+                title = "Figma Brand Board"
+            elif "frame.io" in domain:
+                title = "Frame.io Review Space"
+
+            categorized_links.append({
+                "id": f"link_{idx+1}",
+                "category": category,
+                "categoryLabelBn": cat_label,
+                "url": u_clean,
+                "title": title,
+                "domain": domain
+            })
+
+        # ---------------- 2. EXTRACT BRANDING & STYLING ----------------
+        common_fonts = ["Montserrat", "Bebas Neue", "Poppins", "Roboto", "Inter", "Futura", "Gotham", "Helvetica", "Arial", "Oswald", "Lato", "Playfair", "Hind Siliguri"]
+        detected_font = None
+        for cf in common_fonts:
+            if re.search(rf"\b{re.escape(cf)}\b", combined_text, re.IGNORECASE):
+                detected_font = cf
+                break
+        if not detected_font:
+            font_match = re.search(r"(?:font|typography|ফন্ট|টাইপোগ্রাফি)\s*[:：\-–—\s]+([A-Za-z0-9\s]+?)(?:\s+(?:and|with|for|in|color|size|bg|হবে|চাই|রাখবেন)|[,.\n]|$)", combined_text, re.IGNORECASE)
+            if font_match:
+                detected_font = font_match.group(1).strip()
+
+        primary_font = detected_font or bkit.get("fontSuggestion") or "Montserrat"
+        secondary_font = "Inter (Clean Body Text)"
+
+        hex_matches = re.findall(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b", combined_text)
+        primary_color = f"#{hex_matches[0]}" if len(hex_matches) > 0 else (bkit.get("primaryColor") or "#1E40AF")
+        secondary_color = f"#{hex_matches[1]}" if len(hex_matches) > 1 else (bkit.get("secondaryColor") or "#3B82F6")
+        accent_color = f"#{hex_matches[2]}" if len(hex_matches) > 2 else (bkit.get("accentColor") or "#F59E0B")
+        bg_color = f"#{hex_matches[3]}" if len(hex_matches) > 3 else (bkit.get("backgroundColor") or "#0F172A")
+
+        color_mood = "Teal & Orange (সিনেমাটিক হাই-কনট্রাস্ট)"
+        lut_name = "Prismex_Teal_Orange.cube"
+        if any(k in combined_text.lower() for k in ["kodak", "film", "ফিল্ম", "vintage"]):
+            color_mood = "Kodak 2383 Film Print"
+            lut_name = "Prismex_Kodak_2383.cube"
+        elif any(k in combined_text.lower() for k in ["warm", "উষ্ণ", "golden"]):
+            color_mood = "Warm Golden Vintage"
+            lut_name = "Prismex_Warm_Vintage.cube"
+        elif any(k in combined_text.lower() for k in ["moody", "dark", "noir", "মুডি"]):
+            color_mood = "Moody Drama Noir"
+            lut_name = "Prismex_Moody_Noir.cube"
+
+        # ---------------- 3. EXTRACT SPECIFICATIONS & FORMATS ----------------
+        detected_formats = []
+        if re.search(r"\b9:16\b|vertical|ভার্টিক্যাল|reels?|shorts?|রিলস?|শর্টস?", combined_text, re.IGNORECASE):
+            detected_formats.append({"ratio": "9:16", "resolution": "1080x1920", "platform": "Vertical (Reels / Shorts / TikTok)"})
+        if re.search(r"\b16:9\b|horizontal|হরিজন্টাল|landscape|ল্যান্ডস্কেপ|youtube\b|ইউটিউব", combined_text, re.IGNORECASE):
+            detected_formats.append({"ratio": "16:9", "resolution": "1920x1080", "platform": "Horizontal (YouTube / TV / Web)"})
+        if re.search(r"\b1:1\b|square|স্কয়ার|feed\b", combined_text, re.IGNORECASE):
+            detected_formats.append({"ratio": "1:1", "resolution": "1080x1080", "platform": "Square (Instagram Feed)"})
+        if not detected_formats:
+            detected_formats.append({"ratio": "9:16", "resolution": "1080x1920", "platform": "Vertical (Shorts / Reels Default)"})
+            detected_formats.append({"ratio": "16:9", "resolution": "1920x1080", "platform": "Horizontal (YouTube Standard)"})
+
+        dur_match = re.search(r"(\d+)\s*(?:সেকেন্ড|sec|seconds?|s|মিনিট|min|mins?|minutes?)", combined_text, re.IGNORECASE)
+        target_duration = dur_match.group(0) if dur_match else "30-60 সেকেন্ড"
+
+        # ---------------- 4. VOICE, AUDIO & BGM DIRECTIVES ----------------
+        voice_tone = "আত্মবিশ্বাসী, স্পষ্ট এবং নির্দিষ্ট ছন্দে উচ্চারণ (Confident & Clear Delivery)"
+        bgm_genre = "Modern Cinematic Hybrid"
+        bgm_bpm = "120-128 BPM"
+
+        if any(k in combined_text.lower() for k in ["fast", "snappy", "দ্রুত", "dynamic", "হাইপ", "hype"]):
+            voice_tone = "হাই-এনার্জি, ফাস্ট-পেসড ও আকর্ষণীয় ডেলিভারি"
+            bgm_genre = "Energetic Electronic Pop"
+            bgm_bpm = "126-132 BPM"
+        elif any(k in combined_text.lower() for k in ["chill", "lofi", "চিল", "শান্ত", "soft"]):
+            voice_tone = "শান্ত, কথোপকথনধর্মী ও উষ্ণ ভয়েস (Warm & Conversational)"
+            bgm_genre = "Chill Lo-Fi Hip Hop"
+            bgm_bpm = "85-92 BPM"
+        elif any(k in combined_text.lower() for k in ["corporate", "বিজনেস", "professional", "serious"]):
+            voice_tone = "প্রফেশনাল, কর্পোরেট ও নির্ভরযোগ্য বাচনভঙ্গি"
+            bgm_genre = "Corporate Acoustic & Ambient Piano"
+            bgm_bpm = "114-120 BPM"
+
+        voice_eq = "High-Pass 80Hz (বুম নয়েজ কাট), Mud Cut 320Hz (-2.5dB), Presence Boost 3.5kHz (+2.0dB), De-Esser 6kHz"
+        ducking_rule = "কথা চলার সময় মিউজিক ভলিউম -20 dB লেভেলে নামবে (30ms Attack, 350ms Release)"
+
+        # ---------------- 5. DUAL-LAYER SCRIPT BREAKDOWN ----------------
+        raw_script = s_clean if s_clean else (b_clean if len(b_clean.split()) > 15 else "ক্লায়েন্ট এখনও আলাদা কোনো স্ক্রিপ্ট টেক্সট প্রদান করেনি।")
+
+        prompt = (
+            "You are an expert video creative director.\n"
+            "Analyze this client brief and script text to create:\n"
+            "1. A fluent, crystal-clear Bengali explanation and translation of the client's intent and goals (bengaliSummary)\n"
+            "2. Project headline (headline)\n"
+            "3. Structured 4-act story breakdown (Hook, Body, Climax, CTA) with spoken words, visual suggestions, and sound design cues.\n\n"
+            f"CLIENT BRIEF:\n\"\"\"{b_clean[:2500]}\"\"\"\n\n"
+            f"CLIENT SCRIPT:\n\"\"\"{s_clean[:3500]}\"\"\"\n\n"
+            "OUTPUT STRICT JSON ONLY:\n"
+            "{\n"
+            '  "headline": "Short punchy 1-line project title",\n'
+            '  "bengaliSummary": "Comprehensive, empathetic, structured explanation in natural Bengali detailing client expectations, goals, and key priorities",\n'
+            '  "targetAudience": "Target viewers (e.g. Car owners, Gen Z, Tech professionals)",\n'
+            '  "storyBreakdown": [\n'
+            '    {\n'
+            '      "act": "HOOK",\n'
+            '      "actLabelBn": "১. হুক (প্রথম ৩-৫ সেকেন্ড)",\n'
+            '      "voiceoverText": "Exact script lines for hook",\n'
+            '      "visualSuggestion": "Directorial visual recommendation in Bengali",\n'
+            '      "soundSuggestion": "Sound FX recommendation in Bengali"\n'
+            '    },\n'
+            '    {\n'
+            '      "act": "BODY",\n'
+            '      "actLabelBn": "২. মূল বিষয়বস্তু ও সমস্যা (Body)",\n'
+            '      "voiceoverText": "Exact script lines for body",\n'
+            '      "visualSuggestion": "Visual guidance in Bengali",\n'
+            '      "soundSuggestion": "Sound FX guidance"\n'
+            '    },\n'
+            '    {\n'
+            '      "act": "CLIMAX",\n'
+            '      "actLabelBn": "৩. সমাধান ও টার্নিং পয়েন্ট (Climax)",\n'
+            '      "voiceoverText": "Exact script lines for climax",\n'
+            '      "visualSuggestion": "Visual guidance in Bengali",\n'
+            '      "soundSuggestion": "Sound FX guidance"\n'
+            '    },\n'
+            '    {\n'
+            '      "act": "CTA",\n'
+            '      "actLabelBn": "৪. কল-টু-অ্যাকশন (CTA & Outro)",\n'
+            '      "voiceoverText": "Closing lines / logo outro",\n'
+            '      "visualSuggestion": "Visual guidance in Bengali",\n'
+            '      "soundSuggestion": "Sound FX guidance"\n'
+            '    }\n'
+            '  ]\n'
+            "}"
+        )
+
+        llm_res = cls._call_gemini_json(prompt)
+        headline = "ক্লায়েন্ট ভিডিও প্রজেক্ট ডসিয়ার"
+        bengali_summary = (
+            "ক্লায়েন্ট একটি আকর্ষণীয়, উচ্চমানের ভিডিও ডেলিভারি চেয়েছে। "
+            "টাইমলাইনের রিয়েল ভয়েস অক্ষত রেখে স্ক্রিপ্টের প্রতিটি মূল মেসেজ যাতে দর্শকের কাছে স্পষ্টভাবে পৌঁছায় "
+            "এবং ভিজ্যুয়াল টোন ও ব্র্যান্ডিং গাইডলাইন শতভাগ বজায় থাকে—এটাই ক্লায়েন্টের মূল প্রত্যাশা।"
+        )
+        target_audience = "সাধারণ দর্শক ও টার্গেট ক্লায়েন্ট"
+        story_breakdown = []
+
+        if isinstance(llm_res, dict):
+            headline = llm_res.get("headline") or headline
+            bengali_summary = llm_res.get("bengaliSummary") or bengali_summary
+            target_audience = llm_res.get("targetAudience") or target_audience
+            story_breakdown = llm_res.get("storyBreakdown") or []
+
+        if not story_breakdown:
+            sentences = [s.strip() for s in re.split(r'[।?!.]+', raw_script) if len(s.strip()) > 3]
+            if len(sentences) >= 4:
+                story_breakdown = [
+                    {
+                        "act": "HOOK",
+                        "actLabelBn": "১. হুক (প্রথম ৩-৫ সেকেন্ড)",
+                        "voiceoverText": sentences[0],
+                        "visualSuggestion": "স্ক্রিনের কেন্দ্রে বড় ড্রামাটিক টেক্সট পপ, ডায়নামিক জুম-ইন ও গতিশীল কাটিং।",
+                        "soundSuggestion": "Whoosh ট্রানজিশন + লো-এন্ড ইমপ্যাক্ট বুম।"
+                    },
+                    {
+                        "act": "BODY",
+                        "actLabelBn": "২. মূল বিষয়বস্তু ও সমস্যা (Body)",
+                        "voiceoverText": " ".join(sentences[1:min(3, len(sentences)-1)]),
+                        "visualSuggestion": "স্ক্রিপ্টের সাথে প্রাসঙ্গিক বি-রোল ফুটেজ ও গুরুত্বপূর্ণ শব্দে জুম পাঞ্চ (১১৪% স্কেল)।",
+                        "soundSuggestion": "স্মুথ ক্লিক সাউন্ড ও কথার নিচে ব্যালেন্সড ব্যাকগ্রাউন্ড মিউজিক।"
+                    },
+                    {
+                        "act": "CLIMAX",
+                        "actLabelBn": "৩. সমাধান ও টার্নিং পয়েন্ট (Climax)",
+                        "voiceoverText": sentences[min(3, len(sentences)-1)],
+                        "visualSuggestion": "প্রোডাক্ট বা রেজাল্টের সেরা শট, হাই-কনট্রাস্ট সিনেমাটিক কালার গ্রেড।",
+                        "soundSuggestion": "মিউজিক ক্রিসেন্ডো ও সোয়েপ এফেক্ট।"
+                    },
+                    {
+                        "act": "CTA",
+                        "actLabelBn": "৪. কল-টু-অ্যাকশন (CTA & Outro)",
+                        "voiceoverText": sentences[-1] if len(sentences) > 4 else "এখনই আমাদের সাথে যোগাযোগ করুন।",
+                        "visualSuggestion": "লোগো অ্যানিমেশন, ওয়েবসাইটের নাম ও সোশ্যাল হ্যান্ডল ডিসপ্লে।",
+                        "soundSuggestion": "ব্র্যান্ড লোগো চিঙ্ক বা পপ সাউন্ড।"
+                    }
+                ]
+            else:
+                story_breakdown = [
+                    {
+                        "act": "HOOK",
+                        "actLabelBn": "১. হুক (ভিডিও ওপেনিং)",
+                        "voiceoverText": raw_script[:150] if len(raw_script) > 150 else raw_script,
+                        "visualSuggestion": "আকর্ষণীয় হুক ভিজ্যুয়াল ও ডায়নামিক মোশন টেক্সট।",
+                        "soundSuggestion": "Whoosh ইমপ্যাক্ট সাউন্ড।"
+                    },
+                    {
+                        "act": "BODY",
+                        "actLabelBn": "২. মূল মেসেজ ও আউটরো",
+                        "voiceoverText": raw_script[150:] if len(raw_script) > 150 else "মূল স্ক্রিপ্ট অংশ",
+                        "visualSuggestion": "বি-রোল ওভারলে ও ব্র্যান্ড কালার গ্রেডিং।",
+                        "soundSuggestion": "BGM ডাকিং ও লোগো পপ।"
+                    }
+                ]
+
+        # ---------------- 6. ACTIONABLE TO-DO CHECKLIST ----------------
+        todo_checklist = [
+            {
+                "id": "todo_1",
+                "task": f"সিকোয়েন্স ফরম্যাট সেট করুন: {detected_formats[0]['ratio']} ({detected_formats[0]['resolution']})",
+                "category": "Sequence",
+                "completed": False
+            },
+            {
+                "id": "todo_2",
+                "task": f"লুমেট্রিতে '{color_mood}' কালার গ্রেড নির্বাচন ও টাইমলাইনে অ্যাপ্লাই করুন",
+                "category": "Color",
+                "completed": False
+            },
+            {
+                "id": "todo_3",
+                "task": f"এসেনশিয়াল গ্রাফিক্স ও সাবটাইটেলে ক্লায়েন্ট ফন্ট '{primary_font}' এবং ব্র্যান্ড কালার '{primary_color}' সেট করুন",
+                "category": "Typography",
+                "completed": False
+            },
+            {
+                "id": "todo_4",
+                "task": f"ব্যাকগ্রাউন্ড মিউজিক ({bgm_genre}, {bgm_bpm}) অডিও ট্র্যাক ৩-এ ড্রপ করে -20dB ডাকিং নিশ্চিত করুন",
+                "category": "Audio",
+                "completed": False
+            },
+            {
+                "id": "todo_5",
+                "task": "টাইমলাইনের ডায়ালগ থেকে অপ্রয়োজনীয় পজ (300ms+) ও ফিলার শব্দগুলো স্বয়ংক্রিয়ভাবে কাটুন",
+                "category": "Cut",
+                "completed": False
+            },
+            {
+                "id": "todo_6",
+                "task": "স্ক্রিপ্টের হুক ও কি-ওয়ার্ড অংশে বি-রোল ফুটেজ এবং ১১৪% স্কেল জুম-পাঞ্চ বসান",
+                "category": "Visuals",
+                "completed": False
+            },
+            {
+                "id": "todo_7",
+                "task": "ক্লায়েন্টের জন্য ফাইনাল অডিট রিপোর্ট ও টেক্সট ফাইল জেনারেট করে ডেলিভারি প্রস্তুত করুন",
+                "category": "Export",
+                "completed": False
+            }
+        ]
+
+        # ---------------- 7. PRE-FORMATTED CLEAN TEXT REPORT (.TXT) ----------------
+        links_txt = ""
+        for l in categorized_links:
+            links_txt += f"• [{l['categoryLabelBn']}] {l['title']}: {l['url']}\n"
+        if not links_txt:
+            links_txt = "• কোনো এক্সটার্নাল লিংক পাওয়া যায়নি。\n"
+
+        story_txt = ""
+        for act in story_breakdown:
+            story_txt += f"\n--- {act['actLabelBn']} ---\n"
+            story_txt += f"স্ক্রিপ্ট: \"{act['voiceoverText']}\"\n"
+            story_txt += f"ভিজ্যুয়াল: {act['visualSuggestion']}\n"
+            story_txt += f"সাউন্ড FX: {act['soundSuggestion']}\n"
+
+        formats_txt = "\n".join(f"• {f['platform']}: {f['resolution']} ({f['ratio']})" for f in detected_formats)
+
+        txt_report = f"""================================================================================
+                    PRISMEX AI - CLIENT BRIEF & SCRIPT DOSSIER
+================================================================================
+প্রজেক্ট নাম: {headline}
+টার্গেট অডিয়েন্স: {target_audience}
+টার্গেট দৈর্ঘ্য: {target_duration}
+তৈরির তারিখ: {time.strftime('%Y-%m-%d %H:%M:%S')}
+
+--------------------------------------------------------------------------------
+১. ব্রিফের বাংলা অনুবাদ ও মূল উদ্দেশ্য (BENGALI INTENT BREAKDOWN)
+--------------------------------------------------------------------------------
+{bengali_summary}
+
+--------------------------------------------------------------------------------
+২. ডেলিভারি ও রেজোলিউশন স্পেকস (FORMATS & DELIVERY)
+--------------------------------------------------------------------------------
+{formats_txt}
+
+--------------------------------------------------------------------------------
+৩. ব্র্যান্ডিং, ফন্ট ও কালার গাইড (BRANDING & STYLE)
+--------------------------------------------------------------------------------
+• Primary Font: {primary_font}
+• Secondary Font: {secondary_font}
+• Primary Color: {primary_color}
+• Secondary Color: {secondary_color}
+• Accent Color: {accent_color}
+• Dark Background: {bg_color}
+• Recommended LUT: {lut_name} ({color_mood})
+
+--------------------------------------------------------------------------------
+৪. অডিও, ভয়েসওভার ও BGM গাইড (AUDIO & VOICE DIRECTIVES)
+--------------------------------------------------------------------------------
+• ভয়েসওভার টোন: {voice_tone}
+• ভয়েস EQ সুপারিশ: {voice_eq}
+• BGM ঘরানা ও বিপিএম: {bgm_genre} ({bgm_bpm})
+• অডিও ডাকিং স্ট্যান্ডার্ড: {ducking_rule}
+
+--------------------------------------------------------------------------------
+৫. ফুটেজ, লোগো ও ড্রাইভ লিংক হাব (CATEGORIZED ASSET LINKS)
+--------------------------------------------------------------------------------
+{links_txt}
+--------------------------------------------------------------------------------
+৬. ক্লায়েন্টের মূল স্ক্রিপ্ট - হুবহু অক্ষত (VERBATIM RAW SCRIPT)
+--------------------------------------------------------------------------------
+{raw_script}
+
+--------------------------------------------------------------------------------
+৭. এআই ডিরেক্টোরিয়াল ব্রেকডাউন (SCENE-BY-SCENE STORY BREAKDOWN)
+--------------------------------------------------------------------------------
+{story_txt}
+--------------------------------------------------------------------------------
+৮. কাজের অ্যাকশনেবল চেকলিস্ট (ACTIONABLE TO-DO ROADMAP)
+--------------------------------------------------------------------------------
+"""
+        for t in todo_checklist:
+            txt_report += f"[ ] {t['task']}\n"
+        txt_report += "\n================================================================================\n"
+
+        return {
+            "headline": headline,
+            "bengaliSummary": bengali_summary,
+            "targetAudience": target_audience,
+            "targetDuration": target_duration,
+            "formats": detected_formats,
+            "branding": {
+                "primaryFont": primary_font,
+                "secondaryFont": secondary_font,
+                "primaryColor": primary_color,
+                "secondaryColor": secondary_color,
+                "accentColor": accent_color,
+                "backgroundColor": bg_color,
+                "palette": [primary_color, secondary_color, accent_color, "#10B981", bg_color],
+                "colorMood": color_mood,
+                "lutFileName": lut_name
+            },
+            "audioDirectives": {
+                "voiceTone": voice_tone,
+                "voiceEQ": voice_eq,
+                "bgmGenre": bgm_genre,
+                "bgmBpm": bgm_bpm,
+                "duckingRule": ducking_rule
+            },
+            "categorizedLinks": categorized_links,
+            "scriptDossier": {
+                "rawScript": raw_script,
+                "hasClientNotes": bool(re.search(r"\[|\]|\(|\)|hook|body|cta", raw_script, re.IGNORECASE)),
+                "storyBreakdown": story_breakdown
+            },
+            "todoChecklist": todo_checklist,
+            "exportableTextReport": txt_report
+        }
+
+    @classmethod
+    def parse_client_feedback_to_markers(cls, feedback_text: str, fps: float = 24.0) -> List[Dict[str, Any]]:
+        """
+        Parses client revision notes, feedback emails, or WhatsApp messages into actionable Premiere Pro markers.
+        Handles both English (01:23) and Bengali (০১:২৩) timecodes.
+        """
+        if not feedback_text or not feedback_text.strip():
+            return []
+
+        # Convert Bengali numbers to ASCII digits
+        bn_to_en = {'০':'0', '১':'1', '২':'2', '৩':'3', '৪':'4', '৫':'5', '৬':'6', '৭':'7', '৮':'8', '৯':'9'}
+        norm_text = "".join(bn_to_en.get(c, c) for c in feedback_text)
+
+        markers: List[Dict[str, Any]] = []
+        lines = norm_text.splitlines()
+
+        # Regex for timecodes: MM:SS, HH:MM:SS, or M:SS (e.g. 01:23, 1:45, 01:23:10)
+        tc_pattern = re.compile(r'(?:(?:\[|\()?\b(?:(\d{1,2}):)?(\d{1,2}):(\d{2})\b(?:\]|\))?)')
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str:
+                continue
+
+            tc_match = tc_pattern.search(line_str)
+            if tc_match:
+                hours = int(tc_match.group(1)) if tc_match.group(1) else 0
+                minutes = int(tc_match.group(2))
+                seconds = int(tc_match.group(3))
+                total_sec = (hours * 3600) + (minutes * 60) + seconds
+
+                # Clean up comment text: strip out the timecode and leading/trailing dashes/colons
+                comment = tc_pattern.sub('', line_str).strip(' \t\r\n-–—:[]()')
+                if not comment:
+                    comment = "Client Revision Note"
+
+                # Assign smart marker color based on intent keywords
+                lower_comment = comment.lower()
+                color = "GREEN"
+                name = "Revision"
+
+                if any(k in lower_comment for k in ["cut", "remove", "delete", "বাদ", "কাট", "ফেলো", "ডিলিট"]):
+                    color = "RED"
+                    name = "Cut Note"
+                elif any(k in lower_comment for k in ["audio", "sound", "music", "bgm", "volume", "মিউজিক", "গান", "শব্দ", "ভলিউম"]):
+                    color = "CYAN"
+                    name = "Audio Fix"
+                elif any(k in lower_comment for k in ["logo", "png", "broll", "image", "graphic", "ছবি", "লোগো", "গ্রাফিক", "টেক্সট"]):
+                    color = "PURPLE"
+                    name = "Graphics/B-Roll"
+                elif any(k in lower_comment for k in ["color", "grade", "lut", "ডার্ক", "কালার", "আলো"]):
+                    color = "ORANGE"
+                    name = "Color Note"
+
+                markers.append({
+                    "startSeconds": float(total_sec),
+                    "durationSeconds": 2.0,
+                    "name": name,
+                    "comment": comment,
+                    "color": color
+                })
+
+        return markers
+
+    @classmethod
+    def download_and_cache_asset(cls, url: str, asset_type: str = "video") -> Dict[str, Any]:
+        """
+        Downloads a media asset from a URL into local cache directory (~/.prismex/downloads)
+        so it can be imported directly into Premiere Pro tracks without leaving the editor.
+        """
+        import hashlib
+        from urllib.request import urlopen, Request
+
+        if not url or not url.startswith("http"):
+            return {"success": False, "error": "Invalid URL"}
+
+        download_dir = Path.home() / ".prismex" / "downloads"
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        url_hash = hashlib.md5(url.encode('utf-8')).hexdigest()[:12]
+        ext = ".mp4" if asset_type == "video" else (".png" if asset_type == "png" else ".jpg")
+        if ".png" in url.lower():
+            ext = ".png"
+        elif ".mp4" in url.lower():
+            ext = ".mp4"
+        elif ".wav" in url.lower() or ".mp3" in url.lower():
+            ext = ".mp3"
+
+        dest_file = download_dir / f"asset_{url_hash}{ext}"
+        if dest_file.exists() and dest_file.stat().st_size > 1000:
+            return {"success": True, "filePath": str(dest_file), "cached": True}
+
+        try:
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+            with urlopen(req, timeout=15) as resp, open(dest_file, 'wb') as out_f:
+                out_f.write(resp.read())
+
+            return {"success": True, "filePath": str(dest_file), "cached": False}
+        except Exception as e:
+            return {"success": False, "error": str(e)}

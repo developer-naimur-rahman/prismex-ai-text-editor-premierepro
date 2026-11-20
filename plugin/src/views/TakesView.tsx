@@ -4,6 +4,7 @@ import { PremiereHostBridge } from '../host/PremiereHostBridge';
 import { TimecodeConverter } from '../host/TimecodeConverter';
 import { translations } from '../i18n/translations';
 import { Layers, Play, Scissors, CheckCircle, Mic } from 'lucide-react';
+import { EditorTopRibbon } from '../components/EditorTopRibbon';
 
 export const TakesView: React.FC = () => {
   const {
@@ -33,8 +34,10 @@ export const TakesView: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', height: '100%', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <EditorTopRibbon />
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '12px', flex: 1, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h2 style={{ fontSize: '13px', fontWeight: 600 }}>
             {t.tabTakes} — {t.doubleLines} ({repeatedTakes.length})
@@ -123,6 +126,7 @@ export const TakesView: React.FC = () => {
             </div>
           ))
         )}
+      </div>
       </div>
     </div>
   );

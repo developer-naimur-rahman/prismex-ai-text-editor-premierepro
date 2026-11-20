@@ -1,6 +1,7 @@
 import React from 'react';
 import { usePrismexStore } from '../state/usePrismexStore';
-import { Sparkles, CheckSquare, Zap, Cpu, Sliders } from 'lucide-react';
+import { Sparkles, CheckSquare, Zap, Cpu, Sliders, Film, ArrowRight } from 'lucide-react';
+import { EditorTopRibbon } from '../components/EditorTopRibbon';
 
 export const MagicRoughCutView: React.FC = () => {
   const { 
@@ -13,18 +14,80 @@ export const MagicRoughCutView: React.FC = () => {
     startMagicRoughCut, 
     jobStatus, 
     jobProgress, 
-    jobMessage 
+    jobMessage,
+    setActiveTab
   } = usePrismexStore();
 
   const isRunning = jobStatus !== 'COMPLETE' && jobProgress > 0 && jobProgress < 100;
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', overflowY: 'auto' }}>
-      <div>
-        <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Magic Rough Cut Configuration</h2>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <EditorTopRibbon />
+      <div style={{ padding: '14px', display: 'flex', flexDirection: 'column', gap: '14px', flex: 1, overflowY: 'auto' }}>
+        <div>
+          <h2 style={{ fontSize: '13px', fontWeight: 600 }}>Magic Rough Cut Configuration</h2>
         <p style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
           Target Sequence: <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{sequenceManifest?.sequenceName || 'None'}</span>
         </p>
+      </div>
+
+      {/* 1-Click Script Rough Cut Promo / Shortcut */}
+      <div style={{
+        padding: '12px 14px',
+        borderRadius: '10px',
+        background: 'linear-gradient(135deg, rgba(79, 70, 229, 0.2) 0%, rgba(147, 51, 234, 0.25) 100%)',
+        border: '1px solid rgba(139, 92, 246, 0.45)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '10px'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '10px' }}>
+          <div style={{
+            width: '32px',
+            height: '32px',
+            borderRadius: '8px',
+            background: 'linear-gradient(135deg, #6366f1, #a855f7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0
+          }}>
+            <Film size={16} color="#ffffff" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: '#ffffff' }}>
+              🎬 1-Click Script-to-Rough Cut Sequence
+            </div>
+            <div style={{ fontSize: '10px', color: '#cbd5e1', marginTop: '3px', lineHeight: 1.4 }}>
+              ক্লায়েন্ট স্ক্রিপ্ট অনুযায়ী ডায়ালগ ফিল্টার, A/B Cam পাঞ্চ-ইন ও মার্কারসহ স্বয়ংক্রিয় সিকোয়েন্স কাট করুন
+            </div>
+          </div>
+        </div>
+
+        <button
+          onClick={() => setActiveTab('client-hub')}
+          style={{
+            width: '100%',
+            padding: '7px 14px',
+            borderRadius: '7px',
+            background: 'linear-gradient(135deg, #6366f1, #9333ea)',
+            color: '#ffffff',
+            border: 'none',
+            fontSize: '11px',
+            fontWeight: 700,
+            cursor: 'pointer',
+            textAlign: 'center',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '6px',
+            boxShadow: '0 0 12px rgba(147, 51, 234, 0.35)',
+            marginTop: '4px'
+          }}
+        >
+          <span>Open Script Rough-Cut</span>
+          <ArrowRight size={12} />
+        </button>
       </div>
 
       {/* Mode Selection */}
@@ -135,13 +198,14 @@ export const MagicRoughCutView: React.FC = () => {
 
         <button 
           className="btn-primary" 
-          disabled={isRunning || !sequenceManifest}
+          disabled={isRunning}
           onClick={startMagicRoughCut}
           style={{ padding: '10px 14px', fontSize: '13px', fontWeight: 600 }}
         >
           <Sparkles size={16} />
           <span>{isRunning ? 'Processing Magic Rough Cut...' : 'Generate Magic Rough Cut'}</span>
         </button>
+      </div>
       </div>
     </div>
   );

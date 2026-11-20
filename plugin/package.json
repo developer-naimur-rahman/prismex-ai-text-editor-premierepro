@@ -1,12 +1,12 @@
 {
   "name": "prismex-uxp-plugin",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Adobe Premiere Pro UXP Panel for Prismex AI Editor",
   "type": "module",
   "main": "dist/index.html",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build && cp -R dist/* \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/\" && cp -R dist/* \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/\" && cp jsx/hostscript.jsx \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/jsx/\" && cp jsx/hostscript.jsx \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/jsx/\"",
+    "build": "tsc && vite build && cp -R dist/* \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/\" && cp -R dist/* \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/\" && cp jsx/hostscript.jsx \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/jsx/\" && cp jsx/hostscript.jsx \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/jsx/\" && cp .debug \"/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/.debug\" 2>/dev/null || true && cp .debug \"$HOME/Library/Application Support/Adobe/CEP/extensions/com.prismex.editor/.debug\" 2>/dev/null || true",
     "preview": "vite preview",
     "test": "node --test src/**/*.test.ts 2>/dev/null || true",
     "package": "node ../scripts/package-ccx.js"

@@ -8,6 +8,7 @@ Extracts 16kHz mono 16-bit WAV from source media with ephemeral file lifecycle.
 import os
 import shutil
 import subprocess
+import urllib.parse
 import uuid
 import wave
 from pathlib import Path
@@ -15,6 +16,37 @@ from typing import Optional, List, Dict, Any
 from ..config import TEMP_AUDIO_DIR
 
 class AudioExtractor:
+    @staticmethod
+    def normalize_media_path(raw_path: Any) -> Optional[str]:
+        """Normalizes URL-encoded, file URI, or relative media paths to actual filesystem paths."""
+        if not raw_path:
+            return None
+        p = str(raw_path).strip()
+        if p.startswith("file://localhost"):
+            p = p[len("file://localhost"):]
+        elif p.startswith("file://"):
+            p = p[len("file://"):]
+        
+        # Unquote URL-encoded characters (e.g. %20 for spaces)
+        try:
+            p = urllib.parse.unquote(p)
+        except Exception:
+            pass
+
+        if os.path.exists(p):
+            return p
+        
+        norm_p = os.path.normpath(p)
+        if os.path.exists(norm_p):
+            return norm_p
+            
+        # Try stripping leading slash if on Windows (e.g. /C:/...)
+        if len(p) > 3 and p[0] == "/" and p[2] == ":":
+            win_p = p[1:]
+            if os.path.exists(win_p):
+                return win_p
+
+        return None
     @staticmethod
     def get_ffmpeg_path() -> Optional[str]:
         """Locates system, imageio-ffmpeg, or packaged FFmpeg binary."""
@@ -66,8 +98,9 @@ class AudioExtractor:
 
         if ffmpeg_bin and source_clips:
             for clip in source_clips:
-                media_path = getattr(clip, "mediaPath", None) or (clip.get("mediaPath") if isinstance(clip, dict) else None)
-                if not media_path or not os.path.exists(media_path):
+                raw_media_path = getattr(clip, "mediaPath", None) or (clip.get("mediaPath") if isinstance(clip, dict) else None)
+                media_path = cls.normalize_media_path(raw_media_path)
+                if not media_path:
                     continue
 
                 in_sec = float(getattr(clip, "inSeconds", None) if hasattr(clip, "inSeconds") else clip.get("inSeconds", 0.0))
@@ -130,13 +163,14 @@ class AudioExtractor:
 
         ffmpeg_bin = cls.get_ffmpeg_path()
         duration = max(0.1, out_seconds - in_seconds)
+        clean_path = cls.normalize_media_path(source_media_path) or source_media_path
 
-        if ffmpeg_bin and os.path.exists(source_media_path):
+        if ffmpeg_bin and os.path.exists(clean_path):
             cmd = [
                 ffmpeg_bin,
                 "-y",                       # Overwrite
                 "-ss", str(in_seconds),     # Fast seek
-                "-i", source_media_path,
+                "-i", clean_path,
                 "-t", str(duration),
                 "-vn",                      # Disable video
                 "-acodec", "pcm_s16le",     # 16-bit PCM

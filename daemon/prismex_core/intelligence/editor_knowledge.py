@@ -167,6 +167,15 @@ class EditorKnowledgeBase:
         seq = ctx.get("sequenceManifest") or {}
         revs = ctx.get("clientRevisions") or []
 
+        # GUARD 1: If query contains brief/script keywords or saving keywords, NEVER dump static encyclopedia!
+        if any(k in q for k in ["ব্রিফ", "brief", "স্ক্রিপ্ট", "script", "সংরক্ষণ", "সেভ করো", "save", "পাঠাচ্ছি", "পাঠাইলাম", "দিলাম", "সংগ্রহ"]):
+            return None
+
+        # GUARD 2: If query is long (> 90 chars) and not an explicit short question, it is content/brief/script
+        is_explicit_q = "?" in query or "？" in query or any(k in q for k in ["কি", "কী", "কত", "কয়টা", "কয়টা", "কেন", "কীভাবে", "কেমন", "how", "what", "which", "where", "why"])
+        if len(query.strip()) > 90 and not is_explicit_q:
+            return None
+
         # ---------------- 1. BRAND KIT & COLOR CODES ----------------
         if any(k in q for k in ["লোগোর কালার", "লোগো কালার", "ব্র্যান্ডের কালার", "কালার কোড", "color code", "hex code", "ব্র্যান্ড কালার"]):
             p_col = bkit.get("primaryColor") or "#1E40AF"
