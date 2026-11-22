@@ -1226,6 +1226,11 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       }
 
       set({
+        isSwitchingSequence: true,
+        sequenceSwitchProgress: 25,
+        sequenceSwitchMessage: isBn 
+          ? `লোড হচ্ছে: ${newManifest.sequenceName}` 
+          : `Loading sequence: ${newManifest.sequenceName}`,
         sequenceManifest: newManifest,
         sequenceChangedNotice: null
       });
@@ -1258,7 +1263,13 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       loadClientMasterData(newManifest).catch(() => {});
 
       if (loaded) {
-        // Data already populated instantly into store by applyProjectDataToStore!
+        set({
+          sequenceSwitchProgress: 100,
+          sequenceSwitchMessage: isBn ? `✓ ${newManifest.sequenceName} প্রস্তুত!` : `✓ Ready!`
+        });
+        setTimeout(() => {
+          set({ isSwitchingSequence: false });
+        }, 400);
         return;
       }
 
@@ -1315,6 +1326,14 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
             silences: prevSilences,
             reviewItems: prevReviewItems
           }).catch(() => {});
+
+          set({
+            sequenceSwitchProgress: 100,
+            sequenceSwitchMessage: isBn ? `✓ ${newManifest.sequenceName} সিঙ্ক সম্পন্ন!` : `✓ Synced!`
+          });
+          setTimeout(() => {
+            set({ isSwitchingSequence: false });
+          }, 400);
           return;
         }
       }
@@ -1939,11 +1958,18 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           const pct = Math.max(get().jobProgress, job.progress_percent || 15);
 
           if (status === 'EXTRACTING') {
-            set({ jobProgress: pct, jobMessage: 'Extracting & stitching audio from sequence clips...', jobStatus: 'EXTRACTING' });
+            set({ jobProgress: pct, jobMessage: isBn ? 'অডিও ক্লিপ প্রস্তুত করা হচ্ছে...' : 'Extracting & stitching audio from sequence clips...', jobStatus: 'EXTRACTING' });
           } else if (status === 'TRANSCRIBING') {
-            set({ jobProgress: pct, jobMessage: 'Transcribing speech with Apple Silicon MLX-Whisper...', jobStatus: 'TRANSCRIBING' });
+            const cur = get().jobProgress;
+            const nextSmooth = cur < 45 ? 45 : (cur < 64 ? cur + 1 : 64);
+            const displayPct = Math.max(pct, nextSmooth);
+            set({ 
+              jobProgress: displayPct, 
+              jobMessage: isBn ? 'Apple Silicon MLX-Whisper স্পিচ প্রসেসিং চলছে...' : 'Transcribing speech with Apple Silicon MLX-Whisper...', 
+              jobStatus: 'TRANSCRIBING' 
+            });
           } else if (status === 'ANALYZING') {
-            set({ jobProgress: pct, jobMessage: 'Analyzing voice energy, noise floor & silences...', jobStatus: 'ANALYZING' });
+            set({ jobProgress: Math.max(pct, 65), jobMessage: isBn ? 'ভয়েস এনার্জি ও সাইলেন্স বিশ্লেষণ করা হচ্ছে...' : 'Analyzing voice energy, noise floor & silences...', jobStatus: 'ANALYZING' });
           } else if (status === 'COMPLETE') {
             clearInterval(pollInterval);
             const rData = job.result;

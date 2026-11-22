@@ -135,7 +135,24 @@ class AudioExtractor:
             target_wav_path = TEMP_AUDIO_DIR / f"seq_audio_{uuid.uuid4().hex}.wav"
 
         ffmpeg_bin = cls.get_ffmpeg_path()
-        total_duration = max(0.5, float(total_duration_seconds or 0.0))
+
+        # Clamp total_duration to actual clips boundary to prevent transcribing hours of empty timeline space
+        max_clip_out = 0.0
+        if source_clips:
+            for c in source_clips:
+                out_sec = getattr(c, "outSeconds", None) if hasattr(c, "outSeconds") else (c.get("outSeconds") if isinstance(c, dict) else 0.0)
+                try:
+                    out_f = float(out_sec or 0.0)
+                    if out_f > max_clip_out:
+                        max_clip_out = out_f
+                except Exception:
+                    pass
+
+        if max_clip_out > 0.1 and float(total_duration_seconds or 0.0) > (max_clip_out + 4.0):
+            total_duration = max_clip_out + 1.5
+        else:
+            total_duration = max(0.5, float(total_duration_seconds or 0.0))
+
         sample_rate = 16000
         total_samples = int(round(total_duration * sample_rate))
 

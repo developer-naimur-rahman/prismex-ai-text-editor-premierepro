@@ -33,6 +33,7 @@ export const App: React.FC = () => {
     isSwitchingSequence,
     sequenceSwitchMessage,
     sequenceSwitchProgress,
+    sequenceManifest,
     jobProgress,
     jobMessage,
     jobStatus,
@@ -199,14 +200,14 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* Layer 1.5: Sequence Switch Transition Overlay with Real-time Progress */}
+      {/* Layer 1.5: Sequence Switch Transition Overlay with Real-time Progress & Brand Logo */}
       {isSwitchingSequence && (
         <div style={{
           position: 'fixed',
           inset: 0,
           zIndex: 9995,
-          backgroundColor: 'rgba(9, 9, 11, 0.78)',
-          backdropFilter: 'blur(5px)',
+          backgroundColor: 'rgba(9, 9, 11, 0.85)',
+          backdropFilter: 'blur(8px)',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -216,34 +217,59 @@ export const App: React.FC = () => {
           <div style={{
             backgroundColor: '#18181b',
             border: '1px solid rgba(139, 92, 246, 0.45)',
-            borderRadius: '14px',
-            padding: '20px 28px',
-            boxShadow: '0 10px 35px rgba(0, 0, 0, 0.6), 0 0 24px rgba(139, 92, 246, 0.25)',
+            borderRadius: '16px',
+            padding: '24px 32px',
+            boxShadow: '0 20px 45px rgba(0, 0, 0, 0.7), 0 0 30px rgba(139, 92, 246, 0.25)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
-            minWidth: '280px',
+            minWidth: '290px',
             maxWidth: '92%'
           }}>
+            {/* Animated Prismex Brand Logo with Glowing Spinner */}
             <div style={{
-              width: '38px',
-              height: '38px',
-              borderRadius: '10px',
-              background: 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+              width: '52px',
+              height: '52px',
+              borderRadius: '14px',
+              background: 'linear-gradient(135deg, #2563eb, #7c3aed)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              marginBottom: '12px',
-              boxShadow: '0 0 16px rgba(139, 92, 246, 0.4)'
+              marginBottom: '14px',
+              boxShadow: '0 0 24px rgba(124, 58, 237, 0.5)',
+              position: 'relative'
             }}>
-              <Loader2 size={18} className="animate-spin" color="#fff" />
+              <span style={{ fontSize: '24px', fontWeight: 900, color: '#fff', letterSpacing: '-0.5px' }}>P</span>
+              <div style={{
+                position: 'absolute',
+                inset: '-4px',
+                borderRadius: '18px',
+                border: '2px solid rgba(168, 85, 247, 0.65)',
+                borderTopColor: 'transparent',
+                animation: 'spin 1.2s linear infinite'
+              }} />
             </div>
-            <div style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', marginBottom: '6px', textAlign: 'center' }}>
-              {language === 'bn' ? 'সিকোয়েন্স পরিবর্তন হচ্ছে' : 'Switching Sequence'}
+
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#f4f4f5', marginBottom: '4px', textAlign: 'center' }}>
+              {language === 'bn' ? 'সিকোয়েন্স লোড হচ্ছে' : 'Loading Sequence'}
+            </div>
+            <div style={{ 
+              fontSize: '12px', 
+              fontWeight: 600, 
+              color: '#38bdf8', 
+              marginBottom: '8px', 
+              textAlign: 'center', 
+              maxWidth: '260px', 
+              overflow: 'hidden', 
+              textOverflow: 'ellipsis', 
+              whiteSpace: 'nowrap' 
+            }}>
+              🎬 {sequenceManifest?.sequenceName || (language === 'bn' ? 'সিকোয়েন্স নির্বাচন...' : 'Active Sequence')}
             </div>
             <div style={{ fontSize: '11px', color: '#a1a1aa', marginBottom: '14px', textAlign: 'center', minHeight: '16px' }}>
               {sequenceSwitchMessage}
             </div>
+
             {/* Progress Bar */}
             <div style={{ width: '100%', height: '5px', backgroundColor: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
               <div style={{

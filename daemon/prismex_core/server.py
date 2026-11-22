@@ -452,13 +452,48 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
                 "method": "job.progress",
                 "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": 45.0, "message": f"Transcribing speech with Apple Silicon MLX-Whisper ({req.whisperModel or 'base'})..."}
             })
-            transcript_data = await asyncio.to_thread(
-                TranscriptionService.transcribe,
-                extracted_wav,
-                max(0.1, req.durationSeconds),
-                model_name=req.whisperModel or "base",
-                language=req.whisperLanguage or "auto"
-            )
+
+            # Smooth progressive ticker so user sees real-time progress instead of staying stuck at 45%
+            stop_ticker = asyncio.Event()
+            async def _smooth_transcribe_ticker():
+                smooth_steps = [
+                    (48.0, "ভয়েস ওয়েভফর্ম বিশ্লেষণ ও স্পিচ চ্যাঙ্ক প্রসেসিং... (Processing audio chunks...)"),
+                    (52.0, "Apple Silicon নিউরাল ইঞ্জিনে মডেল রান হচ্ছে... (Running MLX-Whisper...)"),
+                    (55.0, "শব্দের নির্ভুল উচ্চারণ ও টোকেন সনাক্ত করা হচ্ছে... (Detecting speech tokens...)"),
+                    (58.0, "প্রতিটি শব্দের মিলিসেকেন্ড টাইমকোড তৈরি হচ্ছে... (Generating word timestamps...)"),
+                    (61.0, "বাক্য ও ডায়ালগ স্ট্রাকচার গঠন করা হচ্ছে... (Structuring sentences...)"),
+                    (63.0, "ট্রান্সক্রিপশন যাচাই ও চূড়ান্ত করা হচ্ছে... (Finalizing transcript...)"),
+                ]
+                for pct, msg in smooth_steps:
+                    try:
+                        await asyncio.wait_for(stop_ticker.wait(), timeout=2.5)
+                        break
+                    except asyncio.TimeoutError:
+                        db.save_job({
+                            "id": job_id,
+                            "sequence_id": req.sequenceGuid,
+                            "job_type": "MAGIC_ROUGH_CUT",
+                            "status": "TRANSCRIBING",
+                            "progress_percent": pct
+                        })
+                        await ws_manager.broadcast({
+                            "jsonrpc": "2.0",
+                            "method": "job.progress",
+                            "params": {"jobId": job_id, "stage": "TRANSCRIBING", "percent": pct, "message": msg}
+                        })
+
+            ticker_task = asyncio.create_task(_smooth_transcribe_ticker())
+            try:
+                transcript_data = await asyncio.to_thread(
+                    TranscriptionService.transcribe,
+                    extracted_wav,
+                    max(0.1, req.durationSeconds),
+                    model_name=req.whisperModel or "base",
+                    language=req.whisperLanguage or "auto"
+                )
+            finally:
+                stop_ticker.set()
+                ticker_task.cancel()
 
         # Stage 5 & 6: Silence Detection
         db.save_job({
