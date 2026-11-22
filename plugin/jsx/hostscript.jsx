@@ -167,6 +167,23 @@ $._prismex.getActiveSequenceManifest = function() {
             var audioTrackCount = seq.audioTracks.numTracks;
             for (var t = 0; t < audioTrackCount; t++) {
                 var track = seq.audioTracks[t];
+                var isTrackMuted = false;
+                try {
+                    if (typeof track.isMuted === "function") {
+                        isTrackMuted = track.isMuted();
+                    }
+                } catch (me) {}
+                if (isTrackMuted) {
+                    continue; // Skip muted audio tracks from speech transcription
+                }
+
+                var trackName = "";
+                try {
+                    trackName = track.name || ("A" + (t + 1));
+                } catch (tne) {
+                    trackName = "A" + (t + 1);
+                }
+
                 for (var c = 0; c < track.clips.numItems; c++) {
                     var clip = track.clips[c];
                     var mediaPath = "";
@@ -199,6 +216,20 @@ $._prismex.getActiveSequenceManifest = function() {
                         try {
                             mediaPath = decodeURI(mediaPath);
                         } catch (de) {}
+
+                        // Auto-resolve to project folder if file was moved from Downloads into project folder
+                        try {
+                            var directFile = new File(mediaPath);
+                            if (!directFile.exists || mediaPath.indexOf("/Downloads/") !== -1) {
+                                var projFolder = $._prismex.getProjectFolderPath();
+                                var bName = mediaPath.substring(Math.max(mediaPath.lastIndexOf("/"), mediaPath.lastIndexOf("\\")) + 1);
+                                var projFile = new File(projFolder + "/" + bName);
+                                if (projFile.exists) {
+                                    mediaPath = projFile.fsName;
+                                }
+                            }
+                        } catch (resErr) {}
+
                         hasValidAudioPath = true;
                     }
 
@@ -216,6 +247,7 @@ $._prismex.getActiveSequenceManifest = function() {
                     sourceClips.push({
                         mediaPath: mediaPath || "",
                         trackIndex: t + 1,
+                        trackName: trackName,
                         inSeconds: Math.max(0, isNaN(inSec) ? 0.0 : inSec),
                         outSeconds: Math.max(0, isNaN(outSec) ? 0.0 : outSec),
                         sourceInSeconds: Math.max(0, isNaN(srcInSec) ? 0.0 : srcInSec),

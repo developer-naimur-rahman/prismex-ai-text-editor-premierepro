@@ -94,13 +94,18 @@ class TranscriptionService:
 
         whisper_kwargs: Dict[str, Any] = {
             "path_or_hf_repo": repo,
-            "word_timestamps": True
+            "word_timestamps": True,
+            "condition_on_previous_text": False,
+            "hallucination_silence_threshold": 2.0,
+            "no_speech_threshold": 0.5,
+            "compression_ratio_threshold": 2.2
         }
         if language and language != "auto":
             whisper_kwargs["language"] = language
 
         # Attempt real Apple Silicon MLX-Whisper transcription when audio has signal
         if cls._has_audible_signal(audio_wav_path):
+            audio_np = None
             try:
                 import mlx_whisper
                 audio_np = cls._load_wav_as_float32(audio_wav_path)
@@ -110,15 +115,23 @@ class TranscriptionService:
                 )
                 return cls._format_whisper_result(result, sequence_duration_seconds, f"mlx-whisper-{model_name}")
             except Exception as e:
-                print(f"[TranscriptionService] MLX-Whisper {model_name} error: {e}")
+                try:
+                    import sys
+                    sys.stderr.write(f"[TranscriptionService] MLX-Whisper {model_name} error: {e}\n")
+                except Exception:
+                    pass
                 # Fallback to base model if large/medium fails
-                if repo != "mlx-community/whisper-base-mlx":
+                if repo != "mlx-community/whisper-base-mlx" and audio_np is not None:
                     try:
                         whisper_kwargs["path_or_hf_repo"] = "mlx-community/whisper-base-mlx"
                         result = mlx_whisper.transcribe(audio_np, **whisper_kwargs)
                         return cls._format_whisper_result(result, sequence_duration_seconds, "mlx-whisper-base")
                     except Exception as e2:
-                        print(f"[TranscriptionService] Base fallback error: {e2}")
+                        try:
+                            import sys
+                            sys.stderr.write(f"[TranscriptionService] Base fallback error: {e2}\n")
+                        except Exception:
+                            pass
 
         # When there is NO audio signal (silent timeline or empty audio):
         # Return clean empty transcript! NEVER return dummy sample text on real timelines!
@@ -142,10 +155,24 @@ class TranscriptionService:
         all_words: List[Dict[str, Any]] = []
 
         segments = raw_result.get("segments", [])
+        last_clean_text = ""
+        consecutive_repeat_count = 0
+
         for s_idx, seg in enumerate(segments):
             sent_text = seg.get("text", "").strip()
             if not sent_text:
                 continue
+
+            # Anti-repetition loop filter (catches Whisper hallucination loops)
+            norm_text = "".join(ch.lower() for ch in sent_text if ch.isalnum() or ch.isspace()).strip()
+            if norm_text and norm_text == last_clean_text:
+                consecutive_repeat_count += 1
+                if consecutive_repeat_count >= 1:
+                    # Drop hallucinated identical repetition loops
+                    continue
+            else:
+                last_clean_text = norm_text
+                consecutive_repeat_count = 0
 
             sent_start = float(seg.get("start", 0.0))
             sent_end = float(seg.get("end", sent_start))

@@ -594,7 +594,11 @@ async def execute_magic_rough_cut_pipeline(job_id: str, req: MagicRoughCutReques
                     "summary": summary_report,
                 }, cf, ensure_ascii=False, indent=2)
         except Exception as cache_err:
-            print(f"[execute_magic_rough_cut_pipeline] Cache save error: {cache_err}")
+            try:
+                import sys
+                sys.stderr.write(f"[execute_magic_rough_cut_pipeline] Cache save error: {cache_err}\n")
+            except Exception:
+                pass
 
         await ws_manager.broadcast({
             "jsonrpc": "2.0",

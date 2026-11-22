@@ -32,4 +32,4 @@ TEMP_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 PROJECTS_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # Default Global Database Path
-DEFAULT_DB_PATH = APP_SUPPORT_DIR / "prismex_global.db"
+DEFAULT_DB_PATH = Path(os.environ["PRISMEX_DB_PATH"]) if "PRISMEX_DB_PATH" in os.environ else (APP_SUPPORT_DIR / "prismex_global.db")

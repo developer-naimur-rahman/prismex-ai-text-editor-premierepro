@@ -382,6 +382,9 @@ export function realignWordsWithTimelineClips(words: any[], sourceClips: any[]):
         start: Number(newTimelineStart.toFixed(3)),
         end: Number(newTimelineEnd.toFixed(3))
       });
+    } else {
+      // Keep word intact so transcription words are never silently dropped or truncated
+      realignedWords.push(w);
     }
   }
 

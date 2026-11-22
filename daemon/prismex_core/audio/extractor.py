@@ -33,18 +33,65 @@ class AudioExtractor:
         except Exception:
             pass
 
-        if os.path.exists(p):
-            return p
-        
+        def _is_file_readable(check_path: str) -> bool:
+            try:
+                if os.path.exists(check_path) and os.path.isfile(check_path):
+                    with open(check_path, "rb") as tf:
+                        tf.read(32)
+                    return True
+            except Exception:
+                pass
+            return False
+
+        # 1. Direct path check
+        candidates = [p, os.path.normpath(p)]
+        if len(p) > 3 and p[0] == "/" and p[2] == ":":
+            candidates.append(p[1:])
+
+        for cand in candidates:
+            if _is_file_readable(cand):
+                return cand
+
+        # 2. Self-Healing Fallback:
+        # If the direct path cannot be read (e.g. macOS TCC permission block in ~/Downloads,
+        # or the user moved project footage into their project folder without manual relinking),
+        # search for the exact matching file in known user project directories:
+        filename = os.path.basename(p)
+        if filename:
+            search_roots = [
+                Path.home() / "Documents" / "Projects",
+                Path.home() / "Documents",
+                Path.home() / "Movies",
+            ]
+            for root_dir in search_roots:
+                if not root_dir.exists():
+                    continue
+                try:
+                    for found in root_dir.rglob(filename):
+                        found_str = str(found)
+                        if _is_file_readable(found_str):
+                            return found_str
+                except Exception:
+                    continue
+
+            # Also check for pre-rendered WAV file with the same base name (e.g. Rander/name.wav)
+            stem = Path(filename).stem
+            if stem:
+                for root_dir in search_roots:
+                    if not root_dir.exists():
+                        continue
+                    try:
+                        for found_wav in root_dir.rglob(f"{stem}.wav"):
+                            wav_str = str(found_wav)
+                            if _is_file_readable(wav_str):
+                                return wav_str
+                    except Exception:
+                        continue
+
+        # If file exists on disk but is not readable, still return norm_p as last resort
         norm_p = os.path.normpath(p)
         if os.path.exists(norm_p):
             return norm_p
-            
-        # Try stripping leading slash if on Windows (e.g. /C:/...)
-        if len(p) > 3 and p[0] == "/" and p[2] == ":":
-            win_p = p[1:]
-            if os.path.exists(win_p):
-                return win_p
 
         return None
     @staticmethod
@@ -94,14 +141,26 @@ class AudioExtractor:
         import numpy as np
 
         full_buffer = np.zeros(total_samples, dtype=np.int16)
+        occupied_mask = np.zeros(total_samples, dtype=bool)
         has_real_audio = False
+        permission_error_msg = None
 
         if ffmpeg_bin and source_clips:
-            for clip in source_clips:
+            # Sort clips by trackIndex (Track 1 / primary dialogue tracks first)
+            def _clip_sort_key(c):
+                idx = getattr(c, "trackIndex", None) if hasattr(c, "trackIndex") else (c.get("trackIndex") if isinstance(c, dict) else 1)
+                return int(idx or 1)
+
+            sorted_clips = sorted(source_clips, key=_clip_sort_key)
+
+            for clip in sorted_clips:
                 raw_media_path = getattr(clip, "mediaPath", None) or (clip.get("mediaPath") if isinstance(clip, dict) else None)
                 media_path = cls.normalize_media_path(raw_media_path)
                 if not media_path:
                     continue
+
+                track_idx = getattr(clip, "trackIndex", None) if hasattr(clip, "trackIndex") else (clip.get("trackIndex") if isinstance(clip, dict) else 1)
+                track_idx = int(track_idx or 1)
 
                 in_sec = float(getattr(clip, "inSeconds", None) if hasattr(clip, "inSeconds") else clip.get("inSeconds", 0.0))
                 out_sec = float(getattr(clip, "outSeconds", None) if hasattr(clip, "outSeconds") else clip.get("outSeconds", 0.0))
@@ -117,6 +176,7 @@ class AudioExtractor:
                     "-i", media_path,
                     "-t", str(dur),
                     "-vn",
+                    "-map", "0:a:0?",
                     "-acodec", "pcm_s16le",
                     "-ac", "1",
                     "-ar", str(sample_rate),
@@ -125,7 +185,7 @@ class AudioExtractor:
                 ]
 
                 try:
-                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+                    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
                     if res.returncode == 0 and res.stdout:
                         chunk = np.frombuffer(res.stdout, dtype=np.int16)
                         if len(chunk) > 0:
@@ -133,10 +193,39 @@ class AudioExtractor:
                             if start_sample < total_samples:
                                 end_sample = min(total_samples, start_sample + len(chunk))
                                 copy_len = end_sample - start_sample
-                                full_buffer[start_sample:end_sample] = chunk[:copy_len]
-                                has_real_audio = True
+                                chunk_slice = chunk[:copy_len]
+
+                                # If this is dialogue track (Track 1) or the space is unoccupied:
+                                if track_idx == 1:
+                                    # Primary dialogue track takes full priority
+                                    full_buffer[start_sample:end_sample] = chunk_slice
+                                    occupied_mask[start_sample:end_sample] = True
+                                    has_real_audio = True
+                                else:
+                                    # Secondary track (music/SFX/B-roll): only fill unoccupied regions,
+                                    # never overwrite Track 1 dialogue!
+                                    slice_mask = occupied_mask[start_sample:end_sample]
+                                    if not np.all(slice_mask):
+                                        unoccupied_idx = np.where(~slice_mask)[0]
+                                        full_buffer[start_sample + unoccupied_idx] = chunk_slice[unoccupied_idx]
+                                        occupied_mask[start_sample + unoccupied_idx] = True
+                                        has_real_audio = True
+                    elif res.returncode != 0:
+                        err_text = res.stderr.decode("utf-8", errors="ignore") if res.stderr else ""
+                        if "Operation not permitted" in err_text:
+                            permission_error_msg = (
+                                f"macOS Permission Block: Cannot read '{Path(media_path).name}' in Downloads. "
+                                "Please move your project folder to your Movies folder or grant Full Disk Access to Terminal in System Settings."
+                            )
                 except Exception as e:
-                    print(f"[AudioExtractor] Clip extraction failed: {e}")
+                    try:
+                        import sys
+                        sys.stderr.write(f"[AudioExtractor] Clip extraction notice: {e}\n")
+                    except Exception:
+                        pass
+
+        if not has_real_audio and permission_error_msg:
+            raise PermissionError(permission_error_msg)
 
         # Write out to target WAV file
         with wave.open(str(target_wav_path), "wb") as wav_file:
