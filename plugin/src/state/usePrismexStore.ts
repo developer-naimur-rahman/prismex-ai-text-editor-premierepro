@@ -319,21 +319,116 @@ export function rippleShiftWords(words: any[], cuts: { startSeconds: number; end
 }
 
 /**
+ * Attaches persistent sourceTime, duration, and mediaPath to transcript words by matching against timeline clips.
+ * Dialogue tracks (Track 1) take priority.
+ */
+export function attachClipMetadataToWords(rawWords: any[], clips: any[]): any[] {
+  if (!rawWords || rawWords.length === 0) return [];
+  const validClips = (clips || []).filter((c: any) => 
+    (Number(c.outSeconds || 0) - Number(c.inSeconds || 0)) > 0.02 || 
+    (Number(c.sourceOutSeconds || 0) - Number(c.sourceInSeconds || 0)) > 0.02
+  );
+  if (validClips.length === 0) return rawWords;
+
+  // Sort clips so Track 1 (dialogue) is preferred
+  const sortedClips = [...validClips].sort((a, b) => (Number(a.trackIndex || 1) - Number(b.trackIndex || 1)));
+
+  return rawWords.map((w: any) => {
+    if (w.sourceTime !== undefined && w.mediaPath && w.duration !== undefined) {
+      return w;
+    }
+    const ws = Number(w.start_seconds ?? w.start ?? 0);
+    const we = Number(w.end_seconds ?? w.end ?? (ws + 0.1));
+    const dur = Math.max(0.04, we - ws);
+    const mid = (ws + we) / 2;
+
+    let matchedClip: any = null;
+    // 1. Check if word midpoint is inside clip timeline range
+    for (const c of sortedClips) {
+      const cIn = Number(c.inSeconds ?? 0);
+      const cOut = Number(c.outSeconds ?? 0);
+      if (mid >= cIn - 0.04 && mid <= cOut + 0.04) {
+        matchedClip = c;
+        break;
+      }
+    }
+    // 2. Fallback to start boundary
+    if (!matchedClip) {
+      for (const c of sortedClips) {
+        const cIn = Number(c.inSeconds ?? 0);
+        const cOut = Number(c.outSeconds ?? 0);
+        if (ws >= cIn - 0.08 && ws <= cOut + 0.08) {
+          matchedClip = c;
+          break;
+        }
+      }
+    }
+    if (!matchedClip && sortedClips.length === 1) {
+      matchedClip = sortedClips[0];
+    }
+
+    const sourceTime = matchedClip
+      ? Math.max(0, Number(matchedClip.sourceInSeconds ?? 0) + (ws - Number(matchedClip.inSeconds ?? 0)))
+      : (w.sourceTime !== undefined ? Number(w.sourceTime) : ws);
+
+    return {
+      ...w,
+      sourceTime: Number(sourceTime.toFixed(3)),
+      duration: Number(dur.toFixed(3)),
+      mediaPath: matchedClip?.mediaPath || w.mediaPath || ''
+    };
+  });
+}
+
+/**
+ * Checks whether timeline clips have changed (split, deleted, trimmed, or moved).
+ */
+export function haveClipsChanged(oldClips: any[], newClips: any[]): boolean {
+  if (!oldClips || !newClips) return true;
+  if (oldClips.length !== newClips.length) return true;
+  for (let i = 0; i < newClips.length; i++) {
+    const oc = oldClips[i];
+    const nc = newClips[i];
+    if (!oc || !nc) return true;
+    if (Math.abs(Number(nc.inSeconds || 0) - Number(oc.inSeconds || 0)) > 0.02) return true;
+    if (Math.abs(Number(nc.outSeconds || 0) - Number(oc.outSeconds || 0)) > 0.02) return true;
+    if (Math.abs(Number(nc.sourceInSeconds || 0) - Number(oc.sourceInSeconds || 0)) > 0.02) return true;
+    if (Math.abs(Number(nc.sourceOutSeconds || 0) - Number(oc.sourceOutSeconds || 0)) > 0.02) return true;
+    if ((nc.mediaPath || '') !== (oc.mediaPath || '')) return true;
+  }
+  return false;
+}
+
+/**
  * Re-aligns transcript words with Premiere Pro timeline clips after cuts, ripple deletes, or clip movements.
- * Matches each word's persistent sourceMedia + sourceTime offset against active timeline clips.
+ * Words whose source segments were cut/deleted from the timeline are cleanly removed.
+ * Words on active clips have their timeline start/end shifted to match the new timeline position.
  */
 export function realignWordsWithTimelineClips(words: any[], sourceClips: any[]): any[] {
-  if (!words || words.length === 0 || !sourceClips || sourceClips.length === 0) return words;
+  if (!words || words.length === 0) return words;
+  if (!sourceClips || sourceClips.length === 0) return [];
 
   // Filter out invalid/empty clips
-  const validClips = sourceClips.filter((c: any) => (c.outSeconds - c.inSeconds) > 0.02 || (c.sourceOutSeconds - c.sourceInSeconds) > 0.02);
-  if (validClips.length === 0) return words;
+  const validClips = sourceClips.filter((c: any) => 
+    (Number(c.outSeconds || 0) - Number(c.inSeconds || 0)) > 0.02 || 
+    (Number(c.sourceOutSeconds || 0) - Number(c.sourceInSeconds || 0)) > 0.02
+  );
+  if (validClips.length === 0) return [];
+
+  // Ensure words have source metadata
+  const preparedWords = (words[0]?.sourceTime !== undefined && words[0]?.mediaPath)
+    ? words 
+    : attachClipMetadataToWords(words, validClips);
 
   const realignedWords: any[] = [];
 
-  for (const w of words) {
-    const wordSourceTime = w.sourceTime !== undefined ? Number(w.sourceTime) : Number(w.start_seconds ?? w.start ?? 0);
-    const wordDur = w.duration !== undefined ? Number(w.duration) : Math.max(0.04, Number(w.end_seconds ?? w.end ?? 0) - Number(w.start_seconds ?? w.start ?? 0));
+  for (const w of preparedWords) {
+    const wordSourceTime = Number(w.sourceTime ?? w.start_seconds ?? w.start ?? 0);
+    const fallbackDur = (w.end_seconds !== undefined && w.start_seconds !== undefined) 
+      ? (Number(w.end_seconds) - Number(w.start_seconds)) 
+      : 0.1;
+    const wordDur = Math.max(0.04, Number(w.duration ?? fallbackDur));
+    const wordMidSource = wordSourceTime + (wordDur / 2);
     const wordMedia = (w.mediaPath || '').trim().toLowerCase();
 
     let matchedClip: any = null;
@@ -341,24 +436,28 @@ export function realignWordsWithTimelineClips(words: any[], sourceClips: any[]):
     // 1. Try matching with mediaPath & source time range
     for (const clip of validClips) {
       const clipMedia = (clip.mediaPath || '').trim().toLowerCase();
-      const mediaMatches = !wordMedia || !clipMedia || wordMedia === clipMedia || validClips.length === 1;
+      const mediaMatches = !wordMedia || !clipMedia || 
+        wordMedia === clipMedia || 
+        wordMedia.endsWith(clipMedia) || 
+        clipMedia.endsWith(wordMedia) || 
+        validClips.length === 1;
 
       if (mediaMatches) {
         const srcIn = Number(clip.sourceInSeconds ?? 0);
         const srcOut = Number(clip.sourceOutSeconds ?? clip.outSeconds ?? 0);
-        if (wordSourceTime >= srcIn - 0.04 && wordSourceTime < srcOut + 0.04) {
+        if (wordMidSource >= srcIn - 0.03 && wordMidSource <= srcOut + 0.03) {
           matchedClip = clip;
           break;
         }
       }
     }
 
-    // 2. Fallback: match by source time range across any clip if mediaPath was missing
+    // 2. Fallback: match by source time range across any clip if mediaPath differed
     if (!matchedClip) {
       for (const clip of validClips) {
         const srcIn = Number(clip.sourceInSeconds ?? 0);
         const srcOut = Number(clip.sourceOutSeconds ?? clip.outSeconds ?? 0);
-        if (wordSourceTime >= srcIn - 0.04 && wordSourceTime < srcOut + 0.04) {
+        if (wordMidSource >= srcIn - 0.03 && wordMidSource <= srcOut + 0.03) {
           matchedClip = clip;
           break;
         }
@@ -374,23 +473,80 @@ export function realignWordsWithTimelineClips(words: any[], sourceClips: any[]):
 
       realignedWords.push({
         ...w,
-        sourceTime: wordSourceTime,
-        duration: wordDur,
+        sourceTime: Number(wordSourceTime.toFixed(3)),
+        duration: Number(wordDur.toFixed(3)),
         mediaPath: matchedClip.mediaPath || w.mediaPath,
         start_seconds: Number(newTimelineStart.toFixed(3)),
         end_seconds: Number(newTimelineEnd.toFixed(3)),
         start: Number(newTimelineStart.toFixed(3)),
         end: Number(newTimelineEnd.toFixed(3))
       });
-    } else {
-      // Keep word intact so transcription words are never silently dropped or truncated
-      realignedWords.push(w);
     }
+    // Words falling outside any active timeline clip were cut out by user and are pruned
   }
 
   // Sort strictly ascending by timeline start time
   realignedWords.sort((a, b) => a.start_seconds - b.start_seconds);
   return realignedWords;
+}
+
+/**
+ * Realigns transcript sentences with surviving words after timeline cuts.
+ */
+export function realignSentencesWithWords(sentences: any[], survivingWords: any[]): any[] {
+  if (!survivingWords || survivingWords.length === 0) return [];
+  if (!sentences || sentences.length === 0) {
+    // Reconstruct sentences from surviving words if none provided
+    const reconstructed: any[] = [];
+    let currentWords: any[] = [];
+    let sIdx = 0;
+    for (let i = 0; i < survivingWords.length; i++) {
+      const w = survivingWords[i];
+      currentWords.push(w);
+      const isEnd = /[.!?]$/.test(w.word) || (i < survivingWords.length - 1 && (survivingWords[i + 1].start_seconds - w.end_seconds > 1.2));
+      if (isEnd || i === survivingWords.length - 1) {
+        reconstructed.push({
+          id: `sent_${sIdx++}`,
+          sentence: currentWords.map(cw => cw.word).join(' '),
+          start_seconds: currentWords[0].start_seconds,
+          end_seconds: currentWords[currentWords.length - 1].end_seconds,
+          startSeconds: currentWords[0].start_seconds,
+          endSeconds: currentWords[currentWords.length - 1].end_seconds,
+          words: currentWords
+        });
+        currentWords = [];
+      }
+    }
+    return reconstructed;
+  }
+
+  const wordIdSet = new Set(survivingWords.map(w => w.id));
+  const wordMap = new Map(survivingWords.map(w => [w.id, w]));
+  const updatedSentences: any[] = [];
+
+  for (const s of sentences) {
+    const rawWords = s.words || [];
+    const remainingWords = rawWords
+      .filter((w: any) => wordIdSet.has(w.id))
+      .map((w: any) => wordMap.get(w.id) || w);
+
+    if (remainingWords.length > 0) {
+      remainingWords.sort((a: any, b: any) => a.start_seconds - b.start_seconds);
+      const firstW = remainingWords[0];
+      const lastW = remainingWords[remainingWords.length - 1];
+      updatedSentences.push({
+        ...s,
+        words: remainingWords,
+        start_seconds: firstW.start_seconds,
+        end_seconds: lastW.end_seconds,
+        startSeconds: firstW.start_seconds,
+        endSeconds: lastW.end_seconds,
+        sentence: remainingWords.map((w: any) => w.word).join(' ')
+      });
+    }
+  }
+
+  return updatedSentences;
 }
 
 export interface PrismexProjectSavePayload {
@@ -524,6 +680,38 @@ export async function loadClientMasterData(manifest?: any): Promise<boolean> {
   return false;
 }
 
+export const sequenceMemoryCache = new Map<string, PrismexProjectSavePayload>();
+
+export function applyProjectDataToStore(parsed: PrismexProjectSavePayload, msg: string = 'Ready') {
+  usePrismexStore.setState({
+    transcriptWords: parsed.words || [],
+    transcriptSentences: parsed.sentences || [],
+    detectedSilences: parsed.silences || [],
+    reviewItems: parsed.reviewItems || [],
+    scriptDirectives: parsed.scriptDirectives || {},
+    customMarkers: parsed.customMarkers || [],
+    viralTopics: parsed.viralTopics || [],
+    viralShorts: parsed.viralShorts || [],
+    srtCues: parsed.srtCues || [],
+    audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
+    detectedSfxCues: parsed.detectedSfxCues || [],
+    soundDesignTips: parsed.soundDesignTips || [],
+    recommendedBgmData: parsed.recommendedBgmData || null,
+    clientScriptText: parsed.clientScriptText || usePrismexStore.getState().clientScriptText || '',
+    clientBriefText: parsed.clientBriefText || usePrismexStore.getState().clientBriefText || '',
+    scriptAuditReport: parsed.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
+    brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
+    editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
+    clientRevisions: parsed.clientRevisions || [],
+    clientDossier: parsed.clientDossier || usePrismexStore.getState().clientDossier || null,
+    jobStatus: 'COMPLETE',
+    jobProgress: 100,
+    jobMessage: msg,
+    isSwitchingSequence: false,
+    sequenceSwitchProgress: 100
+  });
+}
+
 export async function persistProjectData(
   manifest: any,
   data: PrismexProjectSavePayload
@@ -531,62 +719,77 @@ export async function persistProjectData(
   if (!manifest) return;
   const cleanKey = getCleanSequenceKey(manifest.cleanSequenceName || manifest.sequenceName);
   const projId = manifest.premiereProjectId || 'current_project';
+  const seqGuid = manifest.sequenceGuid;
+  const seqName = manifest.sequenceName;
+
+  // Tier 0: In-Memory RAM Cache (Instant 0ms retrieval)
+  if (cleanKey) sequenceMemoryCache.set(cleanKey, data);
+  if (seqGuid) sequenceMemoryCache.set(seqGuid, data);
+  if (seqName) sequenceMemoryCache.set(seqName, data);
+
   const jsonStr = JSON.stringify(data);
 
-  // 1. ExtendScript Project Folder Cache (.prismex_cache/<key>.json)
-  try {
-    await hostBridge.saveProjectCache(cleanKey, jsonStr);
-  } catch {}
-
-  // 2. Local Daemon Persistent Storage (~/.prismex/project_cache)
-  try {
-    await client.saveProjectCache(projId, cleanKey, data);
-  } catch {}
-
-  // 3. Browser / CEP LocalStorage fallback
+  // Tier 1: LocalStorage (Instant synchronous)
   if (typeof window !== 'undefined') {
     try {
       localStorage.setItem(`prismex_proj_${cleanKey}`, jsonStr);
+      if (seqGuid) localStorage.setItem(`prismex_proj_${seqGuid}`, jsonStr);
+      if (seqName) localStorage.setItem(`prismex_proj_${seqName}`, jsonStr);
     } catch {}
   }
+
+  // Tier 2: ExtendScript Project Folder Cache (Async in background, non-blocking)
+  hostBridge.saveProjectCache(cleanKey, jsonStr).catch(() => {});
+
+  // Tier 3: Local Daemon Persistent Storage (Async in background, non-blocking)
+  client.saveProjectCache(projId, cleanKey, data).catch(() => {});
 }
 
 export async function loadPersistedProjectData(manifest: any): Promise<boolean> {
   if (!manifest) return false;
   const cleanKey = getCleanSequenceKey(manifest.cleanSequenceName || manifest.sequenceName);
   const projId = manifest.premiereProjectId || 'current_project';
+  const seqGuid = manifest.sequenceGuid;
+  const seqName = manifest.sequenceName;
 
-  // Tier 1: Check ExtendScript Project Folder Cache
+  // Tier 0: Check In-Memory RAM Cache (Instant 0ms)
+  const memData = sequenceMemoryCache.get(cleanKey) || 
+                  (seqGuid ? sequenceMemoryCache.get(seqGuid) : null) || 
+                  (seqName ? sequenceMemoryCache.get(seqName) : null);
+  if (memData && memData.words && memData.words.length > 0) {
+    applyProjectDataToStore(memData, 'Loaded instantly from memory');
+    return true;
+  }
+
+  // Tier 1: Check LocalStorage (Instant synchronous 0.05ms)
+  if (typeof window !== 'undefined') {
+    try {
+      const localStr = localStorage.getItem(`prismex_proj_${cleanKey}`) || 
+                       (seqGuid ? localStorage.getItem(`prismex_proj_${seqGuid}`) : null) ||
+                       (seqName ? localStorage.getItem(`prismex_proj_${seqName}`) : null);
+      if (localStr) {
+        const parsed: PrismexProjectSavePayload = JSON.parse(localStr);
+        if (parsed.words && parsed.words.length > 0) {
+          if (cleanKey) sequenceMemoryCache.set(cleanKey, parsed);
+          if (seqGuid) sequenceMemoryCache.set(seqGuid, parsed);
+          if (seqName) sequenceMemoryCache.set(seqName, parsed);
+          applyProjectDataToStore(parsed, 'Loaded instantly from local storage');
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  // Tier 2: Check ExtendScript Project Folder Cache
   try {
     const extRes = await hostBridge.loadProjectCache(cleanKey);
     if (extRes.found && extRes.content) {
       const parsed: PrismexProjectSavePayload = JSON.parse(extRes.content);
       if (parsed.words && parsed.words.length > 0) {
-        usePrismexStore.setState({
-          transcriptWords: parsed.words,
-          transcriptSentences: parsed.sentences || [],
-          detectedSilences: parsed.silences || [],
-          reviewItems: parsed.reviewItems || [],
-          scriptDirectives: parsed.scriptDirectives || {},
-          customMarkers: parsed.customMarkers || [],
-          viralTopics: parsed.viralTopics || [],
-          viralShorts: parsed.viralShorts || [],
-          srtCues: parsed.srtCues || [],
-          audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
-          detectedSfxCues: parsed.detectedSfxCues || [],
-          soundDesignTips: parsed.soundDesignTips || [],
-          recommendedBgmData: parsed.recommendedBgmData || null,
-          clientScriptText: parsed.clientScriptText || usePrismexStore.getState().clientScriptText || '',
-          clientBriefText: parsed.clientBriefText || usePrismexStore.getState().clientBriefText || '',
-          scriptAuditReport: parsed.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
-          brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
-          editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
-          clientRevisions: parsed.clientRevisions || [],
-          clientDossier: parsed.clientDossier || usePrismexStore.getState().clientDossier || null,
-          jobStatus: 'COMPLETE',
-          jobProgress: 100,
-          jobMessage: 'Loaded from project cache'
-        });
+        if (cleanKey) sequenceMemoryCache.set(cleanKey, parsed);
+        if (seqGuid) sequenceMemoryCache.set(seqGuid, parsed);
+        if (seqName) sequenceMemoryCache.set(seqName, parsed);
+        applyProjectDataToStore(parsed, 'Loaded from project cache');
         return true;
       }
     }
@@ -594,76 +797,18 @@ export async function loadPersistedProjectData(manifest: any): Promise<boolean> 
     console.warn('ExtendScript cache load error:', e);
   }
 
-  // Tier 2: Check Local Daemon Persistent Cache
+  // Tier 3: Check Local Daemon Persistent Cache
   try {
     const daemonData = await client.getProjectCache(projId, cleanKey);
     if (daemonData && daemonData.words && daemonData.words.length > 0) {
-      usePrismexStore.setState({
-        transcriptWords: daemonData.words,
-        transcriptSentences: daemonData.sentences || [],
-        detectedSilences: daemonData.silences || [],
-        reviewItems: daemonData.reviewItems || [],
-        scriptDirectives: daemonData.scriptDirectives || {},
-        customMarkers: daemonData.customMarkers || [],
-        viralTopics: daemonData.viralTopics || [],
-        viralShorts: daemonData.viralShorts || [],
-        srtCues: daemonData.srtCues || [],
-        audioSettings: daemonData.audioSettings || usePrismexStore.getState().audioSettings,
-        detectedSfxCues: daemonData.detectedSfxCues || [],
-        soundDesignTips: daemonData.soundDesignTips || [],
-        recommendedBgmData: daemonData.recommendedBgmData || null,
-        clientScriptText: daemonData.clientScriptText || usePrismexStore.getState().clientScriptText || '',
-        clientBriefText: daemonData.clientBriefText || usePrismexStore.getState().clientBriefText || '',
-        scriptAuditReport: daemonData.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
-        brandKit: daemonData.brandKit || usePrismexStore.getState().brandKit,
-        editingRoadmap: (daemonData.editingRoadmap && daemonData.editingRoadmap.length > 0) ? daemonData.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
-        clientRevisions: daemonData.clientRevisions || [],
-        clientDossier: daemonData.clientDossier || usePrismexStore.getState().clientDossier || null,
-        jobStatus: 'COMPLETE',
-        jobProgress: 100,
-        jobMessage: 'Loaded from daemon project cache'
-      });
+      if (cleanKey) sequenceMemoryCache.set(cleanKey, daemonData);
+      if (seqGuid) sequenceMemoryCache.set(seqGuid, daemonData);
+      if (seqName) sequenceMemoryCache.set(seqName, daemonData);
+      applyProjectDataToStore(daemonData, 'Loaded from daemon project cache');
       return true;
     }
   } catch (e) {
     console.warn('Daemon cache load error:', e);
-  }
-
-  // Tier 3: Check LocalStorage
-  if (typeof window !== 'undefined') {
-    try {
-      const localStr = localStorage.getItem(`prismex_proj_${cleanKey}`);
-      if (localStr) {
-        const parsed: PrismexProjectSavePayload = JSON.parse(localStr);
-        if (parsed.words && parsed.words.length > 0) {
-          usePrismexStore.setState({
-            transcriptWords: parsed.words,
-            transcriptSentences: parsed.sentences || [],
-            detectedSilences: parsed.silences || [],
-            reviewItems: parsed.reviewItems || [],
-            scriptDirectives: parsed.scriptDirectives || {},
-            customMarkers: parsed.customMarkers || [],
-            viralTopics: parsed.viralTopics || [],
-            viralShorts: parsed.viralShorts || [],
-            srtCues: parsed.srtCues || [],
-            audioSettings: parsed.audioSettings || usePrismexStore.getState().audioSettings,
-            detectedSfxCues: parsed.detectedSfxCues || [],
-            soundDesignTips: parsed.soundDesignTips || [],
-            recommendedBgmData: parsed.recommendedBgmData || null,
-            clientScriptText: parsed.clientScriptText || usePrismexStore.getState().clientScriptText || '',
-            clientBriefText: parsed.clientBriefText || usePrismexStore.getState().clientBriefText || '',
-            scriptAuditReport: parsed.scriptAuditReport || usePrismexStore.getState().scriptAuditReport || [],
-            brandKit: parsed.brandKit || usePrismexStore.getState().brandKit,
-            editingRoadmap: (parsed.editingRoadmap && parsed.editingRoadmap.length > 0) ? parsed.editingRoadmap : usePrismexStore.getState().editingRoadmap || [],
-            clientRevisions: parsed.clientRevisions || [],
-            clientDossier: parsed.clientDossier || usePrismexStore.getState().clientDossier || null,
-            jobStatus: 'COMPLETE',
-            jobProgress: 100
-          });
-          return true;
-        }
-      }
-    } catch {}
   }
 
   return false;
@@ -955,15 +1100,25 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
     }
   },
 
-  checkSequenceChange: async () => {
+  checkSequenceChange: async (force?: boolean) => {
     // Never interrupt an active transcription
     if (get().jobStatus === 'TRANSCRIBING' || (get().jobProgress > 0 && get().jobProgress < 100)) {
       return;
     }
 
+    let sig = '';
     try {
-      lastSequenceSignature = await hostBridge.getActiveSequenceSignature();
+      sig = await hostBridge.getActiveSequenceSignature();
     } catch {}
+
+    // FAST-PATH: If signature has not changed and manifest is already loaded, exit in 0ms!
+    if (!force && sig && sig !== 'none' && sig === lastSequenceSignature && get().sequenceManifest) {
+      return;
+    }
+
+    if (sig && sig !== 'none') {
+      lastSequenceSignature = sig;
+    }
 
     const newManifest = await hostBridge.getActiveSequenceManifest();
     const currentSeq = get().sequenceManifest;
@@ -979,7 +1134,6 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
     if (isDifferentSeq) {
       const isBn = get().language === 'bn';
-      const seqDisplay = newManifest.cleanSequenceName || newManifest.sequenceName;
 
       // 1. AUTO-SAVE PREVIOUS SEQUENCE:
       // If user had a sequence open with transcript data, save it immediately before switching!
@@ -1005,139 +1159,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       const prevClientDossier = get().clientDossier;
 
       if (currentSeq && prevWords && prevWords.length > 0) {
-        try {
-          await persistProjectData(currentSeq, {
-            words: prevWords,
-            sentences: prevSentences,
-            silences: prevSilences,
-            reviewItems: prevReviewItems,
-            scriptDirectives: prevScriptDirectives,
-            customMarkers: prevCustomMarkers,
-            viralTopics: prevViralTopics,
-            viralShorts: prevViralShorts,
-            srtCues: prevSrtCues,
-            audioSettings: prevAudioSettings,
-            detectedSfxCues: prevDetectedSfxCues,
-            soundDesignTips: prevSoundDesignTips,
-            recommendedBgmData: prevRecommendedBgmData,
-            clientScriptText: prevClientScriptText,
-            clientBriefText: prevClientBriefText,
-            scriptAuditReport: prevScriptAuditReport,
-            brandKit: prevBrandKit,
-            editingRoadmap: prevEditingRoadmap,
-            clientRevisions: prevClientRevisions,
-            clientDossier: prevClientDossier
-          });
-        } catch (savePrevErr) {
-          console.warn('Failed to auto-save previous sequence data before switch:', savePrevErr);
-        }
-      }
-
-      // 2. Immediately show smooth sequence transition overlay & progress
-      set({
-        isSwitchingSequence: true,
-        sequenceSwitchProgress: 25,
-        sequenceSwitchMessage: isBn ? `নতুন সিকোয়েন্স সনাক্ত হয়েছে: ${seqDisplay}...` : `Switched sequence: ${seqDisplay}...`,
-        sequenceManifest: newManifest,
-        sequenceChangedNotice: null
-      });
-
-      // Small async tick so React renders the transition overlay smoothly
-      await new Promise((r) => setTimeout(r, 70));
-
-      const hasClips = Boolean(newManifest.sourceClips && newManifest.sourceClips.length > 0 && newManifest.durationSeconds > 0.1);
-      if (!hasClips) {
-        set({
-          transcriptWords: [],
-          transcriptSentences: [],
-          detectedSilences: [],
-          reviewItems: [],
-          scriptDirectives: {},
-          customMarkers: [],
-          viralTopics: [],
-          viralShorts: [],
-          srtCues: [],
-          jobStatus: 'INITIALIZING',
-          jobProgress: 0,
-          jobMessage: isBn ? 'টাইমলাইন ফাঁকা' : 'Timeline is empty',
-          sequenceSwitchProgress: 100,
-          sequenceSwitchMessage: isBn ? 'টাইমলাইন ফাঁকা' : 'Timeline is empty'
-        });
-        await clearPersistedProjectData(newManifest);
-        setTimeout(() => set({ isSwitchingSequence: false }), 400);
-        return;
-      }
-
-      set({
-        sequenceSwitchProgress: 55,
-        sequenceSwitchMessage: isBn ? 'সংরক্ষিত ট্রান্সক্রিপ্ট ও প্রজেক্ট ক্যাশ স্ক্যান হচ্ছে...' : 'Scanning project cache & saved transcripts...'
-      });
-
-      // 3. Check if cache exists for this sequence (Returning to a previously saved sequence!)
-      const loaded = await loadPersistedProjectData(newManifest);
-      // Guarantee Project Master Client Data (Dossier, Brand Kit, Brief) is active across all sequences
-      await loadClientMasterData(newManifest);
-
-      if (loaded) {
-        set({
-          sequenceSwitchProgress: 88,
-          sequenceSwitchMessage: isBn ? 'পূর্বের সিকোয়েন্সের সংরক্ষিত ডাটা সফলভাবে রিস্টোর হয়েছে!' : 'Restored saved sequence transcript & data!'
-        });
-        await new Promise((r) => setTimeout(r, 120));
-        set({
-          sequenceSwitchProgress: 100,
-          sequenceSwitchMessage: isBn ? 'প্রস্তুত!' : 'Ready!'
-        });
-        setTimeout(() => set({ isSwitchingSequence: false }), 350);
-        return;
-      }
-
-      // 4. SMART INHERITANCE:
-      // If sequence has no cache yet, but is derived/cloned from previous sequence
-      // (e.g. 1:1 Square, 9:16 Shorts, RoughCut, Duplicate Copy, or shares source clips):
-      const isDerivative = Boolean(
-        currentSeq &&
-        prevWords && prevWords.length > 0 &&
-        (
-          newManifest.sequenceName.toLowerCase().includes(currentSeq.sequenceName.toLowerCase()) ||
-          currentSeq.sequenceName.toLowerCase().includes(newManifest.sequenceName.toLowerCase()) ||
-          /(?:copy|1:1|9:16|16:9|4:5|4:3|roughcut|shorts|reels|cut|format)/i.test(newManifest.sequenceName) ||
-          (newManifest.sourceClips && currentSeq.sourceClips &&
-           newManifest.sourceClips.some((c: any) => currentSeq.sourceClips.some((sc: any) => sc.mediaPath === c.mediaPath || sc.name === c.name)))
-        )
-      );
-
-      if (isDerivative) {
-        set({
-          sequenceSwitchProgress: 90,
-          sequenceSwitchMessage: isBn ? 'মূল সিকোয়েন্স থেকে ট্রান্সক্রিপ্ট সিঙ্ক করা হয়েছে...' : 'Inherited transcript from source sequence...',
-          transcriptWords: prevWords,
-          transcriptSentences: prevSentences,
-          detectedSilences: prevSilences,
-          reviewItems: prevReviewItems,
-          scriptDirectives: prevScriptDirectives,
-          customMarkers: prevCustomMarkers,
-          viralTopics: prevViralTopics,
-          viralShorts: prevViralShorts,
-          srtCues: prevSrtCues,
-          audioSettings: prevAudioSettings,
-          detectedSfxCues: prevDetectedSfxCues,
-          soundDesignTips: prevSoundDesignTips,
-          recommendedBgmData: prevRecommendedBgmData,
-          clientScriptText: prevClientScriptText,
-          clientBriefText: prevClientBriefText,
-          scriptAuditReport: prevScriptAuditReport,
-          brandKit: prevBrandKit,
-          editingRoadmap: prevEditingRoadmap,
-          clientRevisions: prevClientRevisions,
-          clientDossier: prevClientDossier,
-          jobStatus: 'COMPLETE',
-          jobProgress: 100,
-          jobMessage: isBn ? 'সিকোয়েন্স প্রস্তুত (সিঙ্কড)' : 'Sequence ready (Synced)'
-        });
-
-        // Immediately persist for the new sequence so it has its own independent cache from now on!
-        await persistProjectData(newManifest, {
+        persistProjectData(currentSeq, {
           words: prevWords,
           sentences: prevSentences,
           silences: prevSilences,
@@ -1158,14 +1180,96 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
           editingRoadmap: prevEditingRoadmap,
           clientRevisions: prevClientRevisions,
           clientDossier: prevClientDossier
-        });
+        }).catch(() => {});
+      }
 
-        setTimeout(() => set({ isSwitchingSequence: false }), 350);
+      set({
+        sequenceManifest: newManifest,
+        sequenceChangedNotice: null
+      });
+
+      const hasClips = Boolean(newManifest.sourceClips && newManifest.sourceClips.length > 0 && newManifest.durationSeconds > 0.1);
+      if (!hasClips) {
+        set({
+          transcriptWords: [],
+          transcriptSentences: [],
+          detectedSilences: [],
+          reviewItems: [],
+          scriptDirectives: {},
+          customMarkers: [],
+          viralTopics: [],
+          viralShorts: [],
+          srtCues: [],
+          jobStatus: 'INITIALIZING',
+          jobProgress: 0,
+          jobMessage: isBn ? 'টাইমলাইন ফাঁকা' : 'Timeline is empty',
+          isSwitchingSequence: false,
+          sequenceSwitchProgress: 100,
+          sequenceSwitchMessage: isBn ? 'টাইমলাইন ফাঁকা' : 'Timeline is empty'
+        });
+        clearPersistedProjectData(newManifest).catch(() => {});
         return;
       }
 
-      // 5. Truly Brand New / Unrelated Sequence:
-      // Clear previous sequence transcript cleanly while keeping Client Master Dossier & Brand Kit 100% intact
+      // 2. CHECK CACHE (INSTANT ZERO DELAY RESTORATION):
+      const loaded = await loadPersistedProjectData(newManifest);
+      loadClientMasterData(newManifest).catch(() => {});
+
+      if (loaded) {
+        // Data already populated instantly into store by applyProjectDataToStore!
+        return;
+      }
+
+      // 3. SMART INHERITANCE:
+      // If sequence has no cache yet, but is derived/cloned from previous sequence
+      const isDerivative = Boolean(
+        currentSeq &&
+        prevWords && prevWords.length > 0 &&
+        (
+          newManifest.sequenceName.toLowerCase().includes(currentSeq.sequenceName.toLowerCase()) ||
+          currentSeq.sequenceName.toLowerCase().includes(newManifest.sequenceName.toLowerCase()) ||
+          /(?:copy|1:1|9:16|16:9|4:5|4:3|roughcut|shorts|reels|cut|format)/i.test(newManifest.sequenceName) ||
+          (newManifest.sourceClips && currentSeq.sourceClips &&
+           newManifest.sourceClips.some((c: any) => currentSeq.sourceClips.some((sc: any) => sc.mediaPath === c.mediaPath || sc.name === c.name)))
+        )
+      );
+
+      if (isDerivative) {
+        const alignedWords = realignWordsWithTimelineClips(prevWords, newManifest.sourceClips || []);
+        const alignedSentences = realignSentencesWithWords(prevSentences, alignedWords);
+        applyProjectDataToStore({
+          words: alignedWords,
+          sentences: alignedSentences,
+          silences: prevSilences,
+          reviewItems: prevReviewItems,
+          scriptDirectives: prevScriptDirectives,
+          customMarkers: prevCustomMarkers,
+          viralTopics: prevViralTopics,
+          viralShorts: prevViralShorts,
+          srtCues: prevSrtCues,
+          audioSettings: prevAudioSettings,
+          detectedSfxCues: prevDetectedSfxCues,
+          soundDesignTips: prevSoundDesignTips,
+          recommendedBgmData: prevRecommendedBgmData,
+          clientScriptText: prevClientScriptText,
+          clientBriefText: prevClientBriefText,
+          scriptAuditReport: prevScriptAuditReport,
+          brandKit: prevBrandKit,
+          editingRoadmap: prevEditingRoadmap,
+          clientRevisions: prevClientRevisions,
+          clientDossier: prevClientDossier
+        }, isBn ? 'সিকোয়েন্স প্রস্তুত (সিঙ্কড)' : 'Sequence ready (Synced)');
+
+        persistProjectData(newManifest, {
+          words: alignedWords,
+          sentences: alignedSentences,
+          silences: prevSilences,
+          reviewItems: prevReviewItems
+        }).catch(() => {});
+        return;
+      }
+
+      // 4. Truly Brand New / Unrelated Sequence:
       set({
         transcriptWords: [],
         transcriptSentences: [],
@@ -1180,10 +1284,10 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         jobStatus: 'INITIALIZING',
         jobProgress: 0,
         jobMessage: isBn ? 'নতুন সিকোয়েন্স সনাক্ত হয়েছে' : 'New sequence detected',
+        isSwitchingSequence: false,
         sequenceSwitchProgress: 100,
         sequenceSwitchMessage: isBn ? 'নতুন সিকোয়েন্স প্রস্তুত' : 'Ready'
       });
-      setTimeout(() => set({ isSwitchingSequence: false }), 350);
 
       // Auto-transcribe if enabled and sequence has audio clips / duration
       if (hasClips && get().autoTranscribeNewSequences) {
@@ -1213,7 +1317,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
             sequenceChangedNotice: null,
             jobMessage: 'Timeline is empty'
           });
-          await clearPersistedProjectData(newManifest);
+          clearPersistedProjectData(newManifest).catch(() => {});
         }
         return;
       }
@@ -1225,30 +1329,29 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
       }
 
       // CASE 3: Timeline clips or cuts changed (clips split, deleted, ripple-edited, trimmed or moved)
-      const oldClipsCount = (currentSeq?.sourceClips || []).length;
-      const newClipsCount = (newManifest.sourceClips || []).length;
-      const oldDur = currentSeq?.durationSeconds || 0;
-      const newDur = newManifest.durationSeconds || 0;
+      const oldClips = currentSeq?.sourceClips || [];
+      const newClips = newManifest.sourceClips || [];
+      const clipsChanged = haveClipsChanged(oldClips, newClips);
 
-      if (get().transcriptWords.length > 0) {
-        if (newClipsCount !== oldClipsCount || Math.abs(newDur - oldDur) > 0.05) {
-          // Instantly re-align all words against new timeline clips without expensive re-transcribe!
-          const realigned = realignWordsWithTimelineClips(get().transcriptWords, newManifest.sourceClips || []);
-          if (realigned.length > 0) {
-            set({
-              transcriptWords: realigned,
-              sequenceChangedNotice: null
-            });
-            await persistProjectData(newManifest, {
-              words: realigned,
-              sentences: get().transcriptSentences,
-              silences: get().detectedSilences,
-              reviewItems: get().reviewItems
-            });
-          } else {
-            set({ sequenceChangedNotice: `${Math.round(newDur)}s` });
-          }
-        }
+      if (get().transcriptWords.length > 0 && clipsChanged) {
+        // Instantly re-align all words against new timeline clips without expensive re-transcribe!
+        // Cut/deleted parts are automatically removed from transcript words and sentences!
+        const realigned = realignWordsWithTimelineClips(get().transcriptWords, newClips);
+        const updatedSentences = realignSentencesWithWords(get().transcriptSentences, realigned);
+
+        set({
+          transcriptWords: realigned,
+          transcriptSentences: updatedSentences,
+          sequenceChangedNotice: null
+        });
+
+        // Persist immediately to memory cache and storage
+        persistProjectData(newManifest, {
+          words: realigned,
+          sentences: updatedSentences,
+          silences: get().detectedSilences,
+          reviewItems: get().reviewItems
+        }).catch(() => {});
       }
     }
   },
@@ -1565,21 +1668,22 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
         });
       } else if (event.method === 'job.completed') {
         const { jobId, executionMode, cuts, words, sentences, silences } = event.params;
+        const seq = get().sequenceManifest;
+        const attachedWords = attachClipMetadataToWords(words || [], seq?.sourceClips || []);
         set({
           globalBusyAction: null,
           jobProgress: 100,
           jobMessage: get().language === 'bn' ? 'ট্রান্সক্রিপশন ও অ্যানালাইসিস সম্পন্ন!' : 'Transcription & analysis complete!',
           jobStatus: 'COMPLETE',
-          transcriptWords: words || [],
+          transcriptWords: attachedWords,
           transcriptSentences: sentences || [],
           detectedSilences: silences || []
         });
         get().showToast(get().language === 'bn' ? '✓ কাজ সফলভাবে সম্পন্ন হয়েছে!' : '✓ Operation completed successfully!', 'success');
 
-        const seq = get().sequenceManifest;
         if (seq) {
           persistProjectData(seq, {
-            words: words || [],
+            words: attachedWords,
             sentences: sentences || [],
             silences: silences || [],
             reviewItems: get().reviewItems
@@ -1790,29 +1894,7 @@ export const usePrismexStore = create<PrismexState>((set, get) => ({
 
             // Tag each word with persistent sourceTime, duration, and mediaPath for instant timeline sync
             const currentSeq = get().sequenceManifest;
-            const clips = currentSeq?.sourceClips || [];
-
-            const words = rawWords.map((w: any) => {
-              const ws = Number(w.start_seconds ?? w.start ?? 0);
-              const we = Number(w.end_seconds ?? w.end ?? 0);
-              const dur = Math.max(0.04, we - ws);
-              let matchedClip: any = null;
-              for (const c of clips) {
-                if (ws >= c.inSeconds - 0.05 && ws <= c.outSeconds + 0.05) {
-                  matchedClip = c;
-                  break;
-                }
-              }
-              const sourceTime = matchedClip
-                ? Math.max(0, Number(matchedClip.sourceInSeconds ?? 0) + (ws - Number(matchedClip.inSeconds ?? 0)))
-                : (w.sourceTime !== undefined ? Number(w.sourceTime) : ws);
-              return {
-                ...w,
-                sourceTime: Number(sourceTime.toFixed(3)),
-                duration: Number(dur.toFixed(3)),
-                mediaPath: matchedClip?.mediaPath || w.mediaPath || ''
-              };
-            });
+            const words = attachClipMetadataToWords(rawWords, currentSeq?.sourceClips || []);
 
             set({
               jobProgress: 100,
