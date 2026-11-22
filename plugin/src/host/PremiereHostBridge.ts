@@ -156,7 +156,7 @@ export class PremiereHostBridge {
     });
   }
 
-  public static readonly CURRENT_SCRIPT_BUILD = '2026111905';
+  public static readonly CURRENT_SCRIPT_BUILD = '2026112204';
 
   private isScriptLoading: boolean = false;
   private evalQueue: Array<{ script: string; timeoutMs: number; resolve: (val: string) => void }> = [];
@@ -214,7 +214,7 @@ export class PremiereHostBridge {
       // Check whether current running ExtendScript has the latest build
       if (!force) {
         const checkRes = await this.evalScript(
-          'Boolean(typeof $._prismex !== "undefined" && $._prismex.SCRIPT_BUILD === 2026111905 && typeof $._prismex.changeSequenceAspectRatio === "function")',
+          'Boolean(typeof $._prismex !== "undefined" && $._prismex.SCRIPT_BUILD === 2026112204 && typeof $._prismex.changeSequenceAspectRatio === "function")',
           3000
         );
         if (checkRes === 'true') {

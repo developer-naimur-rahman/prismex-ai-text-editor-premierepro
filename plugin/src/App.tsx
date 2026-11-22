@@ -52,7 +52,7 @@ export const App: React.FC = () => {
     // Auto-detect sequence changes when editing in Premiere
     const seqInterval = setInterval(() => {
       usePrismexStore.getState().checkSequenceChange();
-    }, 2500);
+    }, 800);
 
     // Reliable Ctrl+V / Cmd+V Paste anywhere in inputs & textareas
     const handlePaste = (e: KeyboardEvent) => {

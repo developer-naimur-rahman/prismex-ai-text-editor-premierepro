@@ -6,6 +6,7 @@ Extracts 16kHz mono 16-bit WAV from source media with ephemeral file lifecycle.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import urllib.parse
@@ -153,10 +154,27 @@ class AudioExtractor:
 
             sorted_clips = sorted(source_clips, key=_clip_sort_key)
 
+            SFX_BGM_PATTERN = re.compile(
+                r'(sfx|swoosh|click|pop|transition|beep|trailer|sound[-_ ]effects|music|bgm|bombinsound|ui_|hud|counting|whoosh|riser|hit|impact|drop|noise|keyboard|typing)',
+                re.I
+            )
+
             for clip in sorted_clips:
                 raw_media_path = getattr(clip, "mediaPath", None) or (clip.get("mediaPath") if isinstance(clip, dict) else None)
                 media_path = cls.normalize_media_path(raw_media_path)
                 if not media_path:
+                    continue
+
+                fn = os.path.basename(media_path)
+                track_name = str(getattr(clip, "trackName", None) or (clip.get("trackName") if isinstance(clip, dict) else "")).lower()
+                is_sfx_or_bgm = bool(
+                    SFX_BGM_PATTERN.search(fn) or 
+                    SFX_BGM_PATTERN.search(media_path) or 
+                    "sfx" in track_name or 
+                    "music" in track_name or 
+                    "bgm" in track_name
+                )
+                if is_sfx_or_bgm:
                     continue
 
                 track_idx = getattr(clip, "trackIndex", None) if hasattr(clip, "trackIndex") else (clip.get("trackIndex") if isinstance(clip, dict) else 1)

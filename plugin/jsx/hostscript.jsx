@@ -8,7 +8,7 @@ if (typeof $._prismex === "undefined") {
     $._prismex = {};
 }
 
-$._prismex.SCRIPT_BUILD = 2026112001;
+$._prismex.SCRIPT_BUILD = 2026112204;
 $._prismex.TICKS_PER_SECOND = 254016000000.0;
 $._prismex._lastActiveSequence = null;
 $._prismex._lastActiveSequenceID = null;
@@ -16,19 +16,64 @@ $._prismex._lastActiveSequenceName = null;
 
 /**
  * Robust Sequence Resolver:
- * In Adobe Premiere Pro, app.project.activeSequence often becomes null when
+ * Resolves the currently active or open timeline sequence in Premiere Pro even when
  * an HTML/CEP panel takes window focus. This resolver checks:
- * 1. app.project.activeSequence (direct)
- * 2. Cached _lastActiveSequence (if still valid)
- * 3. Re-finding sequence in app.project.sequences by persistent sequenceID or Name
- * 4. QE DOM active sequence
+ * 1. QE DOM active sequence (Reliably tracks the currently visible timeline tab even when HTML panel has focus)
+ * 2. app.project.activeSequence (direct standard DOM)
+ * 3. Cached _lastActiveSequence (if still valid)
+ * 4. Re-finding sequence in app.project.sequences by persistent sequenceID or Name
  * 5. Fallback ONLY on initial startup when no sequence has ever been active
  */
 $._prismex.getResolvedActiveSequence = function() {
     try {
         if (!app.project) return null;
 
-        // 1. Direct activeSequence (available when timeline panel is focused)
+        // 1. QE Active Sequence: Premiere Pro's QE DOM reliably holds the currently open/visible timeline tab
+        try {
+            app.enableQE();
+            if (typeof qe !== "undefined" && qe && qe.project) {
+                var qeSeq = qe.project.getActiveSequence();
+                if (qeSeq) {
+                    var qeName = "";
+                    try { qeName = qeSeq.name; } catch(ne) {}
+                    var qeGuid = "";
+                    try { qeGuid = qeSeq.guid; } catch(ge) {}
+
+                    if (app.project.sequences) {
+                        // Priority 1: Match by EXACT sequence GUID (handles duplicate sequence names accurately)
+                        if (qeGuid) {
+                            for (var qIdx = 0; qIdx < app.project.sequences.numSequences; qIdx++) {
+                                var cand = app.project.sequences[qIdx];
+                                if (cand && cand.sequenceID === qeGuid) {
+                                    $._prismex._lastActiveSequence = cand;
+                                    try {
+                                        $._prismex._lastActiveSequenceID = cand.sequenceID;
+                                        $._prismex._lastActiveSequenceName = cand.name;
+                                    } catch (e) {}
+                                    return cand;
+                                }
+                            }
+                        }
+                        // Priority 2: Fallback to match by Name
+                        if (qeName) {
+                            for (var qIdx2 = 0; qIdx2 < app.project.sequences.numSequences; qIdx2++) {
+                                var cand2 = app.project.sequences[qIdx2];
+                                if (cand2 && cand2.name === qeName) {
+                                    $._prismex._lastActiveSequence = cand2;
+                                    try {
+                                        $._prismex._lastActiveSequenceID = cand2.sequenceID;
+                                        $._prismex._lastActiveSequenceName = cand2.name;
+                                    } catch (e) {}
+                                    return cand2;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (qeErr) {}
+
+        // 2. Direct activeSequence (available when timeline panel is focused)
         if (app.project.activeSequence) {
             $._prismex._lastActiveSequence = app.project.activeSequence;
             try {
@@ -38,7 +83,7 @@ $._prismex.getResolvedActiveSequence = function() {
             return app.project.activeSequence;
         }
 
-        // 2. Cached last active sequence (safe & non-intrusive)
+        // 3. Cached last active sequence (safe & non-intrusive)
         if ($._prismex._lastActiveSequence) {
             try {
                 if ($._prismex._lastActiveSequence.name && $._prismex._lastActiveSequence.sequenceID) {
@@ -49,7 +94,7 @@ $._prismex.getResolvedActiveSequence = function() {
             }
         }
 
-        // 3. Re-find sequence in app.project.sequences by persistent sequenceID or Name
+        // 4. Re-find sequence in app.project.sequences by persistent sequenceID or Name
         if ($._prismex._lastActiveSequenceID || $._prismex._lastActiveSequenceName) {
             try {
                 if (app.project.sequences && app.project.sequences.numSequences > 0) {
@@ -73,34 +118,6 @@ $._prismex.getResolvedActiveSequence = function() {
                 }
             } catch (seqIterErr) {}
         }
-
-        // 4. QE Active Sequence: Premiere Pro's QE DOM reliably holds the active sequence even when HTML panel has focus
-        try {
-            app.enableQE();
-            if (typeof qe !== "undefined" && qe && qe.project) {
-                var qeSeq = qe.project.getActiveSequence();
-                if (qeSeq) {
-                    var qeName = "";
-                    try { qeName = qeSeq.name; } catch(ne) {}
-                    var qeGuid = "";
-                    try { qeGuid = qeSeq.guid; } catch(ge) {}
-
-                    if (app.project.sequences) {
-                        for (var qIdx = 0; qIdx < app.project.sequences.numSequences; qIdx++) {
-                            var cand = app.project.sequences[qIdx];
-                            if (cand && ((qeName && cand.name === qeName) || (qeGuid && cand.sequenceID === qeGuid))) {
-                                $._prismex._lastActiveSequence = cand;
-                                try {
-                                    $._prismex._lastActiveSequenceID = cand.sequenceID;
-                                    $._prismex._lastActiveSequenceName = cand.name;
-                                } catch (e) {}
-                                return cand;
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (qeErr) {}
 
         // 5. Initial Fallback: ONLY if no sequence was EVER active or tracked yet!
         if (!$._prismex._lastActiveSequenceID && !$._prismex._lastActiveSequenceName) {
@@ -216,20 +233,6 @@ $._prismex.getActiveSequenceManifest = function() {
                         try {
                             mediaPath = decodeURI(mediaPath);
                         } catch (de) {}
-
-                        // Auto-resolve to project folder if file was moved from Downloads into project folder
-                        try {
-                            var directFile = new File(mediaPath);
-                            if (!directFile.exists || mediaPath.indexOf("/Downloads/") !== -1) {
-                                var projFolder = $._prismex.getProjectFolderPath();
-                                var bName = mediaPath.substring(Math.max(mediaPath.lastIndexOf("/"), mediaPath.lastIndexOf("\\")) + 1);
-                                var projFile = new File(projFolder + "/" + bName);
-                                if (projFile.exists) {
-                                    mediaPath = projFile.fsName;
-                                }
-                            }
-                        } catch (resErr) {}
-
                         hasValidAudioPath = true;
                     }
 
